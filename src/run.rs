@@ -107,15 +107,19 @@ pub const DEFAULT_MAIN_BYTES: u64 = 1 << 30;
 /// Smallest main buffer the streams make sense on.
 pub const MIN_MAIN_BYTES: u64 = 1 << 20;
 
-/// Window length: the burstiness tolerance needs `(cv / tol)^2`
-/// seconds of 1 Hz samples, between 30 s and 300 s; an explicit
-/// request overrides.
-pub fn window_seconds(goal_cv: Option<f64>, tol: f64, requested: Option<f64>) -> f64 {
-    if let Some(r) = requested {
-        return r.max(0.1);
-    }
-    let need = goal_cv.map(|cv| (cv / tol).powi(2)).unwrap_or(0.0);
-    need.clamp(30.0, 300.0)
+/// Fit window length: ratios settle within 30 s; an explicit request
+/// overrides.
+pub fn window_seconds(requested: Option<f64>) -> f64 {
+    requested.map(|r| r.max(0.1)).unwrap_or(30.0)
+}
+
+/// Rolling window for busy cores and burstiness: the tolerance needs
+/// `(cv / tol)^2` seconds of 1 Hz samples, between 30 s and 300 s.
+pub fn long_window_seconds(goal_cv: Option<f64>, tol: f64) -> f64 {
+    goal_cv
+        .map(|cv| (cv / tol).powi(2))
+        .unwrap_or(0.0)
+        .clamp(30.0, 300.0)
 }
 
 /// Pages to reserve for the sparse and code streams: the configured
@@ -426,10 +430,13 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         bail!("knobs do not fit the buffers: {e}");
     }
     let fitting = settings.knobs.is_none() && !goal.is_empty();
-    let window_s = window_seconds(goal.cv, fitter.tol.cv, settings.window_s);
+    let window_s = window_seconds(settings.window_s);
+    let long_n = long_window_seconds(goal.cv, fitter.tol.cv).round() as usize;
+    let mut rolling: std::collections::VecDeque<f64> =
+        std::collections::VecDeque::with_capacity(long_n);
     writeln!(
         progress,
-        "run: {threads} threads, window {window_s:.0} s, main buffer {} MiB{}",
+        "run: {threads} threads, window {window_s:.0} s, busy-cores window {long_n} s, main buffer {} MiB{}",
         mem_plan.main_bytes >> 20,
         if fitting { "" } else { ", fixed knobs" }
     )?;
@@ -490,6 +497,10 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         if now >= next_cpu || stop {
             let c = sampler.cpu_tick(unix_now()).context("busy-cores sample")?;
             window.cpu_series.push(c.cores);
+            rolling.push_back(c.cores);
+            while rolling.len() > long_n {
+                rolling.pop_front();
+            }
             next_cpu =
                 Instant::now() + Duration::from_secs_f64((1.0 - unix_now().fract()).max(0.05));
         }
@@ -499,18 +510,23 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 let sample = sampler.interval_tick(unix_now()).context("window sample")?;
                 let accesses = accesses_total(&generator);
                 let aps = (accesses - window.accesses_at_start) as f64 / seconds.max(1e-9);
-                let cv = pooled_cv(
-                    std::slice::from_ref(&window.cpu_series),
-                    window.cpu_series.len().max(1),
-                )
-                .map(|(cv, _)| cv);
+                // Busy cores and burstiness come from the rolling window,
+                // which is long enough for the target's tolerance.
+                let long: Vec<f64> = rolling.iter().copied().collect();
+                let cv =
+                    pooled_cv(std::slice::from_ref(&long), long.len().max(1)).map(|(cv, _)| cv);
+                let cores_long =
+                    (!long.is_empty()).then(|| long.iter().sum::<f64>() / long.len() as f64);
                 let dram = sample
                     .values
                     .get("dram_bytes_per_sec")
                     .copied()
                     .or_else(|| dram_model(&sample, &knobs, aps));
                 let mut m = measured_from(&sample, cv, aps, dram);
-                m.cv_samples = window.cpu_series.len();
+                m.cv_samples = long.len();
+                if cores_long.is_some() {
+                    m.cores = cores_long;
+                }
                 let statuses = fitter.statuses(&m, &goal);
                 writeln!(
                     progress,
@@ -693,14 +709,15 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn window_length_follows_burstiness() {
+    fn window_lengths() {
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        assert!(close(window_seconds(None, 0.05, None), 30.0));
-        assert!(close(window_seconds(Some(0.3), 0.05, None), 36.0));
-        assert!(close(window_seconds(Some(0.73), 0.05, None), 213.16));
-        assert!(close(window_seconds(Some(5.0), 0.05, None), 300.0));
-        assert!(close(window_seconds(Some(5.0), 0.05, Some(2.0)), 2.0));
-        assert!(close(window_seconds(None, 0.05, Some(0.0)), 0.1));
+        assert!(close(window_seconds(None), 30.0));
+        assert!(close(window_seconds(Some(2.0)), 2.0));
+        assert!(close(window_seconds(Some(0.0)), 0.1));
+        assert!(close(long_window_seconds(None, 0.05), 30.0));
+        assert!(close(long_window_seconds(Some(0.3), 0.05), 36.0));
+        assert!(close(long_window_seconds(Some(0.73), 0.05), 213.16));
+        assert!(close(long_window_seconds(Some(5.0), 0.05), 300.0));
     }
 
     #[test]

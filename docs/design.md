@@ -202,11 +202,12 @@ second boundaries, where the workers redraw their factor. Worker
 threads are the CPU limit when given, else the busy cores with headroom
 of one plus the CV, so the clipped per-second factor keeps its mean.
 
-Ratios settle within a 30 s window. Busy cores and burstiness do not:
-with independent per-second jitter a window's mean has standard error
-`cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds; the
-window is sized from the target CV, between 30 s and 300 s, or set by
-`--window`. Convergence is declared after two consecutive windows
+Ratios settle within a 30 s window, the fit window, which `--window`
+can change. Busy cores and burstiness do not: with independent
+per-second jitter a window's mean has standard error
+`cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds. They
+are therefore judged on a rolling window of that length, between 30 s
+and 300 s, while the ratios are fitted every fit window. Convergence is declared after two consecutive windows
 within tolerance; the generator then holds and keeps reporting, or
 keeps adjusting with `--adaptive`. After the pass limit it holds
 regardless and says so.
