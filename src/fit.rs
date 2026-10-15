@@ -25,6 +25,8 @@ pub struct Measured {
     pub itlb_pki: Option<f64>,
     /// Generator accesses per second, from the worker counters.
     pub accesses_per_s: f64,
+    /// One-second samples behind `cv`.
+    pub cv_samples: usize,
 }
 
 /// The targets the fitter drives, in the same units.
@@ -133,6 +135,8 @@ pub struct Limits {
 }
 
 const OPS_RANGE: (f64, f64) = (1.0, 1.0e6);
+/// One-second samples a window needs before its burstiness is trusted.
+pub const MIN_CV_SAMPLES: usize = 30;
 const NTLINES_MAX: u32 = 512;
 const VISITS_RANGE: (f64, f64) = (1.0e-4, 64.0);
 
@@ -171,14 +175,17 @@ impl Fitter {
         }
     }
 
-    /// Worker count for a target set: the CPU limit if given, else the
-    /// busy cores rounded up, at least one and at most `max`.
+    /// Worker count for a target set: the CPU limit if given; otherwise
+    /// the busy cores with headroom for burstiness, since the
+    /// per-second factor is clipped at full duty and clipping would pull
+    /// the mean below the target. At least one, at most `max`.
     pub fn threads_for(t: &Targets, max: usize) -> usize {
-        let hinted = t
-            .get("cpu_limit_cores")
-            .or_else(|| t.get("cpu_usage_cores"))
-            .unwrap_or(1.0);
-        (hinted.ceil().max(1.0) as usize).min(max.max(1))
+        let wanted = match (t.get("cpu_limit_cores"), t.get("cpu_usage_cores")) {
+            (Some(limit), _) => limit,
+            (None, Some(cores)) => cores * (1.0 + t.get("cpu_usage_cv_1s").unwrap_or(0.0)),
+            (None, None) => 1.0,
+        };
+        (wanted.ceil().max(1.0) as usize).min(max.max(1))
     }
 
     /// A first guess from the goal alone.
@@ -272,12 +279,18 @@ impl Fitter {
             k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
         }
         if let Some(t) = goal.cv {
+            // A window needs enough one-second samples before its CV
+            // means anything, and the knob stays within twice the target
+            // so clipping at full duty cannot run it away.
             k.cv = match m.cv {
-                Some(v) if v > 0.0 && k.cv > 0.0 => (k.cv * factor(t, v, d)).clamp(0.0, 10.0),
+                Some(v) if v > 0.0 && k.cv > 0.0 && m.cv_samples >= MIN_CV_SAMPLES => {
+                    (k.cv * factor(t, v, d)).clamp(0.0, 2.0 * t)
+                }
                 _ => t,
             };
         }
 
+        let work_before = f64::from(knobs.ops) * f64::from(knobs.chains);
         if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
             // More instructions per access dilute the misses.
             k.ops = (f64::from(k.ops) * factor(v, t, d))
@@ -309,6 +322,21 @@ impl Fitter {
                 };
             }
         }
+
+        // Instructions per access scale with the compute work; the
+        // per-access rates are pre-scaled so their per-instruction
+        // rates hold, and only then corrected on their own.
+        let work_after = f64::from(k.ops) * f64::from(k.chains);
+        let q = if work_before > 0.0 {
+            work_after / work_before
+        } else {
+            1.0
+        };
+        k.tlbvisits *= q;
+        k.codevisits *= q;
+        k.ntlines = (f64::from(k.ntlines) * q)
+            .round()
+            .clamp(0.0, f64::from(NTLINES_MAX)) as u32;
 
         if let (Some(t), Some(v)) = (goal.dram, m.dram) {
             if m.accesses_per_s > 0.0 {
@@ -400,6 +428,7 @@ mod tests {
             dtlb_pki: Some(1000.0 * k.tlbvisits * hit / instr),
             itlb_pki: Some(1000.0 * k.codevisits * walk / instr),
             accesses_per_s: aps,
+            cv_samples: 300,
         }
     }
 
@@ -605,6 +634,12 @@ mod tests {
         assert_eq!(Fitter::threads_for(&t, 64), 1);
         t.set("cpu_usage_cores", 2.3).unwrap();
         assert_eq!(Fitter::threads_for(&t, 64), 3);
+        t.set("cpu_usage_cv_1s", 0.5).unwrap();
+        assert_eq!(
+            Fitter::threads_for(&t, 64),
+            4,
+            "headroom for bursts: 2.3 * 1.5"
+        );
         t.set("cpu_limit_cores", 8.0).unwrap();
         assert_eq!(Fitter::threads_for(&t, 64), 8);
         assert_eq!(Fitter::threads_for(&t, 4), 4, "capped by available CPUs");
@@ -653,7 +688,7 @@ mod tests {
             let mut f = Fitter::new(4, LIMITS);
             let k = Knobs { duty, cv, ops, chains: 2, lines, ntlines: nt, tlbvisits: tv, codevisits: cvis, sparse_pages: 2048, code_pages: 16384, ..Knobs::default() };
             let goal = Goal { cores: Some(2.0), cv: Some(0.3), ipc: Some(1.2), mpki: Some(5.0), dram: Some(4e9), dtlb_pki: Some(2.0), itlb_pki: Some(0.1) };
-            let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps };
+            let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps, cv_samples: 300 };
             let next = f.step(&k, &m, &goal);
             let b = Buffers::new(1 << 20, false, 2048, 16384).unwrap();
             prop_assert!(next.validate(&b).is_ok(), "{next:?}");

@@ -66,8 +66,9 @@ unsafe impl Sync for AnonBuffer {}
 
 impl AnonBuffer {
     /// Map and touch `len` bytes. With `huge`, ask for transparent
-    /// hugepages; whether the kernel granted them is reported by
-    /// [`huge_bytes`](Self::huge_bytes).
+    /// hugepages, otherwise forbid them, since a host set to `always`
+    /// would back the buffer with them regardless; whether the kernel
+    /// granted them is reported by [`huge_bytes`](Self::huge_bytes).
     pub fn new(len: usize, huge: bool) -> io::Result<AnonBuffer> {
         let buf = Self::new_untouched(len, huge)?;
         touch(buf.ptr, len);
@@ -96,6 +97,9 @@ impl AnonBuffer {
         if huge {
             // SAFETY: the range is exactly what was just mapped.
             buf.huge_advised = unsafe { madvise(ptr, len, MmapAdvise::MADV_HUGEPAGE) }.is_ok();
+        } else {
+            // SAFETY: as above.
+            let _ = unsafe { madvise(ptr, len, MmapAdvise::MADV_NOHUGEPAGE) };
         }
         Ok(buf)
     }

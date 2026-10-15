@@ -188,6 +188,7 @@ pub fn measured_from(
         dtlb_pki: ratio(v("dtlb_misses_per_sec"), instr, 1000.0),
         itlb_pki: ratio(v("itlb_misses_per_sec"), instr, 1000.0),
         accesses_per_s,
+        cv_samples: 0,
     }
 }
 
@@ -470,7 +471,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     .get("dram_bytes_per_sec")
                     .copied()
                     .or_else(|| dram_model(&sample, &knobs, aps));
-                let m = measured_from(&sample, cv, aps, dram);
+                let mut m = measured_from(&sample, cv, aps, dram);
+                m.cv_samples = window.cpu_series.len();
                 let statuses = fitter.statuses(&m, &goal);
                 writeln!(
                     progress,
@@ -485,7 +487,9 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                             s.measured
                                 .map(|v| format!("{v:.4}"))
                                 .unwrap_or_else(|| "-".into()),
-                            s.error.map(|e| format!("({e:+.1}%)")).unwrap_or_default()
+                            s.error
+                                .map(|e| format!("({:+.1}%)", e * 100.0))
+                                .unwrap_or_default()
                         ))
                         .collect::<Vec<_>>()
                         .join(" ")
@@ -505,6 +509,12 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         .collect(),
                 });
                 converged = Fitter::converged(&statuses);
+                if knobs.duty >= 1.0
+                    && last_statuses_short_of_cores(&statuses)
+                    && !notes.iter().any(|n| n.starts_with("busy cores"))
+                {
+                    notes.push(format!("busy cores fall short at full duty with {threads} threads; rerun with --threads above the target"));
+                }
                 last_statuses = statuses;
                 // Memory: top up anonymous memory if short; restore page cache.
                 if let (Some(target), Some(now_anon)) =
@@ -621,6 +631,13 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         windows,
         notes,
     })
+}
+
+/// Whether the busy-cores target is measured and below tolerance.
+fn last_statuses_short_of_cores(statuses: &[Status]) -> bool {
+    statuses
+        .iter()
+        .any(|s| s.key == "cpu_usage_cores" && s.error.is_some_and(|e| e < -0.05))
 }
 
 fn generator_pins(pinned: Option<Vec<u32>>, threads: usize) -> Option<Vec<u32>> {
