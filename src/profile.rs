@@ -232,7 +232,7 @@ pub enum Mode {
 }
 
 /// How a value was obtained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Method {
     /// `perf_event_open` with the vendor definition.
@@ -240,6 +240,7 @@ pub enum Method {
     /// cgroup v2 files.
     Cgroup,
     /// `/proc` files.
+    #[default]
     Proc,
     /// `getrusage`.
     Rusage,
