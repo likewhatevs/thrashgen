@@ -126,7 +126,9 @@ impl AnonBuffer {
         mapping_field(self.ptr, "AnonHugePages")
     }
 
-    /// Resident bytes of this mapping, from `/proc/self/smaps`.
+    /// Resident bytes of this mapping, from `/proc/self/smaps`. The
+    /// kernel merges adjacent mappings with equal flags, so a merged
+    /// neighbour's pages are included.
     pub fn resident_bytes(&self) -> io::Result<u64> {
         mapping_field(self.ptr, "Rss")
     }
@@ -350,10 +352,14 @@ mod tests {
         if huge > 0 {
             assert!(buf.huge_advised());
         }
+        // The kernel merges adjacent mappings with equal flags into one
+        // VMA, so a neighbour's pages can show up here; half the size is
+        // still far below what touching would give.
         let lazy = AnonBuffer::new_untouched(64 << 20, false).unwrap();
+        let lazy_resident = lazy.resident_bytes().unwrap();
         assert!(
-            lazy.resident_bytes().unwrap() < 1 << 20,
-            "untouched pages are not resident"
+            lazy_resident < 32 << 20,
+            "untouched pages are not resident: {lazy_resident}"
         );
         assert!(AnonBuffer::new(0, false).is_err());
     }

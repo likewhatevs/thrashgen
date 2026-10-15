@@ -83,6 +83,11 @@ extern "C" fn on_signal(_: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
 }
 
+/// Whether SIGINT or SIGTERM has arrived since the handler was installed.
+pub fn stop_requested() -> bool {
+    STOP.load(Ordering::SeqCst)
+}
+
 /// Make SIGINT and SIGTERM end the recording cleanly.
 pub fn install_stop_handler() -> Result<()> {
     for sig in [Signal::SIGINT, Signal::SIGTERM] {

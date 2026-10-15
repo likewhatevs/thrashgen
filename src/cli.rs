@@ -10,7 +10,10 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::aggregate;
 use crate::caps::{Expectations, Facts, Root};
+use crate::loadgen::Knobs;
+use crate::profile::{Pick, Profile, Targets};
 use crate::record;
+use crate::run;
 use crate::samples::Recording;
 
 /// Record a container's resource footprint and replay it as synthetic load.
@@ -30,7 +33,7 @@ enum Command {
     /// Build a profile (averages and percentiles) from recordings
     Aggregate(AggregateArgs),
     /// Generate load that reproduces a profile and verify it
-    Run,
+    Run(RunArgs),
     /// Fit knobs for a profile where counters are available and save them
     Calibrate,
     /// Compare a run report or recording against a profile
@@ -67,6 +70,87 @@ pub struct RecordArgs {
     output: Option<PathBuf>,
 }
 
+/// Arguments of `run`.
+#[derive(Args, Debug)]
+pub struct RunArgs {
+    /// Profile written by `aggregate`
+    profile: Option<PathBuf>,
+    /// Column of the profile to replay: avg or a percentile such as p80
+    #[arg(long, default_value = "avg")]
+    pick: String,
+    /// Override or add a target, as key=value; repeatable
+    #[arg(long = "set", value_name = "KEY=VALUE")]
+    sets: Vec<String>,
+    /// Stop after this many seconds; default runs until interrupted
+    #[arg(long)]
+    duration: Option<f64>,
+    /// Measurement window in seconds; default sizes it from the burstiness target
+    #[arg(long)]
+    window: Option<f64>,
+    /// Disk-backed directory for the page-cache and slab files
+    #[arg(long, default_value = ".")]
+    scratch_dir: PathBuf,
+    /// Pin workers to CPUs: auto, yes or no
+    #[arg(long, default_value = "auto")]
+    pin: String,
+    /// Seed for the streams and the burstiness draw
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+    /// Keep adjusting knobs after convergence
+    #[arg(long)]
+    adaptive: bool,
+    /// Fitter passes before holding regardless
+    #[arg(long, default_value_t = 12)]
+    max_passes: u32,
+    /// Worker threads; default derives them from the targets
+    #[arg(long)]
+    threads: Option<usize>,
+    /// Main buffer size, with an optional K, M, G or T suffix
+    #[arg(long)]
+    main_bytes: Option<String>,
+    /// Pages reserved for the sparse stream
+    #[arg(long, default_value_t = 16384)]
+    sparse_pages: usize,
+    /// Executable pages reserved for the code stream
+    #[arg(long, default_value_t = 16384)]
+    code_pages: usize,
+    /// Do not ask for transparent hugepages on the main buffer
+    #[arg(long)]
+    no_huge: bool,
+    /// Fixed knobs as JSON: run them as given, with no fitting
+    #[arg(long)]
+    knobs: Option<PathBuf>,
+    /// Write the report as JSON here
+    #[arg(long)]
+    report: Option<PathBuf>,
+}
+
+/// Parse a byte count with an optional K, M, G or T suffix (powers of 1024).
+pub fn parse_bytes(s: &str) -> Result<u64> {
+    let s = s.trim();
+    let (num, mult) = match s.chars().last() {
+        Some(c) if c.is_ascii_alphabetic() => {
+            let m = match c.to_ascii_uppercase() {
+                'K' => 1u64 << 10,
+                'M' => 1 << 20,
+                'G' => 1 << 30,
+                'T' => 1 << 40,
+                _ => bail!("unknown size suffix in `{s}`"),
+            };
+            (&s[..s.len() - 1], m)
+        }
+        _ => (s, 1),
+    };
+    let n: f64 = num
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("not a size: `{s}`"))?;
+    if n.is_nan() || n < 0.0 {
+        bail!("not a size: `{s}`");
+    }
+    Ok((n * mult as f64) as u64)
+}
+
 /// Arguments of `aggregate`.
 #[derive(Args, Debug)]
 pub struct AggregateArgs {
@@ -91,7 +175,8 @@ pub fn main() -> Result<()> {
         Command::Aggregate(args) => run_aggregate(args),
         Command::Caps => run_caps(),
         Command::Record(args) => run_record(args),
-        Command::Run | Command::Calibrate | Command::Compare => {
+        Command::Run(args) => run_run(args),
+        Command::Calibrate | Command::Compare => {
             bail!("not implemented yet: {:?}", cli.command)
         }
     }
@@ -161,4 +246,108 @@ fn run_record(args: RecordArgs) -> Result<()> {
         summary.samples, summary.cpu_samples
     );
     Ok(())
+}
+
+/// Targets from a profile column plus overrides.
+pub fn targets_from(
+    profile: Option<&std::path::Path>,
+    pick: &str,
+    sets: &[String],
+) -> Result<Targets> {
+    let mut targets = match profile {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read {}", path.display()))?;
+            let profile =
+                Profile::from_json(&text).with_context(|| format!("parse {}", path.display()))?;
+            let pick: Pick = pick.parse()?;
+            profile.pick(&pick)?
+        }
+        None => Targets::new(),
+    };
+    for s in sets {
+        targets.set_from_arg(s)?;
+    }
+    if targets.is_empty() {
+        bail!("no targets: give a profile or --set key=value");
+    }
+    Ok(targets)
+}
+
+fn run_run(args: RunArgs) -> Result<()> {
+    let targets = targets_from(args.profile.as_deref(), &args.pick, &args.sets)?;
+    let pin = match args.pin.as_str() {
+        "auto" => run::Pin::Auto,
+        "yes" => run::Pin::Yes,
+        "no" => run::Pin::No,
+        other => bail!("--pin must be auto, yes or no, not `{other}`"),
+    };
+    let knobs: Option<Knobs> = match &args.knobs {
+        Some(path) => Some(serde_json::from_str(
+            &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
+        )?),
+        None => None,
+    };
+    let settings = run::Settings {
+        duration_s: args.duration,
+        window_s: args.window,
+        scratch_dir: args.scratch_dir,
+        pin,
+        seed: args.seed,
+        adaptive: args.adaptive,
+        max_passes: args.max_passes,
+        threads: args.threads,
+        main_bytes: args.main_bytes.as_deref().map(parse_bytes).transpose()?,
+        sparse_capacity: args.sparse_pages,
+        code_capacity: args.code_pages,
+        huge: !args.no_huge,
+        knobs,
+    };
+    record::install_stop_handler()?;
+    let report = run::run(&targets, &settings, &mut io::stderr().lock())?;
+    if let Some(path) = &args.report {
+        std::fs::write(path, report.to_json())
+            .with_context(|| format!("write {}", path.display()))?;
+    }
+    print!("{report}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_sizes() {
+        assert_eq!(parse_bytes("1024").unwrap(), 1024);
+        assert_eq!(parse_bytes("2k").unwrap(), 2048);
+        assert_eq!(parse_bytes("1.5M").unwrap(), 3 << 19);
+        assert_eq!(parse_bytes(" 4G ").unwrap(), 4 << 30);
+        assert_eq!(parse_bytes("1T").unwrap(), 1 << 40);
+        assert!(parse_bytes("1X").is_err());
+        assert!(parse_bytes("lots").is_err());
+        assert!(parse_bytes("-1").is_err());
+    }
+
+    #[test]
+    fn targets_from_profile_and_sets() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/profile.json");
+        let t = targets_from(
+            Some(std::path::Path::new(fixture)),
+            "p80",
+            &["ipc=9".into()],
+        )
+        .unwrap();
+        assert_eq!(t.get("ipc"), Some(9.0));
+        assert_eq!(t.get("cpu_limit_cores"), Some(8.0));
+        assert!(
+            targets_from(None, "avg", &[])
+                .unwrap_err()
+                .to_string()
+                .contains("no targets")
+        );
+        assert!(targets_from(None, "avg", &["nope=1".into()]).is_err());
+        assert!(targets_from(Some(std::path::Path::new("/nonexistent")), "avg", &[]).is_err());
+        assert!(targets_from(Some(std::path::Path::new(fixture)), "p42", &[]).is_err());
+    }
 }

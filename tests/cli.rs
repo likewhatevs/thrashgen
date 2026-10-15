@@ -85,9 +85,123 @@ fn record_requires_exactly_one_target() {
 }
 
 #[test]
+fn run_fits_busy_cores_and_memory_in_its_own_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("report.json");
+    let assert = Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "run",
+            "--set",
+            "cpu_usage_cores=0.5",
+            "--set",
+            "anon_bytes=100663296",
+            "--set",
+            "pagecache_bytes=8388608",
+            "--set",
+            "shmem_bytes=4194304",
+        ])
+        .args([
+            "--duration",
+            "2.6",
+            "--window",
+            "0.8",
+            "--pin",
+            "no",
+            "--threads",
+            "1",
+            "--sparse-pages",
+            "64",
+            "--code-pages",
+            "64",
+            "--no-huge",
+        ])
+        .arg("--scratch-dir")
+        .arg(dir.path())
+        .arg("--report")
+        .arg(&report_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cpu_usage_cores"))
+        .stderr(predicate::str::contains("window"));
+    let _ = assert;
+    let report: thrashgen::report::Report =
+        serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+    assert!(report.windows.len() >= 2, "{report:#?}");
+    assert_eq!(report.threads, 1);
+    assert_eq!(report.pinned_cpus, None);
+    let cores = report
+        .targets
+        .iter()
+        .find(|r| r.key == "cpu_usage_cores")
+        .unwrap();
+    assert_eq!(cores.tier, thrashgen::report::Tier::Verified);
+    let measured = cores.measured.unwrap();
+    assert!((0.3..=0.75).contains(&measured), "{measured}");
+    let anon = report
+        .memory
+        .iter()
+        .find(|m| m.key == "anon_bytes")
+        .unwrap()
+        .measured
+        .unwrap();
+    assert!(
+        (anon - 100_663_296.0).abs() < 16.0 * (1 << 20) as f64,
+        "{anon}"
+    );
+    let cache = report
+        .memory
+        .iter()
+        .find(|m| m.key == "pagecache_bytes")
+        .unwrap()
+        .measured
+        .unwrap();
+    assert!(cache > 7.0 * (1 << 20) as f64, "{cache}");
+    assert!(report.converged || report.passes >= 1, "{report:#?}");
+}
+
+#[test]
+fn run_rejects_bad_arguments() {
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args(["run", "--duration", "0.1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no targets"));
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "run",
+            "--set",
+            "ipc=1",
+            "--pin",
+            "maybe",
+            "--duration",
+            "0.1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--pin must be"));
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "run",
+            "--set",
+            "ipc=1",
+            "--main-bytes",
+            "1X",
+            "--duration",
+            "0.1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("size suffix"));
+}
+
+#[test]
 fn unimplemented_subcommand_fails_cleanly() {
     let mut cmd = Command::cargo_bin("thrashgen").unwrap();
-    cmd.arg("run")
+    cmd.arg("calibrate")
         .assert()
         .failure()
         .stderr(predicate::str::contains("not implemented"));
