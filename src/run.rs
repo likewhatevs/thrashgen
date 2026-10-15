@@ -410,7 +410,6 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         pinned.as_deref(),
         settings.seed,
     )?;
-    let thp_bytes = buffers.main().huge_bytes().ok();
 
     let accesses_total = |g: &Generator| {
         g.stats()
@@ -562,6 +561,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         }
     }
     generator.stop();
+    // Read at the end: khugepaged may have collapsed pages since the start.
+    let thp_bytes = buffers.main().huge_bytes().ok();
 
     let last_values = last_sample.map(|s| s.values).unwrap_or_default();
     let target_rows: Vec<TargetRow> = targets
