@@ -2,7 +2,7 @@
 //! pure functions of the last window's measurements so they can be
 //! driven against a simulated machine in tests.
 
-use crate::loadgen::Knobs;
+use crate::loadgen::{Knobs, SLOWEST_CHAINS};
 use crate::profile::Targets;
 
 /// What one window measured, in profile units. Fields the tier cannot
@@ -228,6 +228,7 @@ impl Fitter {
     pub fn initial_knobs(&self, goal: &Goal, regime: TlbRegime) -> Knobs {
         let cores = goal.cores.unwrap_or(self.threads as f64);
         let chains = match goal.ipc {
+            Some(i) if i < 0.5 => 0.5,
             Some(i) if i < 1.4 => 1.0,
             Some(i) if i < 2.2 => 2.0,
             Some(_) => 4.0,
@@ -344,7 +345,10 @@ impl Fitter {
         // Instructions per access now, and the slope against compute
         // work, which is ops times chains.
         let ipa = m.instructions_per_access();
-        let work_now = f64::from(knobs.ops) * knobs.chains;
+        // Below one chain the slow iterations cost about what one-chain
+        // iterations do in instructions, so work does not shrink with
+        // the knob there.
+        let work_now = f64::from(knobs.ops) * knobs.chains.max(1.0);
         let mut slope = Self::INSTRUCTIONS_PER_WORK;
         if let (Some(ipa), Some((work_prev, ipa_prev))) = (ipa, self.last_work_ipa) {
             if (work_now - work_prev).abs() >= 1.0 {
@@ -377,7 +381,7 @@ impl Fitter {
             let chains_can_move = if g > 1.0 {
                 k.chains < 4.0
             } else {
-                k.chains > 1.0
+                k.chains > SLOWEST_CHAINS
             };
             // With no compute left to cut and MPKI still short, run length
             // is the only lever MPKI has; IPC yields to it there.
@@ -386,7 +390,7 @@ impl Fitter {
                 .zip(m.mpki)
                 .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
             if (exhausted || stalled) && chains_can_move {
-                k.chains = (k.chains * g).clamp(1.0, 4.0);
+                k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
             } else if !(g < 1.0 && knobs.ops <= 1 && mpki_short) {
                 k.lines = (k.lines * g).clamp(1.0, 64.0);
             }
@@ -404,7 +408,9 @@ impl Fitter {
             (Some(t), Some(v), None) => work *= factor(v, t, d),
             _ => {}
         }
-        k.ops = (work / k.chains).clamp(OPS_RANGE.0, OPS_RANGE.1).round() as u32;
+        k.ops = (work / k.chains.max(1.0))
+            .clamp(OPS_RANGE.0, OPS_RANGE.1)
+            .round() as u32;
         if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
             // Compute cannot go below one op per access; past that, more
             // lines per access are the only way to more misses.
@@ -415,7 +421,8 @@ impl Fitter {
 
         // Instructions per access after this pass, by the same model, and
         // the access rate it implies at unchanged cycles per instruction.
-        let ipa_next = ipa.map(|i| (i + slope * (f64::from(k.ops) * k.chains - work_now)).max(1.0));
+        let ipa_next =
+            ipa.map(|i| (i + slope * (f64::from(k.ops) * k.chains.max(1.0) - work_now)).max(1.0));
         let aps_next = match (ipa, ipa_next) {
             (Some(i), Some(n)) if m.accesses_per_s > 0.0 => m.accesses_per_s * i / n,
             _ => m.accesses_per_s,
@@ -475,7 +482,9 @@ mod tests {
     /// A stand-in machine: monotone in every knob the way the real one
     /// is expected to be, with made-up constants.
     fn plant(k: &Knobs, threads: usize) -> Measured {
-        let chains_eff = if k.chains <= 2.0 {
+        let chains_eff = if k.chains < 1.0 {
+            0.15 + 0.85 * (k.chains - 0.25) / 0.75
+        } else if k.chains <= 2.0 {
             1.0 + 0.6 * (k.chains - 1.0)
         } else {
             1.6 + 0.6 * (k.chains - 2.0)
@@ -483,7 +492,7 @@ mod tests {
         let ops = f64::from(k.ops);
         let lines = k.lines;
         let nt = k.ntlines;
-        let instr = 2.0 * ops * k.chains
+        let instr = 2.0 * ops * k.chains.max(1.0)
             + 3.0 * lines
             + 4.0 * nt
             + 2.0 * k.tlbvisits

@@ -34,8 +34,11 @@ pub struct Knobs {
     pub cv: f64,
     /// Compute iterations per access.
     pub ops: u32,
-    /// Independent dependency chains in the compute loop, 1 to 4; a
-    /// fraction mixes the two nearest of 1, 2 and 4 within each access.
+    /// Independent dependency chains in the compute loop, 0.25 to 4; a
+    /// fraction mixes the two nearest of 1, 2 and 4 within each access,
+    /// and below one a share of the iterations runs a long-latency
+    /// dependent chain instead, so compute IPC can fall below the
+    /// single-chain floor.
     pub chains: f64,
     /// Consecutive lines touched per main-stream visit, 1 to 64; a
     /// fraction alternates between the two nearest counts.
@@ -98,9 +101,9 @@ impl Knobs {
                 self.cv
             )));
         }
-        if !(1.0..=4.0).contains(&self.chains) {
+        if !(SLOWEST_CHAINS..=4.0).contains(&self.chains) {
             return Err(KnobError(format!(
-                "chains must be in 1..=4, got {}",
+                "chains must be in {SLOWEST_CHAINS}..=4, got {}",
                 self.chains
             )));
         }
@@ -350,11 +353,38 @@ fn compute(ops: u32, chains: u8, s: &mut [u64; 4]) {
     *s = [a, b, c, d];
 }
 
+/// Lowest `chains` value: every iteration on the slow chain.
+pub const SLOWEST_CHAINS: f64 = 0.25;
+
+/// `ops` iterations of one dependent chain built on integer division,
+/// whose latency is several times a multiply's, for compute IPC below
+/// what a single multiply chain gives.
+#[inline(always)]
+fn compute_slow(ops: u32, s: &mut [u64; 4]) {
+    let mut a = s[0] | 1;
+    for _ in 0..ops {
+        a = a.wrapping_add(0x9E37_79B9_7F4A_7C15) / ((a & 0xff) | 3);
+        // SAFETY: an empty asm block that only pins a register.
+        unsafe {
+            std::arch::asm!("/* {0} */", inout(reg) a, options(nomem, nostack, preserves_flags))
+        };
+    }
+    s[0] = a;
+}
+
 /// `ops` iterations split between the two chain counts nearest to
 /// `chains`, so the knob is continuous: 1.5 runs half the iterations
-/// with one chain and half with two.
+/// with one chain and half with two; 0.5 runs a third of them on the
+/// slow chain.
 #[inline(always)]
 fn compute_mixed(ops: u32, chains: f64, s: &mut [u64; 4]) {
+    if chains < 1.0 {
+        let slow_frac = ((1.0 - chains) / (1.0 - SLOWEST_CHAINS)).clamp(0.0, 1.0);
+        let slow_ops = (f64::from(ops) * slow_frac).round() as u32;
+        compute(ops - slow_ops, 1, s);
+        compute_slow(slow_ops, s);
+        return;
+    }
     let (lo, hi, frac) = if chains <= 2.0 {
         (1u8, 2u8, chains - 1.0)
     } else {
@@ -635,8 +665,14 @@ mod tests {
         assert!(bad(|k| k.duty = 1.5).0.contains("duty"));
         assert!(bad(|k| k.wfrac = -0.1).0.contains("wfrac"));
         assert!(bad(|k| k.cv = f64::NAN).0.contains("cv"));
-        assert!(bad(|k| k.chains = 0.5).0.contains("chains"));
+        assert!(bad(|k| k.chains = 0.2).0.contains("chains"));
         assert!(bad(|k| k.chains = 4.5).0.contains("chains"));
+        Knobs {
+            chains: 0.25,
+            ..ok.clone()
+        }
+        .validate(&b)
+        .unwrap();
         assert!(bad(|k| k.lines = 0.0).0.contains("lines"));
         assert!(bad(|k| k.lines = 65.0).0.contains("lines"));
         assert!(bad(|k| k.lines = f64::NAN).0.contains("lines"));
@@ -677,11 +713,14 @@ mod tests {
             compute(100, chains, &mut s);
             assert_ne!(s, [1, 2, 3, 4], "chains {chains}");
         }
-        for chains in [1.0, 1.5, 2.0, 3.0, 4.0] {
+        for chains in [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0] {
             let mut s = [1, 2, 3, 4];
             compute_mixed(100, chains, &mut s);
             assert_ne!(s, [1, 2, 3, 4], "chains {chains}");
         }
+        let mut slow = [1, 2, 3, 4];
+        compute_slow(100, &mut slow);
+        assert_ne!(slow[0], 1);
         let mut a = [1, 2, 3, 4];
         compute_mixed(100, 1.0, &mut a);
         let mut b = [1, 2, 3, 4];
