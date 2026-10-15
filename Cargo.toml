@@ -15,9 +15,12 @@ path = "src/main.rs"
 
 [features]
 default = []
-# Tests that touch real hardware counters, resctrl or cgroups. Some need
-# CAP_PERFMON or root; see docs/testing.md.
+# Tests that need a working PMU but no privilege: counters on the test's
+# own threads. See docs/testing.md.
 hw-tests = []
+# Tests that need CAP_PERFMON or root: per-CPU and uncore counters,
+# resctrl groups. Implies hw-tests.
+root-tests = ["hw-tests"]
 
 [dependencies]
 anyhow = "1.0.104"

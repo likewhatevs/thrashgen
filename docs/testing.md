@@ -25,10 +25,23 @@ not by `#[ignore]`, so no test is silently skipped.
 
 ## Hardware tests: `cargo test --features hw-tests`
 
-Run on a machine with performance counters. Tests that need
-`CAP_PERFMON`, a resctrl mount or a delegated cgroup detect what they
-have and fail, not skip, when it is missing, so the invocation documents
-what was proven. Run the full set with `sudo -E`.
+Run on a machine with performance counters but need no privilege: they
+count the test's own threads at the default `perf_event_paranoid`.
+They fail, not skip, when the PMU is missing, so a passing run proves
+the counters were real.
+
+## Root tests: `sudo cargo test --features root-tests`
+
+Need `CAP_PERFMON` or root: per-CPU and uncore counters, resctrl
+groups, filter validation on AMD's L3 PMU. The feature implies
+`hw-tests`. They also fail rather than skip when the privilege is
+missing. Use a separate target directory so root does not own the
+build artifacts the unprivileged build uses:
+
+```sh
+sudo env PATH="$PATH" CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup" \
+  CARGO_TARGET_DIR=target/root cargo test --features root-tests
+```
 
 ## Experiments: `experiments/`
 

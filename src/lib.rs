@@ -9,6 +9,8 @@ pub mod caps;
 pub mod cli;
 pub mod cpu;
 pub mod events;
+pub mod perf;
 pub mod profile;
 pub mod samples;
 pub mod sys;
+pub mod topology;

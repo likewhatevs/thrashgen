@@ -434,9 +434,15 @@ impl Sysfs {
         Sysfs { root: root.into() }
     }
 
+    /// Resolve an absolute path under this root.
+    pub fn path(&self, abs: impl AsRef<Path>) -> PathBuf {
+        let rel = abs.as_ref().strip_prefix("/").unwrap_or(abs.as_ref());
+        self.root.join(rel)
+    }
+
     /// `/sys/bus/event_source/devices/<pmu>` under this root.
     pub fn pmu_dir(&self, pmu: &str) -> PathBuf {
-        self.root.join("sys/bus/event_source/devices").join(pmu)
+        self.path("/sys/bus/event_source/devices").join(pmu)
     }
 
     /// Whether the PMU exists.
