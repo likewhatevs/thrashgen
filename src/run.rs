@@ -118,6 +118,19 @@ pub fn window_seconds(goal_cv: Option<f64>, tol: f64, requested: Option<f64>) ->
     need.clamp(30.0, 300.0)
 }
 
+/// Pages to reserve for the sparse and code streams: the configured
+/// capacities, each capped at an eighth of the anonymous target so a
+/// small footprint is not swamped by the streams' own pages.
+pub fn stream_capacities(anon_target: Option<f64>, sparse: usize, code: usize) -> (usize, usize) {
+    match anon_target {
+        Some(anon) if anon > 0.0 => {
+            let cap = ((anon / 8.0) as usize / PAGE).max(64);
+            (sparse.min(cap), code.min(cap))
+        }
+        _ => (sparse, code),
+    }
+}
+
 /// Sizes of the footprint pieces for a target set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MemoryPlan {
@@ -277,11 +290,16 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
 
     // Footprint first, so its page faults do not land in a window.
     let baseline = measure::memory(&Scope::SelfProcess, &root, &[]).context("baseline memory")?;
+    let (sparse_capacity, code_capacity) = stream_capacities(
+        targets.get("anon_bytes"),
+        settings.sparse_capacity,
+        settings.code_capacity,
+    );
     let mem_plan = plan_memory(
         targets,
         baseline.anon.unwrap_or(0),
-        settings.sparse_capacity,
-        settings.code_capacity,
+        sparse_capacity,
+        code_capacity,
         settings.main_bytes,
     );
     if mem_plan.pagecache_bytes > 0 && is_tmpfs(&settings.scratch_dir).unwrap_or(false) {
@@ -294,8 +312,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         Buffers::new(
             mem_plan.main_bytes as usize,
             settings.huge,
-            settings.sparse_capacity,
-            settings.code_capacity,
+            sparse_capacity,
+            code_capacity,
         )
         .context("allocate the main, sparse and code buffers")?,
     );
@@ -683,6 +701,27 @@ mod tests {
         assert!(close(window_seconds(Some(5.0), 0.05, None), 300.0));
         assert!(close(window_seconds(Some(5.0), 0.05, Some(2.0)), 2.0));
         assert!(close(window_seconds(None, 0.05, Some(0.0)), 0.1));
+    }
+
+    #[test]
+    fn stream_capacities_follow_the_anonymous_target() {
+        assert_eq!(stream_capacities(None, 16384, 16384), (16384, 16384));
+        assert_eq!(stream_capacities(Some(0.0), 16384, 16384), (16384, 16384));
+        assert_eq!(
+            stream_capacities(Some(42.0e6), 16384, 16384),
+            (1281, 1281),
+            "an eighth of 42 MB in pages"
+        );
+        assert_eq!(
+            stream_capacities(Some(1.0e5), 16384, 16384),
+            (64, 64),
+            "never below 64 pages"
+        );
+        assert_eq!(
+            stream_capacities(Some(8.0e9), 16384, 100),
+            (16384, 100),
+            "settings cap too"
+        );
     }
 
     #[test]

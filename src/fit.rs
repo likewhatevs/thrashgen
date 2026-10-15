@@ -244,19 +244,28 @@ impl Fitter {
         }
     }
 
-    /// Compare a window against the goal.
+    /// Compare a window against the goal. Each row carries a relative
+    /// tolerance and an absolute one: a target near zero is met when
+    /// the measurement is near zero too, whatever the ratio says.
     pub fn statuses(&self, m: &Measured, goal: &Goal) -> Vec<Status> {
-        let rows: [(&'static str, Option<f64>, Option<f64>, f64); 7] = [
-            ("cpu_usage_cores", goal.cores, m.cores, self.tol.cores),
-            ("cpu_usage_cv_1s", goal.cv, m.cv, self.tol.cv),
-            ("ipc", goal.ipc, m.ipc, self.tol.ratio),
-            ("l3_mpki", goal.mpki, m.mpki, self.tol.ratio),
-            ("dram_bytes_per_sec", goal.dram, m.dram, self.tol.ratio),
-            ("dtlb_pki", goal.dtlb_pki, m.dtlb_pki, self.tol.ratio),
-            ("itlb_pki", goal.itlb_pki, m.itlb_pki, self.tol.ratio),
+        type Row = (&'static str, Option<f64>, Option<f64>, f64, f64);
+        let rows: [Row; 7] = [
+            ("cpu_usage_cores", goal.cores, m.cores, self.tol.cores, 0.05),
+            ("cpu_usage_cv_1s", goal.cv, m.cv, self.tol.cv, 0.02),
+            ("ipc", goal.ipc, m.ipc, self.tol.ratio, 0.02),
+            ("l3_mpki", goal.mpki, m.mpki, self.tol.ratio, 0.05),
+            (
+                "dram_bytes_per_sec",
+                goal.dram,
+                m.dram,
+                self.tol.ratio,
+                1.0e8,
+            ),
+            ("dtlb_pki", goal.dtlb_pki, m.dtlb_pki, self.tol.ratio, 0.02),
+            ("itlb_pki", goal.itlb_pki, m.itlb_pki, self.tol.ratio, 0.01),
         ];
         rows.into_iter()
-            .filter_map(|(key, target, measured, tol)| {
+            .filter_map(|(key, target, measured, tol, abs_tol)| {
                 let target = target?;
                 let error = measured.map(|v| {
                     if target > 0.0 {
@@ -267,12 +276,14 @@ impl Fitter {
                         f64::INFINITY
                     }
                 });
+                let within = measured.is_some_and(|v| (v - target).abs() <= abs_tol)
+                    || error.is_some_and(|e| e.abs() <= tol);
                 Some(Status {
                     key,
                     target,
                     measured,
                     error,
-                    within: error.is_some_and(|e| e.abs() <= tol),
+                    within,
                 })
             })
             .collect()
@@ -665,6 +676,27 @@ mod tests {
         );
         assert!(!s[0].within);
         assert_eq!(s[1].error, Some(f64::INFINITY));
+        assert!(!s[1].within);
+        let near_zero = Goal {
+            itlb_pki: Some(0.000_003),
+            dtlb_pki: Some(0.0001),
+            mpki: Some(0.006),
+            ..Goal::default()
+        };
+        let s = f.statuses(
+            &Measured {
+                itlb_pki: Some(0.000_02),
+                dtlb_pki: Some(0.015),
+                mpki: Some(0.04),
+                ..Measured::default()
+            },
+            &near_zero,
+        );
+        assert!(s.iter().all(|r| r.within), "{s:#?}");
+        assert!(
+            s.iter().all(|r| r.error.unwrap() > 1.0),
+            "ratios are huge but meaningless"
+        );
         assert_eq!(factor(2.0, 1.0, 0.5), 2.0f64.sqrt());
         assert_eq!(factor(1.0, 0.0, 0.5), 1.0, "no measurement, no move");
         assert_eq!(factor(100.0, 1.0, 1.0), 4.0, "clamped");
