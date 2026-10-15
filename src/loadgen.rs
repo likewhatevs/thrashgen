@@ -41,8 +41,8 @@ pub struct Knobs {
     pub lines: f64,
     /// Fraction of main-stream lines that are stored to, 0 to 1.
     pub wfrac: f64,
-    /// Lines written with non-temporal stores per access.
-    pub ntlines: u32,
+    /// Lines written with non-temporal stores per access; may be below one.
+    pub ntlines: f64,
     /// Sparse-stream loads per access; may be below one.
     pub tlbvisits: f64,
     /// Pages the sparse stream picks from; at most the buffer's capacity.
@@ -64,7 +64,7 @@ impl Default for Knobs {
             chains: 2,
             lines: 4.0,
             wfrac: 0.25,
-            ntlines: 0,
+            ntlines: 0.0,
             tlbvisits: 0.0,
             sparse_pages: 1,
             codevisits: 0.0,
@@ -127,6 +127,7 @@ impl Knobs {
         for (name, v) in [
             ("codevisits", self.codevisits),
             ("tlbvisits", self.tlbvisits),
+            ("ntlines", self.ntlines),
         ] {
             if !(v >= 0.0 && v.is_finite()) {
                 return Err(KnobError(format!(
@@ -365,7 +366,7 @@ impl Worker {
         k: &Knobs,
         rng: &mut Xoshiro256PlusPlus,
         state: &mut [u64; 4],
-        acc: &mut [f64; 3],
+        acc: &mut [f64; 4],
     ) {
         let main = self.buffers.main.as_ptr();
         let main_pages = self.buffers.main.len() / PAGE;
@@ -389,10 +390,12 @@ impl Worker {
                 }
             }
         }
-        for _ in 0..k.ntlines {
+        acc[3] += k.ntlines;
+        while acc[3] >= 1.0 {
             let page = rng.random_range(0..main_pages);
             let line = rng.random_range(0..PAGE / LINE);
             nt_store_line(main.wrapping_add(page * PAGE + line * LINE), state[1]);
+            acc[3] -= 1.0;
         }
         let sparse = self.buffers.sparse.as_ptr();
         acc[0] += k.tlbvisits;
@@ -425,7 +428,7 @@ impl Worker {
         let mut rng =
             Xoshiro256PlusPlus::seed_from_u64(self.seed.wrapping_add(self.index as u64 + 1));
         let mut state = [self.seed | 1, 2, 3, 4];
-        let mut acc = [0.0f64; 3];
+        let mut acc = [0.0f64; 4];
         let mut last_second = u64::MAX;
         let mut factor = 1.0;
         while !self.stop.load(Ordering::Relaxed) {
@@ -668,7 +671,7 @@ mod tests {
             code_pages: 16,
             tlbvisits: 2.5,
             codevisits: 0.5,
-            ntlines: 1,
+            ntlines: 1.5,
             ..Knobs::default()
         };
         let busy_ns = |g: &Generator| {

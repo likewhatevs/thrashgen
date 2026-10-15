@@ -235,7 +235,7 @@ impl fmt::Display for Report {
         writeln!(f)?;
         writeln!(
             f,
-            "knobs     duty {:.3} cv {:.3} ops {} chains {} lines {:.2} wfrac {:.2} ntlines {} tlbvisits {:.4} sparse_pages {} codevisits {:.4} code_pages {}",
+            "knobs     duty {:.3} cv {:.3} ops {} chains {} lines {:.2} wfrac {:.2} ntlines {:.3} tlbvisits {:.4} sparse_pages {} codevisits {:.4} code_pages {}",
             self.knobs.duty,
             self.knobs.cv,
             self.knobs.ops,

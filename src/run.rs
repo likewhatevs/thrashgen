@@ -175,7 +175,7 @@ pub fn plan_memory(
 /// of the main stream written back, 64 bytes each.
 pub fn dram_model(sample: &Sample, knobs: &Knobs, accesses_per_s: f64) -> Option<f64> {
     let misses = sample.values.get("l3_misses_per_sec")?;
-    Some(64.0 * (misses + accesses_per_s * (f64::from(knobs.ntlines) + knobs.wfrac * knobs.lines)))
+    Some(64.0 * (misses + accesses_per_s * (knobs.ntlines + knobs.wfrac * knobs.lines)))
 }
 
 /// Profile units from one window's sample.
@@ -744,7 +744,7 @@ mod tests {
             values,
         };
         let knobs = Knobs {
-            ntlines: 2,
+            ntlines: 2.0,
             wfrac: 0.5,
             lines: 4.0,
             ..Knobs::default()

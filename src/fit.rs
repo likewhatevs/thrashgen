@@ -147,7 +147,7 @@ pub struct Limits {
 const OPS_RANGE: (f64, f64) = (1.0, 1.0e6);
 /// One-second samples a window needs before its burstiness is trusted.
 pub const MIN_CV_SAMPLES: usize = 30;
-const NTLINES_MAX: u32 = 512;
+const NTLINES_MAX: f64 = 512.0;
 const VISITS_RANGE: (f64, f64) = (1.0e-4, 64.0);
 
 /// The fitter: damped multiplicative updates, one pass per window.
@@ -226,7 +226,7 @@ impl Fitter {
             chains,
             lines: 8.0,
             wfrac: 0.25,
-            ntlines: 0,
+            ntlines: 0.0,
             tlbvisits: if goal.dtlb_pki.is_some_and(|v| v > 0.0) {
                 0.2
             } else {
@@ -335,17 +335,6 @@ impl Fitter {
         }
 
         let mut ops = ops_now;
-        match (goal.mpki, m.mpki, ipa) {
-            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 => {
-                // Misses per access stay put when only ops moves, so the
-                // instructions per access the target needs are known.
-                let misses_per_access = v / 1000.0 * ipa;
-                let want_ipa = misses_per_access * 1000.0 / t;
-                ops += d * (want_ipa - ipa) / slope;
-            }
-            (Some(t), Some(v), None) => ops *= factor(v, t, d),
-            _ => {}
-        }
         if let (Some(t), Some(v)) = (goal.ipc, m.ipc) {
             // Longer runs let the prefetcher stream, raising IPC at equal
             // MPKI; ops is left to the MPKI rule so the two do not fight,
@@ -377,6 +366,18 @@ impl Fitter {
             }
             self.last_ipc = Some(v);
         }
+        match (goal.mpki, m.mpki, ipa) {
+            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 => {
+                // Misses per access follow the run length the IPC rule just
+                // chose; at that length, the instructions per access the
+                // target needs are known.
+                let misses_per_access = v / 1000.0 * ipa * (k.lines / knobs.lines.max(1.0));
+                let want_ipa = misses_per_access * 1000.0 / t;
+                ops += d * (want_ipa - ipa) / slope;
+            }
+            (Some(t), Some(v), None) => ops *= factor(v, t, d),
+            _ => {}
+        }
         k.ops = ops.clamp(OPS_RANGE.0, OPS_RANGE.1).round() as u32;
 
         // Instructions per access after this pass, by the same model, and
@@ -392,13 +393,11 @@ impl Fitter {
                 // The lines the target needs at next pass's access rate, by
                 // the model; damped linearly since it is an absolute estimate.
                 let per_line_now = 64.0 * m.accesses_per_s;
-                let nt_now = f64::from(k.ntlines) * per_line_now;
+                let nt_now = k.ntlines * per_line_now;
                 let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
                 let need_lines = ((t / aps_next - other_per_access) / 64.0).max(0.0);
-                let now = f64::from(k.ntlines);
-                k.ntlines = (now + d * (need_lines - now))
-                    .round()
-                    .clamp(0.0, f64::from(NTLINES_MAX)) as u32;
+                let now = k.ntlines;
+                k.ntlines = (now + d * (need_lines - now)).clamp(0.0, NTLINES_MAX);
             }
         }
         let rate_rule = |target: Option<f64>, measured: Option<f64>, visits: f64| -> f64 {
@@ -450,7 +449,7 @@ mod tests {
         };
         let ops = f64::from(k.ops);
         let lines = k.lines;
-        let nt = f64::from(k.ntlines);
+        let nt = k.ntlines;
         let instr = 2.0 * ops * f64::from(k.chains)
             + 3.0 * lines
             + 4.0 * nt
@@ -527,7 +526,7 @@ mod tests {
                     ops: 40,
                     chains: 1,
                     lines: 4.0,
-                    ntlines: 3,
+                    ntlines: 3.0,
                     tlbvisits: 0.5,
                     sparse_pages: 2048,
                     codevisits: 0.02,
@@ -545,7 +544,7 @@ mod tests {
                     ops: 400,
                     chains: 4,
                     lines: 12.0,
-                    ntlines: 0,
+                    ntlines: 0.0,
                     tlbvisits: 0.05,
                     sparse_pages: 16384,
                     codevisits: 0.3,
@@ -563,7 +562,7 @@ mod tests {
                     ops: 120,
                     chains: 2,
                     lines: 16.0,
-                    ntlines: 8,
+                    ntlines: 8.0,
                     tlbvisits: 2.0,
                     sparse_pages: 2048,
                     codevisits: 1.5,
@@ -598,7 +597,7 @@ mod tests {
         let (_, k, statuses) = converge(&goal, 4, TlbRegime::L2Hit, 40);
         assert!(Fitter::converged(&statuses), "{statuses:#?}");
         assert_eq!(statuses.len(), 2);
-        assert_eq!(k.ntlines, 0);
+        assert_eq!(k.ntlines, 0.0);
         assert_eq!(k.tlbvisits, 0.0);
         assert_eq!(k.codevisits, 0.0);
     }
@@ -733,7 +732,7 @@ mod tests {
         #[test]
         fn steps_stay_valid(
             duty in 0.0..=1.0f64, cv in 0.0..2.0f64, ops in 1u32..10000, lines in 1.0..=64.0f64,
-            nt in 0u32..100, tv in 0.0..10.0f64, cvis in 0.0..10.0f64,
+            nt in 0.0..100.0f64, tv in 0.0..10.0f64, cvis in 0.0..10.0f64,
             cores in 0.1..64.0f64, ipc in 0.1..5.0f64, mpki in 0.0..100.0f64, dram in 0.0..1e11f64,
             dtlb in 0.0..50.0f64, itlb in 0.0..10.0f64, aps in 0.0..1e8f64,
         ) {
