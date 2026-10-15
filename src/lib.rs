@@ -5,3 +5,4 @@
 //! documents its own contract.
 
 pub mod profile;
+pub mod samples;
