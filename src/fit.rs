@@ -302,13 +302,6 @@ impl Fitter {
         self.passes += 1;
         let d = self.damping;
         let mut k = knobs.clone();
-        let geometric = |old: f64, new: f64| {
-            if old > 0.0 && new > 0.0 {
-                old * (new / old).powf(d)
-            } else {
-                new
-            }
-        };
 
         if let (Some(t), Some(v)) = (goal.cores, m.cores) {
             k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
@@ -396,11 +389,14 @@ impl Fitter {
 
         if let (Some(t), Some(v)) = (goal.dram, m.dram) {
             if aps_next > 0.0 {
+                // The lines the target needs at next pass's access rate, by
+                // the model; damped linearly since it is an absolute estimate.
                 let per_line_now = 64.0 * m.accesses_per_s;
                 let nt_now = f64::from(k.ntlines) * per_line_now;
                 let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
                 let need_lines = ((t / aps_next - other_per_access) / 64.0).max(0.0);
-                k.ntlines = geometric(f64::from(k.ntlines).max(0.5), need_lines)
+                let now = f64::from(k.ntlines);
+                k.ntlines = (now + d * (need_lines - now))
                     .round()
                     .clamp(0.0, f64::from(NTLINES_MAX)) as u32;
             }
@@ -414,11 +410,10 @@ impl Fitter {
             }
             match (ipa, ipa_next) {
                 (Some(ipa), Some(next)) if visits > 0.0 && v > 0.0 => {
-                    // Events per visit as measured, then the visits the
-                    // target needs at next pass's instructions per access.
-                    let per_visit = v / 1000.0 * ipa / visits;
-                    let want = t / 1000.0 * next / per_visit;
-                    geometric(visits, want).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
+                    // Full compensation for the change in instructions per
+                    // access, which the model predicts, then a damped
+                    // correction of the measured error.
+                    (visits * (next / ipa) * factor(t, v, d)).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
                 }
                 _ if visits > 0.0 => {
                     (visits * factor(t, v, d)).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
