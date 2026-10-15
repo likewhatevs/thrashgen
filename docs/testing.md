@@ -43,9 +43,10 @@ sudo env PATH="$PATH" CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup" \
   CARGO_TARGET_DIR=target/root cargo test --features root-tests
 ```
 
-## Experiments: `experiments/`
+## Experiments: `experiments/all.sh`
 
 End-to-end evidence: record a known benchmark, replay the profile,
-record the replay, and plot both. Each experiment writes its raw data
-and plots to `experiments/out/<name>/` and is described in
-`docs/experiments.md`.
+record the replay the same way, and plot both. Each experiment writes
+its raw data and plots to `experiments/out/<name>/` and is described in
+`docs/experiments.md`. The plotting code is covered by `tests/plot.rs`
+against fixture recordings, so a broken chart fails `cargo test`.

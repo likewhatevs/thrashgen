@@ -166,20 +166,26 @@ busy cores; chains, then ops and lines for IPC and MPKI; ntlines for
 bandwidth; tlbvisits; codevisits; repeat until every verified target is
 within tolerance or the pass limit is hit.
 
-Each knob moves by the factor target / achieved raised to a damping
-exponent of one half, bounded to a quarter and four times per pass.
-The two coupled targets are split: line run length answers to IPC and
-ops to MPKI; when MPKI is not a target, ops carries IPC too. Chain
-count steps only once line length is pinned at its range. Because
-instructions per access scale with the compute work, the per-access
-rates (sparse visits, stub calls, non-temporal lines) are pre-scaled
-by that change before their own correction, so a pass that doubles
-ops does not halve the TLB rates. The burstiness knob only moves on
-windows with at least thirty one-second samples and stays within twice
-its target, since clipping at full duty keeps the measured value below
-the knob. Worker threads are the CPU limit when given, else the busy
-cores with headroom of one plus the CV, so the clipped per-second
-factor keeps its mean.
+Busy cores, burstiness and IPC move by the factor target / achieved
+raised to a damping exponent of one half, bounded to a quarter and
+four times per pass. Line run length answers to IPC; chain count steps
+only once the run length is at its range or a pass past half the range
+has stopped lifting IPC. The ops rule is model-based: instructions per
+access are measured from the counters and the worker tally, the slope
+against ops comes from a secant over the last two passes, and ops is
+set to the count that gives the MPKI target at the run length the IPC
+rule just chose. The per-access rates (sparse visits, stub calls,
+non-temporal lines) are then set from their measured events per visit
+against the instructions per access the next pass will have, with only
+the measured error damped, so a change in ops never drags them off
+target. All per-access rates are fractional, carried over an
+accumulator, so low targets are reachable. The burstiness knob only
+moves on windows with at least thirty one-second samples and stays
+within twice its target, since clipping at full duty keeps the measured
+value below the knob; the one-second busy-cores ticks sit on wall-clock
+second boundaries, where the workers redraw their factor. Worker
+threads are the CPU limit when given, else the busy cores with headroom
+of one plus the CV, so the clipped per-second factor keeps its mean.
 
 Ratios settle within a 30 s window. Busy cores and burstiness do not:
 with independent per-second jitter a window's mean has standard error
