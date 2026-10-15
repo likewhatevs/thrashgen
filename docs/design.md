@@ -72,9 +72,13 @@ copied from the kernel's `tools/perf/pmu-events` JSON at v7.1.
 
 | field | AMD Zen 3, 4, 5 | Intel Skylake-SP and later server cores | ARM Neoverse |
 | --- | --- | --- | --- |
-| L3 misses | L3 PMU lookup-miss event, raw `event=0x04,umask=0x01`, per L3 domain, filtered to the scope's cores with the `coreid` / `threadmask` fields (family 19h and later). Unprivileged proxy: core event `ls_any_fills_from_sys.dram_io_all`, raw `event=0x44,umask=0x48`, data cache fills from DRAM or MMIO | `longest_lat_cache.miss` | `ll_cache_miss_rd`, reads only |
-| dTLB | L1 dTLB misses that hit the L2 TLB: raw `event=0x45,umask=0x0f` | `dtlb_load_misses.walk_completed` plus `dtlb_store_misses.walk_completed` | `dtlb_walk` |
-| iTLB | L2 iTLB misses: raw `event=0x85,umask=0x0f` | `itlb_misses.walk_completed` | `itlb_walk` |
+| L3 misses | L3 PMU lookup-miss event, raw `amd_l3/event=0x04,umask=0x01/` on Zen 4 and 5 and `event=0x06,umask=0x01` on Zen 3, per L3 domain, filtered to the scope's cores with the `coreid` / `threadmask` fields. Unprivileged proxy: core event `ls_any_fills_from_sys.dram_io_all`, raw `event=0x44,umask=0x48`, data cache fills from DRAM or MMIO | `LONGEST_LAT_CACHE.MISS`, `event=0x2e,umask=0x41` | `LL_CACHE_MISS_RD`, `0x37`, reads only |
+| dTLB | L1 dTLB misses that hit the L2 TLB: raw `event=0x45,umask=0x0f` | `DTLB_LOAD_MISSES.WALK_COMPLETED` plus `DTLB_STORE_MISSES.WALK_COMPLETED`; `0x08` and `0x49` with umask `0x0e` through Ice Lake-SP and on Sierra Forest, `0x12` and `0x13` from Sapphire Rapids | `DTLB_WALK`, `0x34` |
+| iTLB | L2 iTLB misses: raw `event=0x85,umask=0x0f` | `ITLB_MISSES.WALK_COMPLETED`; `0x85` or `0x11`, umask `0x0e`, split as above | `ITLB_WALK`, `0x35` |
+
+CPU models are mapped to tables the way the kernel's `mapfile.csv`
+does it. A model with no verified table gets no counters rather than a
+guess, and the report says so.
 
 AMD's dTLB definition counts L2 TLB hits where the others count walks;
 the two are not comparable, and the profile's vendor field says which

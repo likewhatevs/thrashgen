@@ -6,5 +6,7 @@
 
 pub mod aggregate;
 pub mod cli;
+pub mod cpu;
+pub mod events;
 pub mod profile;
 pub mod samples;
