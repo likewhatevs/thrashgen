@@ -577,3 +577,106 @@ mod root_tests {
         assert!(r[0].raw > 0, "{:?}", r[0]);
     }
 }
+
+#[cfg(all(test, feature = "root-tests"))]
+mod amd_l3_root_tests {
+    use super::*;
+    use crate::cpu;
+    use crate::events::{Sysfs, table_for};
+    use crate::footprint::AnonBuffer;
+    use crate::topology::Topology;
+    use nix::sched::{CpuSet, sched_setaffinity};
+    use nix::unistd::Pid;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The `coreid` / `threadmask` mapping in `Topology::amd_l3_filter`
+    /// is an assumption about how the kernel's `core_id` relates to the
+    /// L3 PMU's view of the complex. This pins a miss generator to one
+    /// CPU and checks that the counter filtered to that CPU sees it and
+    /// the counter filtered to a sibling core in the same complex does
+    /// not.
+    #[test]
+    fn l3_pmu_filters_attribute_misses_to_the_pinned_cpu() {
+        let ident = cpu::detect().unwrap();
+        let table = table_for(&ident).unwrap();
+        if table.vendor != crate::events::Vendor::Amd {
+            panic!("this test is for AMD hosts; got {ident:?}");
+        }
+        let sysfs = Sysfs::default();
+        let topo = Topology::read(&sysfs).unwrap();
+        let domain = topo
+            .l3_domains()
+            .into_iter()
+            .find(|d| d.len() >= 4)
+            .expect("an L3 domain with several CPUs");
+        let target = domain[0];
+        let other = *domain
+            .iter()
+            .find(|c| topo.cpu(**c).map(|x| x.core_id) != topo.cpu(target).map(|x| x.core_id))
+            .expect("another core");
+        let make = |cpu: u32| {
+            let f = topo.amd_l3_filter(cpu).unwrap();
+            let def = table.l3_miss.def().with_fields(&[
+                ("coreid", u64::from(f.coreid)),
+                ("threadmask", u64::from(f.threadmask)),
+                ("enallslices", 1),
+            ]);
+            Spec::new(
+                format!("l3@cpu{cpu}"),
+                sysfs.encode(table.vendor, &def).unwrap(),
+            )
+        };
+        let specs = [make(target), make(other)];
+        let mut counters = Counters::open(
+            &specs,
+            &Target::Cpu(target),
+            Options {
+                kernel: true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+
+        let buf = Arc::new(AnonBuffer::new(1 << 30, true).unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker = {
+            let (buf, stop) = (Arc::clone(&buf), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                let mut set = CpuSet::new();
+                set.set(target as usize).unwrap();
+                sched_setaffinity(Pid::from_raw(0), &set).unwrap();
+                let mut x = 0x9E37_79B9_7F4A_7C15u64;
+                let pages = buf.len() / 4096;
+                let mut sum = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    for _ in 0..4096 {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        let p = buf.as_ptr().wrapping_add((x as usize % pages) * 4096);
+                        // SAFETY: inside the buffer.
+                        sum = sum.wrapping_add(unsafe { std::ptr::read_volatile(p.cast::<u64>()) });
+                    }
+                }
+                std::hint::black_box(sum);
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        counters.enable().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        counters.disable().unwrap();
+        stop.store(true, Ordering::Relaxed);
+        worker.join().unwrap();
+        let r = counters.read().unwrap();
+        let (on_target, on_other) = (r[0].scaled, r[1].scaled);
+        assert!(
+            on_target > 1.0e6,
+            "pinned CPU {target} shows misses: {on_target}"
+        );
+        assert!(
+            on_other < on_target / 10.0,
+            "CPU {other} in the same complex should see few of them: {on_other} vs {on_target}"
+        );
+    }
+}

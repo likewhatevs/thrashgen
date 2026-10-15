@@ -22,7 +22,8 @@ fn caps_prints_facts_and_rules() {
     cmd.arg("caps").assert().success().stdout(
         predicate::str::contains("perf_event_paranoid")
             .and(predicate::str::contains("own threads, user mode"))
-            .and(predicate::str::contains("page cache residency")),
+            .and(predicate::str::contains("page cache residency"))
+            .and(predicate::str::contains("probe: per-CPU")),
     );
 }
 

@@ -243,8 +243,20 @@ fn run_aggregate(args: AggregateArgs) -> Result<()> {
 fn run_caps() -> Result<()> {
     let facts = Facts::detect(&Root::default());
     let expectations = Expectations::from_facts(&facts);
+    let probe = crate::perf::probe();
     let mut out = io::stdout().lock();
     write!(out, "{facts}\n{expectations}")?;
+    writeln!(out)?;
+    for (what, result) in [
+        ("probe: own threads, user mode", &probe.self_user),
+        ("probe: own threads, kernel mode", &probe.self_kernel),
+        ("probe: per-CPU", &probe.per_cpu),
+    ] {
+        match result {
+            Ok(()) => writeln!(out, "{what:30} ok")?,
+            Err(e) => writeln!(out, "{what:30} no   {e}")?,
+        }
+    }
     Ok(())
 }
 
