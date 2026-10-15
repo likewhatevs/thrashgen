@@ -14,6 +14,7 @@ pub mod measure;
 pub mod perf;
 pub mod plan;
 pub mod profile;
+pub mod sampler;
 pub mod samples;
 pub mod sys;
 pub mod topology;
