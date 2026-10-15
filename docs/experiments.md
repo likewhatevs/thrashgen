@@ -10,7 +10,11 @@ the same accounting for each: busy time and memory from the cgroup
 files, counters attached to the scope's threads.
 
 The harness is `experiments/run.sh`; `experiments/all.sh` runs the set
-below and draws the plots with `examples/experiment_plot.rs`. Outputs
+below and draws the plots with `examples/experiment_plot.rs`. The set
+takes about forty minutes: each benchmark records for two minutes and
+each replay fits for seven. `RECORD_SECS` and `REPLAY_SECS` shorten
+that for a smoke run; the replay needs at least a few windows of the
+length `docs/design.md` section 6 gives to converge. Outputs
 land in `experiments/out/<name>/`:
 
 | file | what |

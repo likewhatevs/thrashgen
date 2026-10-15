@@ -158,6 +158,19 @@ page cache is a file of `pagecache_bytes` in a disk-backed scratch
 directory, written then read, with residency re-checked and restored;
 shmem is a `memfd`; kernel memory is empty files as in section 2.
 
+### 5.1 Known limits
+
+The main stream always draws its pages from the whole main buffer, so
+a target with almost no misses or TLB events, a cache-resident
+workload, is met by raising compute per access until the rates are
+diluted, not by shrinking the footprint the stream touches. The
+numbers match; the mechanism differs. A working-set knob, the number
+of main-buffer pages the stream draws from, is the natural next step
+and would let the fitter shrink the footprint instead. The dTLB rate
+has a floor from the main stream's own page spread for the same
+reason, about a tenth of an event per kilo-instruction on Zen 4 with a
+1 MiB buffer.
+
 ## 6. Fitting
 
 Knobs depend on the hardware, so they are fit per CPU model and
