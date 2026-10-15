@@ -13,6 +13,7 @@ source at v7.1 (`kernel/events/core.c`, `include/linux/perf_event.h`,
 | `CAP_PERFMON` | attaching to any process or cgroup, all modes |
 | resctrl mounted and a monitoring group owned by the tool's uid | per-scope DRAM bandwidth; the kernel lets a task's owner or root write that task into a group |
 | root | mounting resctrl and creating groups |
+| Yama `ptrace_scope` at most 1 | holding a recorded command at its exec with `PTRACE_TRACEME` so counters attach before it runs; otherwise the command starts first and the note says so |
 
 Inside a container the default seccomp profile of podman and docker
 returns an error for `perf_event_open` unless the container holds

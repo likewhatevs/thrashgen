@@ -30,4 +30,10 @@ thrashgen compare app.json replay.json --pick p80
 measure is within tolerance, then holds. `calibrate` does the same and
 saves the knobs for the CPU model, so a host without counters can
 start from them. Hardware-dependent behaviour is checked by the tests
-and experiments described in `docs/testing.md`.
+and experiments described in `docs/testing.md`; `docs/experiments.md`
+describes the benchmark comparisons and their plots.
+
+Implemented for Linux on x86_64, with event tables for AMD Zen 3 to 5,
+Intel Skylake-SP through Granite Rapids and Sierra Forest, and Arm
+Neoverse; the code stream (iTLB) is x86_64 only and other
+architectures report it as unavailable.
