@@ -36,6 +36,21 @@ fn touch(ptr: NonNull<libc::c_void>, len: usize) {
     }
 }
 
+/// Resident bytes of exactly the range `[ptr, ptr + len)`, from
+/// `mincore(2)`, which unlike smaps is not confused by the kernel
+/// merging adjacent mappings into one VMA.
+fn resident_in_range(ptr: NonNull<libc::c_void>, len: usize) -> io::Result<u64> {
+    let page = page_size() as usize;
+    let pages = len.div_ceil(page);
+    let mut vec = vec![0u8; pages];
+    // SAFETY: `ptr` is a page-aligned mapping of at least `len` bytes
+    // and `vec` has one byte per page in it.
+    if unsafe { libc::mincore(ptr.as_ptr(), len, vec.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(vec.iter().filter(|b| *b & 1 == 1).count() as u64 * page as u64)
+}
+
 /// One smaps statistic of the mapping that contains `ptr`, in bytes.
 fn mapping_field(ptr: NonNull<libc::c_void>, key: &str) -> io::Result<u64> {
     let addr = ptr.as_ptr() as u64;
@@ -130,11 +145,9 @@ impl AnonBuffer {
         mapping_field(self.ptr, "AnonHugePages")
     }
 
-    /// Resident bytes of this mapping, from `/proc/self/smaps`. The
-    /// kernel merges adjacent mappings with equal flags, so a merged
-    /// neighbour's pages are included.
+    /// Resident bytes of this mapping, from `mincore(2)`.
     pub fn resident_bytes(&self) -> io::Result<u64> {
-        mapping_field(self.ptr, "Rss")
+        resident_in_range(self.ptr, self.len)
     }
 }
 
@@ -272,9 +285,9 @@ impl ShmemBuffer {
         self.ptr.as_ptr().cast()
     }
 
-    /// Resident bytes of this mapping, from `/proc/self/smaps`.
+    /// Resident bytes of this mapping, from `mincore(2)`.
     pub fn resident_bytes(&self) -> io::Result<u64> {
-        mapping_field(self.ptr, "Rss")
+        resident_in_range(self.ptr, self.len)
     }
 }
 
@@ -349,22 +362,19 @@ mod tests {
         assert_eq!(buf.len(), 16 << 20);
         assert!(!buf.is_empty());
         assert!(!buf.as_ptr().is_null());
-        let resident = buf.resident_bytes().unwrap();
-        assert!(resident >= 15 << 20, "{resident}");
+        assert_eq!(buf.resident_bytes().unwrap(), 16 << 20);
         let huge = buf.huge_bytes().unwrap();
         assert!(huge <= 16 << 20, "{huge}");
         if huge > 0 {
             assert!(buf.huge_advised());
         }
-        // The kernel merges adjacent mappings with equal flags into one
-        // VMA, so a neighbour's pages can show up here; half the size is
-        // still far below what touching would give.
         let lazy = AnonBuffer::new_untouched(64 << 20, false).unwrap();
-        let lazy_resident = lazy.resident_bytes().unwrap();
-        assert!(
-            lazy_resident < 32 << 20,
-            "untouched pages are not resident: {lazy_resident}"
+        assert_eq!(
+            lazy.resident_bytes().unwrap(),
+            0,
+            "untouched pages are not resident"
         );
+        assert_eq!(resident_in_range(lazy.ptr, 1).unwrap(), 0);
         assert!(AnonBuffer::new(0, false).is_err());
     }
 
