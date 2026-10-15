@@ -379,9 +379,15 @@ impl Fitter {
             } else {
                 k.chains > 1.0
             };
+            // With no compute left to cut and MPKI still short, run length
+            // is the only lever MPKI has; IPC yields to it there.
+            let mpki_short = goal
+                .mpki
+                .zip(m.mpki)
+                .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
             if (exhausted || stalled) && chains_can_move {
                 k.chains = (k.chains * g).clamp(1.0, 4.0);
-            } else {
+            } else if !(g < 1.0 && knobs.ops <= 1 && mpki_short) {
                 k.lines = (k.lines * g).clamp(1.0, 64.0);
             }
             self.last_ipc = Some(v);
@@ -399,6 +405,13 @@ impl Fitter {
             _ => {}
         }
         k.ops = (work / k.chains).clamp(OPS_RANGE.0, OPS_RANGE.1).round() as u32;
+        if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
+            // Compute cannot go below one op per access; past that, more
+            // lines per access are the only way to more misses.
+            if k.ops <= 1 && knobs.ops <= 1 && v < t * (1.0 - self.tol.ratio) {
+                k.lines = (k.lines * factor(t, v, d)).clamp(1.0, 64.0);
+            }
+        }
 
         // Instructions per access after this pass, by the same model, and
         // the access rate it implies at unchanged cycles per instruction.
