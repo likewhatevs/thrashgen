@@ -36,8 +36,9 @@ pub struct Knobs {
     pub ops: u32,
     /// Independent dependency chains in the compute loop: 1, 2 or 4.
     pub chains: u8,
-    /// Consecutive lines touched per main-stream visit, 1 to 64.
-    pub lines: u32,
+    /// Consecutive lines touched per main-stream visit, 1 to 64; a
+    /// fraction alternates between the two nearest counts.
+    pub lines: f64,
     /// Fraction of main-stream lines that are stored to, 0 to 1.
     pub wfrac: f64,
     /// Lines written with non-temporal stores per access.
@@ -61,7 +62,7 @@ impl Default for Knobs {
             cv: 0.0,
             ops: 64,
             chains: 2,
-            lines: 4,
+            lines: 4.0,
             wfrac: 0.25,
             ntlines: 0,
             tlbvisits: 0.0,
@@ -102,7 +103,7 @@ impl Knobs {
                 self.chains
             )));
         }
-        if self.lines == 0 || self.lines as usize > PAGE / LINE {
+        if !(self.lines >= 1.0 && self.lines <= (PAGE / LINE) as f64) {
             return Err(KnobError(format!(
                 "lines must be 1..={}, got {}",
                 PAGE / LINE,
@@ -364,11 +365,16 @@ impl Worker {
         k: &Knobs,
         rng: &mut Xoshiro256PlusPlus,
         state: &mut [u64; 4],
-        acc: &mut [f64; 2],
+        acc: &mut [f64; 3],
     ) {
         let main = self.buffers.main.as_ptr();
         let main_pages = self.buffers.main.len() / PAGE;
-        let lines = k.lines as usize;
+        acc[2] += k.lines.fract();
+        let mut lines = k.lines as usize;
+        if acc[2] >= 1.0 {
+            acc[2] -= 1.0;
+            lines += 1;
+        }
         let page = rng.random_range(0..main_pages);
         let line0 = rng.random_range(0..=(PAGE / LINE - lines));
         let stores = (k.wfrac * lines as f64).round() as usize;
@@ -419,7 +425,7 @@ impl Worker {
         let mut rng =
             Xoshiro256PlusPlus::seed_from_u64(self.seed.wrapping_add(self.index as u64 + 1));
         let mut state = [self.seed | 1, 2, 3, 4];
-        let mut acc = [0.0f64; 2];
+        let mut acc = [0.0f64; 3];
         let mut last_second = u64::MAX;
         let mut factor = 1.0;
         while !self.stop.load(Ordering::Relaxed) {
@@ -611,8 +617,9 @@ mod tests {
         assert!(bad(|k| k.wfrac = -0.1).0.contains("wfrac"));
         assert!(bad(|k| k.cv = f64::NAN).0.contains("cv"));
         assert!(bad(|k| k.chains = 3).0.contains("chains"));
-        assert!(bad(|k| k.lines = 0).0.contains("lines"));
-        assert!(bad(|k| k.lines = 65).0.contains("lines"));
+        assert!(bad(|k| k.lines = 0.0).0.contains("lines"));
+        assert!(bad(|k| k.lines = 65.0).0.contains("lines"));
+        assert!(bad(|k| k.lines = f64::NAN).0.contains("lines"));
         assert!(bad(|k| k.sparse_pages = 65).0.contains("sparse_pages"));
         assert!(bad(|k| k.sparse_pages = 0).0.contains("sparse_pages"));
         assert!(bad(|k| k.code_pages = 17).0.contains("code_pages"));
@@ -736,7 +743,7 @@ mod tests {
             Generator::start(
                 Arc::clone(&b),
                 Knobs {
-                    lines: 0,
+                    lines: 0.0,
                     ..knobs.clone()
                 },
                 1,

@@ -10,6 +10,7 @@ pub mod cgroup;
 pub mod cli;
 pub mod cpu;
 pub mod events;
+pub mod fit;
 pub mod footprint;
 pub mod loadgen;
 pub mod measure;
