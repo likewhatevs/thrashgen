@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::aggregate;
+use crate::calibration::Calibration;
 use crate::caps::{Expectations, Facts, Root};
 use crate::compare;
 use crate::loadgen::Knobs;
@@ -36,7 +37,7 @@ enum Command {
     /// Generate load that reproduces a profile and verify it
     Run(RunArgs),
     /// Fit knobs for a profile where counters are available and save them
-    Calibrate,
+    Calibrate(CalibrateArgs),
     /// Compare a run report, recording or profile against a profile
     Compare(CompareArgs),
 }
@@ -121,9 +122,22 @@ pub struct RunArgs {
     /// Fixed knobs as JSON: run them as given, with no fitting
     #[arg(long)]
     knobs: Option<PathBuf>,
+    /// Start fitting from a calibration written by `calibrate`
+    #[arg(long)]
+    calibration: Option<PathBuf>,
     /// Write the report as JSON here
     #[arg(long)]
     report: Option<PathBuf>,
+}
+
+/// Arguments of `calibrate`: the run arguments plus where to save.
+#[derive(Args, Debug)]
+pub struct CalibrateArgs {
+    #[command(flatten)]
+    run: RunArgs,
+    /// Write the calibration here
+    #[arg(short, long)]
+    output: PathBuf,
 }
 
 /// Parse a byte count with an optional K, M, G or T suffix (powers of 1024).
@@ -199,9 +213,7 @@ pub fn main() -> Result<()> {
         Command::Record(args) => run_record(args),
         Command::Run(args) => run_run(args),
         Command::Compare(args) => run_compare(args),
-        Command::Calibrate => {
-            bail!("not implemented yet: {:?}", cli.command)
-        }
+        Command::Calibrate(args) => run_calibrate(args),
     }
 }
 
@@ -297,7 +309,8 @@ pub fn targets_from(
     Ok(targets)
 }
 
-fn run_run(args: RunArgs) -> Result<()> {
+/// Settings and targets from the run arguments.
+fn run_setup(args: &RunArgs) -> Result<(Targets, run::Settings, Vec<String>)> {
     let targets = targets_from(args.profile.as_deref(), &args.pick, &args.sets)?;
     let pin = match args.pin.as_str() {
         "auto" => run::Pin::Auto,
@@ -311,21 +324,46 @@ fn run_run(args: RunArgs) -> Result<()> {
         )?),
         None => None,
     };
+    let mut notes = Vec::new();
+    let mut threads = args.threads;
+    let initial_knobs = match &args.calibration {
+        Some(path) => {
+            let cal = Calibration::load(path)?;
+            if cal.matches(crate::cpu::detect().as_ref()) {
+                threads = threads.or(Some(cal.threads));
+                Some(cal.knobs)
+            } else {
+                notes.push(format!("calibration {} was fit on a different CPU model; starting from defaults instead", path.display()));
+                None
+            }
+        }
+        None => None,
+    };
     let settings = run::Settings {
         duration_s: args.duration,
         window_s: args.window,
-        scratch_dir: args.scratch_dir,
+        scratch_dir: args.scratch_dir.clone(),
         pin,
         seed: args.seed,
         adaptive: args.adaptive,
         max_passes: args.max_passes,
-        threads: args.threads,
+        threads,
         main_bytes: args.main_bytes.as_deref().map(parse_bytes).transpose()?,
         sparse_capacity: args.sparse_pages,
         code_capacity: args.code_pages,
         huge: !args.no_huge,
         knobs,
+        initial_knobs,
+        stop_when_converged: false,
     };
+    Ok((targets, settings, notes))
+}
+
+fn run_run(args: RunArgs) -> Result<()> {
+    let (targets, settings, notes) = run_setup(&args)?;
+    for n in &notes {
+        eprintln!("note: {n}");
+    }
     record::install_stop_handler()?;
     let report = run::run(&targets, &settings, &mut io::stderr().lock())?;
     if let Some(path) = &args.report {
@@ -333,6 +371,36 @@ fn run_run(args: RunArgs) -> Result<()> {
             .with_context(|| format!("write {}", path.display()))?;
     }
     print!("{report}");
+    Ok(())
+}
+
+fn run_calibrate(args: CalibrateArgs) -> Result<()> {
+    let (targets, mut settings, notes) = run_setup(&args.run)?;
+    for n in &notes {
+        eprintln!("note: {n}");
+    }
+    if settings.knobs.is_some() {
+        bail!("calibrate fits knobs; --knobs would fix them");
+    }
+    settings.stop_when_converged = true;
+    record::install_stop_handler()?;
+    let report = run::run(&targets, &settings, &mut io::stderr().lock())?;
+    if let Some(path) = &args.run.report {
+        std::fs::write(path, report.to_json())
+            .with_context(|| format!("write {}", path.display()))?;
+    }
+    let cal = Calibration::from_report(&targets, &report);
+    cal.save(&args.output)?;
+    print!("{report}");
+    eprintln!(
+        "calibration written to {}{}",
+        args.output.display(),
+        if cal.converged {
+            ""
+        } else {
+            " (not converged)"
+        }
+    );
     Ok(())
 }
 

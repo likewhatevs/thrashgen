@@ -5,6 +5,7 @@
 //! documents its own contract.
 
 pub mod aggregate;
+pub mod calibration;
 pub mod caps;
 pub mod cgroup;
 pub mod cli;

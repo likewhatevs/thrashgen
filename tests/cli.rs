@@ -248,12 +248,85 @@ fn compare_profile_against_recording_and_itself() {
 }
 
 #[test]
-fn unimplemented_subcommand_fails_cleanly() {
-    let mut cmd = Command::cargo_bin("thrashgen").unwrap();
-    cmd.arg("calibrate")
+fn calibrate_then_run_from_the_calibration() {
+    let dir = tempfile::tempdir().unwrap();
+    let cal = dir.path().join("cal.json");
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "calibrate",
+            "--set",
+            "cpu_usage_cores=0.3",
+            "--duration",
+            "3",
+            "--window",
+            "0.6",
+            "--pin",
+            "no",
+            "--threads",
+            "1",
+        ])
+        .args([
+            "--main-bytes",
+            "4M",
+            "--sparse-pages",
+            "16",
+            "--code-pages",
+            "16",
+            "--no-huge",
+            "-o",
+        ])
+        .arg(&cal)
+        .arg("--scratch-dir")
+        .arg(dir.path())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("not implemented"));
+        .success()
+        .stderr(predicate::str::contains("calibration written"));
+    let loaded = thrashgen::calibration::Calibration::load(&cal).unwrap();
+    assert_eq!(loaded.threads, 1);
+    assert_eq!(loaded.targets.get("cpu_usage_cores"), Some(0.3));
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "run",
+            "--set",
+            "cpu_usage_cores=0.3",
+            "--duration",
+            "1.2",
+            "--window",
+            "0.5",
+            "--pin",
+            "no",
+            "--calibration",
+        ])
+        .arg(&cal)
+        .args([
+            "--main-bytes",
+            "4M",
+            "--sparse-pages",
+            "16",
+            "--code-pages",
+            "16",
+            "--no-huge",
+            "--scratch-dir",
+        ])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 threads"));
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "calibrate",
+            "--set",
+            "ipc=1",
+            "--knobs",
+            "/nonexistent",
+            "-o",
+        ])
+        .arg(&cal)
+        .assert()
+        .failure();
 }
 
 #[test]

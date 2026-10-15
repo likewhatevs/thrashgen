@@ -70,6 +70,10 @@ pub struct Settings {
     pub huge: bool,
     /// Fixed knobs: no fitting, just run and report.
     pub knobs: Option<Knobs>,
+    /// Knobs to start fitting from, typically a calibration.
+    pub initial_knobs: Option<Knobs>,
+    /// Stop once two consecutive windows are within tolerance.
+    pub stop_when_converged: bool,
 }
 
 impl Default for Settings {
@@ -88,9 +92,14 @@ impl Default for Settings {
             code_capacity: 16384,
             huge: true,
             knobs: None,
+            initial_knobs: None,
+            stop_when_converged: false,
         }
     }
 }
+
+/// Consecutive windows within tolerance before convergence is declared.
+pub const CONVERGED_WINDOWS: u32 = 2;
 
 /// Default main buffer when no anonymous target is given: far beyond
 /// any L3.
@@ -392,7 +401,11 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut knobs = settings
         .knobs
         .clone()
+        .or_else(|| settings.initial_knobs.clone())
         .unwrap_or_else(|| fitter.initial_knobs(&goal, regime));
+    if let Err(e) = knobs.validate(&buffers) {
+        bail!("knobs do not fit the buffers: {e}");
+    }
     let fitting = settings.knobs.is_none() && !goal.is_empty();
     let window_s = window_seconds(goal.cv, fitter.tol.cv, settings.window_s);
     writeln!(
@@ -427,6 +440,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut last_statuses: Vec<Status> = Vec::new();
     let mut last_sample: Option<Sample> = None;
     let mut converged = false;
+    let mut streak = 0u32;
     let cpu_step = Duration::from_secs(1);
     let window_len = Duration::from_secs_f64(window_s);
     let deadline = settings
@@ -436,7 +450,9 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut window_end = window.started + window_len;
 
     loop {
-        let stop = stop_requested() || deadline.is_some_and(|d| Instant::now() >= d);
+        let stop = stop_requested()
+            || deadline.is_some_and(|d| Instant::now() >= d)
+            || (settings.stop_when_converged && converged);
         if !stop {
             let mut wake = next_cpu.min(window_end);
             if let Some(d) = deadline {
@@ -508,7 +524,12 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         })
                         .collect(),
                 });
-                converged = Fitter::converged(&statuses);
+                streak = if Fitter::converged(&statuses) {
+                    streak + 1
+                } else {
+                    0
+                };
+                converged = streak >= CONVERGED_WINDOWS;
                 if knobs.duty >= 1.0
                     && last_statuses_short_of_cores(&statuses)
                     && !notes.iter().any(|n| n.starts_with("busy cores"))
@@ -544,7 +565,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     }
                 }
                 last_sample = Some(sample);
-                if fitting && !stop && (settings.adaptive || !converged) {
+                if fitting && !stop && (settings.adaptive || streak == 0) {
                     if fitter.passes < settings.max_passes {
                         let next = fitter.step(&knobs, &m, &goal);
                         if next != knobs {
