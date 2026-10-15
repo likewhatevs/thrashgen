@@ -57,7 +57,10 @@ impl Comparison {
     }
 }
 
-/// Compare the target fields of `expected` against `actual`.
+/// Compare the target fields of `expected` against `actual`: within
+/// tolerance when the relative error is at most `tolerance` or the
+/// absolute error is under the field's floor from
+/// [`crate::fit::absolute_tolerance`].
 pub fn compare(expected: &Targets, actual: &BTreeMap<String, f64>, tolerance: f64) -> Comparison {
     let rows = expected
         .iter()
@@ -78,7 +81,10 @@ pub fn compare(expected: &Targets, actual: &BTreeMap<String, f64>, tolerance: f6
                 expected: e,
                 actual: a,
                 error,
-                within: error.map(|err| err.abs() <= tolerance),
+                within: a.map(|a| {
+                    (a - e).abs() <= crate::fit::absolute_tolerance(f.key)
+                        || error.is_some_and(|err| err.abs() <= tolerance)
+                }),
             }
         })
         .collect();
@@ -263,6 +269,13 @@ mod tests {
             0.05,
         );
         assert_eq!(c.rows[0].error, Some(f64::INFINITY));
+        assert_eq!(c.rows[0].within, Some(false));
+        let c = compare(
+            &zero,
+            &BTreeMap::from([("itlb_pki".to_string(), 0.005)]),
+            0.05,
+        );
+        assert_eq!(c.rows[0].within, Some(true), "under the absolute floor");
     }
 
     #[test]

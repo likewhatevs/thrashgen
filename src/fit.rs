@@ -147,6 +147,25 @@ pub struct Limits {
 const OPS_RANGE: (f64, f64) = (1.0, 1.0e6);
 /// One-second samples a window needs before its burstiness is trusted.
 pub const MIN_CV_SAMPLES: usize = 30;
+
+/// Absolute tolerance per field: a target near zero is met when the
+/// measurement is near zero too, whatever the ratio says. Memory gets
+/// two hugepages of slack for process-level accounting noise.
+pub fn absolute_tolerance(key: &str) -> f64 {
+    match key {
+        "cpu_usage_cores" => 0.05,
+        "cpu_usage_cv_1s" => 0.02,
+        "ipc" => 0.02,
+        "l3_mpki" => 0.05,
+        "dram_bytes_per_sec" => 1.0e8,
+        "dtlb_pki" => 0.02,
+        "itlb_pki" => 0.01,
+        "memory_current_bytes" | "anon_bytes" | "pagecache_bytes" | "shmem_bytes" => {
+            8.0 * 1024.0 * 1024.0
+        }
+        _ => 0.0,
+    }
+}
 const NTLINES_MAX: f64 = 512.0;
 const VISITS_RANGE: (f64, f64) = (1.0e-4, 64.0);
 
@@ -244,28 +263,22 @@ impl Fitter {
         }
     }
 
-    /// Compare a window against the goal. Each row carries a relative
-    /// tolerance and an absolute one: a target near zero is met when
-    /// the measurement is near zero too, whatever the ratio says.
+    /// Compare a window against the goal, with the relative tolerances
+    /// and the absolute floors of [`absolute_tolerance`].
     pub fn statuses(&self, m: &Measured, goal: &Goal) -> Vec<Status> {
-        type Row = (&'static str, Option<f64>, Option<f64>, f64, f64);
+        type Row = (&'static str, Option<f64>, Option<f64>, f64);
         let rows: [Row; 7] = [
-            ("cpu_usage_cores", goal.cores, m.cores, self.tol.cores, 0.05),
-            ("cpu_usage_cv_1s", goal.cv, m.cv, self.tol.cv, 0.02),
-            ("ipc", goal.ipc, m.ipc, self.tol.ratio, 0.02),
-            ("l3_mpki", goal.mpki, m.mpki, self.tol.ratio, 0.05),
-            (
-                "dram_bytes_per_sec",
-                goal.dram,
-                m.dram,
-                self.tol.ratio,
-                1.0e8,
-            ),
-            ("dtlb_pki", goal.dtlb_pki, m.dtlb_pki, self.tol.ratio, 0.02),
-            ("itlb_pki", goal.itlb_pki, m.itlb_pki, self.tol.ratio, 0.01),
+            ("cpu_usage_cores", goal.cores, m.cores, self.tol.cores),
+            ("cpu_usage_cv_1s", goal.cv, m.cv, self.tol.cv),
+            ("ipc", goal.ipc, m.ipc, self.tol.ratio),
+            ("l3_mpki", goal.mpki, m.mpki, self.tol.ratio),
+            ("dram_bytes_per_sec", goal.dram, m.dram, self.tol.ratio),
+            ("dtlb_pki", goal.dtlb_pki, m.dtlb_pki, self.tol.ratio),
+            ("itlb_pki", goal.itlb_pki, m.itlb_pki, self.tol.ratio),
         ];
         rows.into_iter()
-            .filter_map(|(key, target, measured, tol, abs_tol)| {
+            .filter_map(|(key, target, measured, tol)| {
+                let abs_tol = absolute_tolerance(key);
                 let target = target?;
                 let error = measured.map(|v| {
                     if target > 0.0 {
@@ -349,9 +362,10 @@ impl Fitter {
         if let (Some(t), Some(v)) = (goal.ipc, m.ipc) {
             // Longer runs let the prefetcher stream, raising IPC at equal
             // MPKI; more chains raise the compute IPC. Run length is the
-            // fine knob; chains move once it is near its range or a pass
-            // past half the range has stopped lifting IPC. With no MPKI
-            // target, compute work is free to carry IPC too.
+            // fine knob; chains move once it is at its range or the last
+            // pass failed to move IPC by the tolerance, which is what a
+            // compute-bound regime looks like. With no MPKI target,
+            // compute work is free to carry IPC too.
             let g = factor(t, v, d);
             if goal.mpki.is_none() {
                 work *= g;
@@ -359,9 +373,13 @@ impl Fitter {
             let stalled = self
                 .last_ipc
                 .is_some_and(|prev| (v - prev).abs() < prev * self.tol.ratio);
-            let lines_up_exhausted = g > 1.0 && (k.lines >= 64.0 || (k.lines >= 32.0 && stalled));
-            let lines_down_exhausted = g < 1.0 && (k.lines <= 1.0 || (k.lines <= 2.0 && stalled));
-            if lines_up_exhausted || lines_down_exhausted {
+            let exhausted = (g > 1.0 && k.lines >= 64.0) || (g < 1.0 && k.lines <= 1.0);
+            let chains_can_move = if g > 1.0 {
+                k.chains < 4.0
+            } else {
+                k.chains > 1.0
+            };
+            if (exhausted || stalled) && chains_can_move {
                 k.chains = (k.chains * g).clamp(1.0, 4.0);
             } else {
                 k.lines = (k.lines * g).clamp(1.0, 64.0);

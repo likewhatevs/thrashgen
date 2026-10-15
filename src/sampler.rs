@@ -288,6 +288,13 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
                 b.saturating_sub(a) as f64 / dt,
             );
         }
+        // A window shorter than a CPU tick has no memory reads yet; take
+        // one now so memory is never missing from a sample.
+        if self.mem_n.iter().all(|n| *n == 0) {
+            let files: Vec<&File> = self.cache_files.iter().collect();
+            let mem = measure::memory(&self.scope, &self.root, &files)?;
+            self.accumulate_memory(&mem);
+        }
         for (i, key) in MEMORY_KEYS.iter().enumerate() {
             if self.mem_n[i] > 0 {
                 values.insert(
@@ -507,9 +514,9 @@ mod tests {
         );
         assert!(!sm.values.contains_key("memory_limit_bytes"));
 
-        // next interval starts fresh: no cpu ticks means no memory keys
+        // next interval starts fresh: with no cpu ticks it reads memory once itself
         let sm2 = s.interval_tick(1020.0).unwrap();
-        assert!(!sm2.values.contains_key("anon_bytes"));
+        assert_eq!(sm2.values["anon_bytes"], 933_859_328.0);
         assert_eq!(sm2.values["instructions_per_sec"], 15.0);
         assert_eq!(sm2.dt, 10.0);
     }
