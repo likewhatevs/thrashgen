@@ -199,6 +199,55 @@ fn run_rejects_bad_arguments() {
 }
 
 #[test]
+fn compare_profile_against_recording_and_itself() {
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "compare",
+            &format!("{fixtures}/profile.json"),
+            &format!("{fixtures}/recording.jsonl"),
+            "--pick",
+            "p80",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("ipc").and(predicate::str::contains(
+                "measured targets within tolerance",
+            )),
+        );
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("cmp.json");
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "compare",
+            &format!("{fixtures}/profile.json"),
+            &format!("{fixtures}/profile.json"),
+            "--json",
+        ])
+        .arg(&json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "11 of 11 measured targets within tolerance",
+        ));
+    let c: thrashgen::compare::Comparison =
+        serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+    assert_eq!(c.within(), 11);
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "compare",
+            &format!("{fixtures}/profile.json"),
+            "/nonexistent",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn unimplemented_subcommand_fails_cleanly() {
     let mut cmd = Command::cargo_bin("thrashgen").unwrap();
     cmd.arg("calibrate")

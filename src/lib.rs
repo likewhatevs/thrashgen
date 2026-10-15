@@ -8,6 +8,7 @@ pub mod aggregate;
 pub mod caps;
 pub mod cgroup;
 pub mod cli;
+pub mod compare;
 pub mod cpu;
 pub mod events;
 pub mod fit;

@@ -10,6 +10,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::aggregate;
 use crate::caps::{Expectations, Facts, Root};
+use crate::compare;
 use crate::loadgen::Knobs;
 use crate::profile::{Pick, Profile, Targets};
 use crate::record;
@@ -36,8 +37,8 @@ enum Command {
     Run(RunArgs),
     /// Fit knobs for a profile where counters are available and save them
     Calibrate,
-    /// Compare a run report or recording against a profile
-    Compare,
+    /// Compare a run report, recording or profile against a profile
+    Compare(CompareArgs),
 }
 
 /// Arguments of `record`.
@@ -151,6 +152,27 @@ pub fn parse_bytes(s: &str) -> Result<u64> {
     Ok((n * mult as f64) as u64)
 }
 
+/// Arguments of `compare`.
+#[derive(Args, Debug)]
+pub struct CompareArgs {
+    /// The profile that was asked for
+    expected: PathBuf,
+    /// A run report, a recording, or another profile
+    actual: PathBuf,
+    /// Column of the expected profile: avg or a percentile such as p80
+    #[arg(long, default_value = "avg")]
+    pick: String,
+    /// Column of the actual file when it is a profile
+    #[arg(long, default_value = "avg")]
+    actual_pick: String,
+    /// Relative tolerance
+    #[arg(long, default_value_t = 0.05)]
+    tolerance: f64,
+    /// Write the comparison as JSON here
+    #[arg(long)]
+    json: Option<PathBuf>,
+}
+
 /// Arguments of `aggregate`.
 #[derive(Args, Debug)]
 pub struct AggregateArgs {
@@ -176,7 +198,8 @@ pub fn main() -> Result<()> {
         Command::Caps => run_caps(),
         Command::Record(args) => run_record(args),
         Command::Run(args) => run_run(args),
-        Command::Calibrate | Command::Compare => {
+        Command::Compare(args) => run_compare(args),
+        Command::Calibrate => {
             bail!("not implemented yet: {:?}", cli.command)
         }
     }
@@ -310,6 +333,20 @@ fn run_run(args: RunArgs) -> Result<()> {
             .with_context(|| format!("write {}", path.display()))?;
     }
     print!("{report}");
+    Ok(())
+}
+
+fn run_compare(args: CompareArgs) -> Result<()> {
+    let expected = targets_from(Some(&args.expected), &args.pick, &[])?;
+    let actual = compare::load_actual(&args.actual)?;
+    let pick: Pick = args.actual_pick.parse()?;
+    let values = compare::actual_values(&actual, &pick)?;
+    let comparison = compare::compare(&expected, &values, args.tolerance);
+    if let Some(path) = &args.json {
+        std::fs::write(path, comparison.to_json())
+            .with_context(|| format!("write {}", path.display()))?;
+    }
+    print!("{comparison}");
     Ok(())
 }
 
