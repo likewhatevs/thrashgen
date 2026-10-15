@@ -163,8 +163,9 @@ pub struct Fitter {
     pub limits: Limits,
     /// Passes taken so far.
     pub passes: u32,
-    /// Last pass's ops and instructions per access, for the secant slope.
-    pub last_ops_ipa: Option<(f64, f64)>,
+    /// Last pass's compute work (ops times chains) and instructions per
+    /// access, for the secant slope.
+    pub last_work_ipa: Option<(f64, f64)>,
     /// Last pass's IPC, to notice when line length stops moving it.
     pub last_ipc: Option<f64>,
 }
@@ -186,7 +187,7 @@ impl Fitter {
             threads: threads.max(1),
             limits,
             passes: 0,
-            last_ops_ipa: None,
+            last_work_ipa: None,
             last_ipc: None,
         }
     }
@@ -208,10 +209,10 @@ impl Fitter {
     pub fn initial_knobs(&self, goal: &Goal, regime: TlbRegime) -> Knobs {
         let cores = goal.cores.unwrap_or(self.threads as f64);
         let chains = match goal.ipc {
-            Some(i) if i < 1.4 => 1,
-            Some(i) if i < 2.2 => 2,
-            Some(_) => 4,
-            None => 2,
+            Some(i) if i < 1.4 => 1.0,
+            Some(i) if i < 2.2 => 2.0,
+            Some(_) => 4.0,
+            None => 2.0,
         };
         let sparse_pages = match regime {
             TlbRegime::L2Hit => 2048,
@@ -285,11 +286,9 @@ impl Fitter {
             .all(|s| s.within)
     }
 
-    /// Instructions one compute iteration costs, used until two passes
-    /// give a measured slope.
-    fn instructions_per_op(chains: u8) -> f64 {
-        2.0 * f64::from(chains) + 2.0
-    }
+    /// Instructions one unit of compute work (one op on one chain)
+    /// costs, used until two passes give a measured slope.
+    const INSTRUCTIONS_PER_WORK: f64 = 2.5;
 
     /// One pass. Busy cores, burstiness and IPC move by damped
     /// correction ratios. The ops rule is model-based: instructions per
@@ -318,51 +317,43 @@ impl Fitter {
             };
         }
 
-        // Instructions per access now, and the slope against ops.
+        // Instructions per access now, and the slope against compute
+        // work, which is ops times chains.
         let ipa = m.instructions_per_access();
-        let ops_now = f64::from(knobs.ops);
-        let mut slope = Self::instructions_per_op(knobs.chains);
-        if let (Some(ipa), Some((ops_prev, ipa_prev))) = (ipa, self.last_ops_ipa) {
-            if (ops_now - ops_prev).abs() >= 1.0 {
-                let s = (ipa - ipa_prev) / (ops_now - ops_prev);
+        let work_now = f64::from(knobs.ops) * knobs.chains;
+        let mut slope = Self::INSTRUCTIONS_PER_WORK;
+        if let (Some(ipa), Some((work_prev, ipa_prev))) = (ipa, self.last_work_ipa) {
+            if (work_now - work_prev).abs() >= 1.0 {
+                let s = (ipa - ipa_prev) / (work_now - work_prev);
                 if s.is_finite() && s > 0.1 * slope && s < 10.0 * slope {
                     slope = s;
                 }
             }
         }
         if let Some(ipa) = ipa {
-            self.last_ops_ipa = Some((ops_now, ipa));
+            self.last_work_ipa = Some((work_now, ipa));
         }
 
-        let mut ops = ops_now;
+        let mut work = work_now;
         if let (Some(t), Some(v)) = (goal.ipc, m.ipc) {
             // Longer runs let the prefetcher stream, raising IPC at equal
-            // MPKI; ops is left to the MPKI rule so the two do not fight,
-            // unless MPKI is not a target and compute is free to grow.
+            // MPKI; more chains raise the compute IPC. Run length is the
+            // fine knob; chains move once it is near its range or a pass
+            // past half the range has stopped lifting IPC. With no MPKI
+            // target, compute work is free to carry IPC too.
             let g = factor(t, v, d);
             if goal.mpki.is_none() {
-                ops *= g;
+                work *= g;
             }
-            k.lines = (k.lines * g).clamp(1.0, 64.0);
-            // Chain count is the coarse step, taken once the fine knob is
-            // at its range or has stopped moving IPC: a pass that grew
-            // the run length past half its range without lifting IPC by
-            // the tolerance means the chains cap it.
             let stalled = self
                 .last_ipc
-                .is_some_and(|prev| v < prev * (1.0 + self.tol.ratio));
-            if g > 1.0 + self.tol.ratio && (k.lines >= 64.0 || (knobs.lines >= 32.0 && stalled)) {
-                k.chains = match k.chains {
-                    1 => 2,
-                    _ => 4,
-                };
-            } else if g < 1.0 - self.tol.ratio
-                && (k.lines <= 1.0 || (knobs.lines <= 2.0 && stalled))
-            {
-                k.chains = match k.chains {
-                    4 => 2,
-                    _ => 1,
-                };
+                .is_some_and(|prev| (v - prev).abs() < prev * self.tol.ratio);
+            let lines_up_exhausted = g > 1.0 && (k.lines >= 64.0 || (k.lines >= 32.0 && stalled));
+            let lines_down_exhausted = g < 1.0 && (k.lines <= 1.0 || (k.lines <= 2.0 && stalled));
+            if lines_up_exhausted || lines_down_exhausted {
+                k.chains = (k.chains * g).clamp(1.0, 4.0);
+            } else {
+                k.lines = (k.lines * g).clamp(1.0, 64.0);
             }
             self.last_ipc = Some(v);
         }
@@ -370,19 +361,19 @@ impl Fitter {
             (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 => {
                 // Misses per access follow the run length the IPC rule just
                 // chose; at that length, the instructions per access the
-                // target needs are known.
+                // target needs are known, and the work that gives them.
                 let misses_per_access = v / 1000.0 * ipa * (k.lines / knobs.lines.max(1.0));
                 let want_ipa = misses_per_access * 1000.0 / t;
-                ops += d * (want_ipa - ipa) / slope;
+                work += d * (want_ipa - ipa) / slope;
             }
-            (Some(t), Some(v), None) => ops *= factor(v, t, d),
+            (Some(t), Some(v), None) => work *= factor(v, t, d),
             _ => {}
         }
-        k.ops = ops.clamp(OPS_RANGE.0, OPS_RANGE.1).round() as u32;
+        k.ops = (work / k.chains).clamp(OPS_RANGE.0, OPS_RANGE.1).round() as u32;
 
         // Instructions per access after this pass, by the same model, and
         // the access rate it implies at unchanged cycles per instruction.
-        let ipa_next = ipa.map(|i| (i + slope * (f64::from(k.ops) - ops_now)).max(1.0));
+        let ipa_next = ipa.map(|i| (i + slope * (f64::from(k.ops) * k.chains - work_now)).max(1.0));
         let aps_next = match (ipa, ipa_next) {
             (Some(i), Some(n)) if m.accesses_per_s > 0.0 => m.accesses_per_s * i / n,
             _ => m.accesses_per_s,
@@ -442,15 +433,15 @@ mod tests {
     /// A stand-in machine: monotone in every knob the way the real one
     /// is expected to be, with made-up constants.
     fn plant(k: &Knobs, threads: usize) -> Measured {
-        let chains_eff = match k.chains {
-            1 => 1.0,
-            2 => 1.6,
-            _ => 2.8,
+        let chains_eff = if k.chains <= 2.0 {
+            1.0 + 0.6 * (k.chains - 1.0)
+        } else {
+            1.6 + 0.6 * (k.chains - 2.0)
         };
         let ops = f64::from(k.ops);
         let lines = k.lines;
         let nt = k.ntlines;
-        let instr = 2.0 * ops * f64::from(k.chains)
+        let instr = 2.0 * ops * k.chains
             + 3.0 * lines
             + 4.0 * nt
             + 2.0 * k.tlbvisits
@@ -524,7 +515,7 @@ mod tests {
                     duty: 0.6,
                     cv: 0.3,
                     ops: 40,
-                    chains: 1,
+                    chains: 1.0,
                     lines: 4.0,
                     ntlines: 3.0,
                     tlbvisits: 0.5,
@@ -542,7 +533,7 @@ mod tests {
                     duty: 0.9,
                     cv: 0.1,
                     ops: 400,
-                    chains: 4,
+                    chains: 4.0,
                     lines: 12.0,
                     ntlines: 0.0,
                     tlbvisits: 0.05,
@@ -560,7 +551,7 @@ mod tests {
                     duty: 0.3,
                     cv: 0.9,
                     ops: 120,
-                    chains: 2,
+                    chains: 2.0,
                     lines: 16.0,
                     ntlines: 8.0,
                     tlbvisits: 2.0,
@@ -711,7 +702,7 @@ mod tests {
             TlbRegime::Walk,
         );
         assert_eq!(k.duty, 0.25);
-        assert_eq!(k.chains, 4);
+        assert_eq!(k.chains, 4.0);
         assert_eq!(k.sparse_pages, 1000, "capped by capacity");
         assert_eq!(k.code_pages, 50);
         assert!(k.tlbvisits > 0.0 && k.codevisits == 0.0);
@@ -724,7 +715,7 @@ mod tests {
             },
             TlbRegime::L2Hit,
         );
-        assert_eq!((g.chains, g.sparse_pages, g.duty), (1, 1000, 1.0));
+        assert_eq!((g.chains, g.sparse_pages, g.duty), (1.0, 1000, 1.0));
         assert_eq!(Goal::from_targets(&t).cores, Some(2.3));
     }
 
@@ -737,7 +728,7 @@ mod tests {
             dtlb in 0.0..50.0f64, itlb in 0.0..10.0f64, aps in 0.0..1e8f64,
         ) {
             let mut f = Fitter::new(4, LIMITS);
-            let k = Knobs { duty, cv, ops, chains: 2, lines, ntlines: nt, tlbvisits: tv, codevisits: cvis, sparse_pages: 2048, code_pages: 16384, ..Knobs::default() };
+            let k = Knobs { duty, cv, ops, chains: 2.0, lines, ntlines: nt, tlbvisits: tv, codevisits: cvis, sparse_pages: 2048, code_pages: 16384, ..Knobs::default() };
             let goal = Goal { cores: Some(2.0), cv: Some(0.3), ipc: Some(1.2), mpki: Some(5.0), dram: Some(4e9), dtlb_pki: Some(2.0), itlb_pki: Some(0.1) };
             let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps, cv_samples: 300, instructions_per_s: Some(aps * 100.0) };
             let next = f.step(&k, &m, &goal);

@@ -145,7 +145,7 @@ PRNG, not from loaded data, so misses overlap.
 | `threads` | busy cores | default `cpu_limit_cores`, capped at the CPUs in the affinity mask; each worker pinned to one CPU so uncore attribution is possible |
 | `duty` | busy cores | busy fraction of each 10 ms period |
 | `cv` | burstiness | per-second factor from a lognormal with mean 1 and CV `cv` (σ² = ln(1 + cv²), μ = −σ²/2); seeded from the wall-clock second so all threads move together |
-| `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, `ops` iterations, kept alive with an empty `asm!` barrier |
+| `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 1 to 4, a fraction mixing the two nearest of 1, 2 and 4; `ops` iterations, kept alive with an empty `asm!` barrier |
 | `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
 | `wfrac` | write share | fraction of main-stream lines stored to |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
@@ -168,13 +168,15 @@ within tolerance or the pass limit is hit.
 
 Busy cores, burstiness and IPC move by the factor target / achieved
 raised to a damping exponent of one half, bounded to a quarter and
-four times per pass. Line run length answers to IPC; chain count steps
-only once the run length is at its range or a pass past half the range
-has stopped lifting IPC. The ops rule is model-based: instructions per
-access are measured from the counters and the worker tally, the slope
-against ops comes from a secant over the last two passes, and ops is
-set to the count that gives the MPKI target at the run length the IPC
-rule just chose. The per-access rates (sparse visits, stub calls,
+four times per pass. Line run length answers to IPC; the chain count,
+continuous between one and four by mixing the two nearest loops within
+an access, moves only once the run length is at its range or a pass
+past half the range has stopped lifting IPC. The ops rule is
+model-based: instructions per access are measured from the counters
+and the worker tally, the slope against compute work (ops times
+chains) comes from a secant over the last two passes, and ops is set
+to the work that gives the MPKI target at the run length the IPC rule
+just chose. The per-access rates (sparse visits, stub calls,
 non-temporal lines) are then set from their measured events per visit
 against the instructions per access the next pass will have, with only
 the measured error damped, so a change in ops never drags them off

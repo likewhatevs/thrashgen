@@ -34,8 +34,9 @@ pub struct Knobs {
     pub cv: f64,
     /// Compute iterations per access.
     pub ops: u32,
-    /// Independent dependency chains in the compute loop: 1, 2 or 4.
-    pub chains: u8,
+    /// Independent dependency chains in the compute loop, 1 to 4; a
+    /// fraction mixes the two nearest of 1, 2 and 4 within each access.
+    pub chains: f64,
     /// Consecutive lines touched per main-stream visit, 1 to 64; a
     /// fraction alternates between the two nearest counts.
     pub lines: f64,
@@ -61,7 +62,7 @@ impl Default for Knobs {
             duty: 1.0,
             cv: 0.0,
             ops: 64,
-            chains: 2,
+            chains: 2.0,
             lines: 4.0,
             wfrac: 0.25,
             ntlines: 0.0,
@@ -97,9 +98,9 @@ impl Knobs {
                 self.cv
             )));
         }
-        if !matches!(self.chains, 1 | 2 | 4) {
+        if !(1.0..=4.0).contains(&self.chains) {
             return Err(KnobError(format!(
-                "chains must be 1, 2 or 4, got {}",
+                "chains must be in 1..=4, got {}",
                 self.chains
             )));
         }
@@ -349,6 +350,21 @@ fn compute(ops: u32, chains: u8, s: &mut [u64; 4]) {
     *s = [a, b, c, d];
 }
 
+/// `ops` iterations split between the two chain counts nearest to
+/// `chains`, so the knob is continuous: 1.5 runs half the iterations
+/// with one chain and half with two.
+#[inline(always)]
+fn compute_mixed(ops: u32, chains: f64, s: &mut [u64; 4]) {
+    let (lo, hi, frac) = if chains <= 2.0 {
+        (1u8, 2u8, chains - 1.0)
+    } else {
+        (2u8, 4u8, (chains - 2.0) / 2.0)
+    };
+    let hi_ops = (f64::from(ops) * frac.clamp(0.0, 1.0)).round() as u32;
+    compute(ops - hi_ops, lo, s);
+    compute(hi_ops, hi, s);
+}
+
 struct Worker {
     buffers: Arc<Buffers>,
     knobs: Arc<RwLock<Knobs>>,
@@ -412,7 +428,7 @@ impl Worker {
             state[3] = self.buffers.code.call(page, state[3]);
             acc[1] -= 1.0;
         }
-        compute(k.ops, k.chains, state);
+        compute_mixed(k.ops, k.chains, state);
     }
 
     fn run(self, cpu: Option<u32>) {
@@ -619,7 +635,8 @@ mod tests {
         assert!(bad(|k| k.duty = 1.5).0.contains("duty"));
         assert!(bad(|k| k.wfrac = -0.1).0.contains("wfrac"));
         assert!(bad(|k| k.cv = f64::NAN).0.contains("cv"));
-        assert!(bad(|k| k.chains = 3).0.contains("chains"));
+        assert!(bad(|k| k.chains = 0.5).0.contains("chains"));
+        assert!(bad(|k| k.chains = 4.5).0.contains("chains"));
         assert!(bad(|k| k.lines = 0.0).0.contains("lines"));
         assert!(bad(|k| k.lines = 65.0).0.contains("lines"));
         assert!(bad(|k| k.lines = f64::NAN).0.contains("lines"));
@@ -660,6 +677,16 @@ mod tests {
             compute(100, chains, &mut s);
             assert_ne!(s, [1, 2, 3, 4], "chains {chains}");
         }
+        for chains in [1.0, 1.5, 2.0, 3.0, 4.0] {
+            let mut s = [1, 2, 3, 4];
+            compute_mixed(100, chains, &mut s);
+            assert_ne!(s, [1, 2, 3, 4], "chains {chains}");
+        }
+        let mut a = [1, 2, 3, 4];
+        compute_mixed(100, 1.0, &mut a);
+        let mut b = [1, 2, 3, 4];
+        compute(100, 1, &mut b);
+        assert_eq!(a, b, "an integer count is exactly that loop");
     }
 
     #[test]
@@ -727,7 +754,16 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         let idle = (busy_ns(&g) - idle_before) as f64 / 1e9;
         assert!(idle < 0.02, "duty 0 should be nearly idle, used {idle} s");
-        assert!(g.set_knobs(Knobs { chains: 3, ..knobs }, &b).is_err());
+        assert!(
+            g.set_knobs(
+                Knobs {
+                    chains: 9.0,
+                    ..knobs
+                },
+                &b
+            )
+            .is_err()
+        );
         g.stop();
     }
 
