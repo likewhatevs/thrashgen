@@ -3,3 +3,5 @@
 //! The crate is a library plus a thin CLI. `docs/design.md` describes the
 //! observables, the measurement tiers and the load generator; each module
 //! documents its own contract.
+
+pub mod profile;

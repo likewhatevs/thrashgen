@@ -1,0 +1,47 @@
+{
+  "count": 1000,
+  "cpu": { "vendor": "amd", "family": 25, "model": 24, "name": "AMD EPYC 9654 96-Core Processor" },
+  "avg": {
+    "cpu_limit_cores": 8.0,
+    "memory_limit_bytes": 17179869184,
+    "cpu_usage_cores": 4.0,
+    "cpu_usage_cv_1s": 0.3,
+    "instructions_per_sec": 12000000000.0,
+    "cycles_per_sec": 10000000000.0,
+    "ipc": 1.2,
+    "l3_misses_per_sec": 60000000.0,
+    "l3_mpki": 5.0,
+    "dram_bytes_per_sec": 4800000000.0,
+    "dtlb_misses_per_sec": 24000000.0,
+    "dtlb_pki": 2.0,
+    "itlb_misses_per_sec": 1200000.0,
+    "itlb_pki": 0.1,
+    "memory_current_bytes": 6442450944,
+    "anon_bytes": 4294967296,
+    "pagecache_bytes": 1073741824,
+    "shmem_bytes": 536870912,
+    "tlb_host_ipc": 1.25,
+    "tlb_host_minutes": 48000
+  },
+  "pctiles": {
+    "cpu_usage_cores": { "p50": 3.5, "p80": 6.0, "p99": 7.9 },
+    "cpu_usage_cv_1s": { "p50": 0.25, "p80": 0.5, "p99": 1.1 },
+    "ipc": { "p50": 1.1, "p80": 1.6, "p99": 2.4 },
+    "l3_mpki": { "p50": 4.0, "p80": 9.0, "p99": 20.0 },
+    "dram_bytes_per_sec": { "p50": 3500000000.0, "p80": 9000000000.0, "p99": 25000000000.0 },
+    "dtlb_pki": { "p50": 1.5, "p80": 3.5, "p99": 9.0 },
+    "itlb_pki": { "p50": 0.05, "p80": 0.2, "p99": 1.0 },
+    "memory_current_bytes": { "p50": 5000000000.0, "p80": 12000000000.0, "p99": 16000000000.0 },
+    "anon_bytes": { "p50": 3500000000.0, "p80": 9000000000.0, "p99": 14000000000.0 },
+    "pagecache_bytes": { "p50": 800000000.0, "p80": 2000000000.0, "p99": 4000000000.0 },
+    "shmem_bytes": { "p50": 300000000.0, "p80": 900000000.0, "p99": 2000000000.0 }
+  },
+  "provenance": {
+    "cpu_usage_cores": { "scope": "cgroup", "mode": "not_applicable", "method": "cgroup" },
+    "ipc": { "scope": "cgroup", "mode": "all", "method": "perf" },
+    "l3_mpki": { "scope": "cgroup", "mode": "all", "method": "perf" },
+    "dram_bytes_per_sec": { "scope": "cgroup", "mode": "not_applicable", "method": "resctrl" },
+    "dtlb_pki": { "scope": "host", "mode": "all", "method": "perf" },
+    "itlb_pki": { "scope": "host", "mode": "all", "method": "perf" }
+  }
+}
