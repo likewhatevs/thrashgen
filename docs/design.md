@@ -166,18 +166,35 @@ busy cores; chains, then ops and lines for IPC and MPKI; ntlines for
 bandwidth; tlbvisits; codevisits; repeat until every verified target is
 within tolerance or the pass limit is hit.
 
-Each knob moves by the factor target / achieved, damped by half on each
-pass. Ratios settle within a 30 s window. Busy cores and burstiness do
-not: with independent per-second jitter a window's mean has standard
-error `cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds;
-the fitter sizes those windows from the target CV, with 300 s as the
-ceiling. Convergence is declared after two consecutive windows within
-tolerance. Then the generator holds and keeps reporting; `--adaptive`
-keeps adjusting instead.
+Each knob moves by the factor target / achieved raised to a damping
+exponent of one half, bounded to a quarter and four times per pass.
+The two coupled targets are split: line run length answers to IPC and
+ops to MPKI; when MPKI is not a target, ops carries IPC too. Chain
+count steps only once line length is pinned at its range. Because
+instructions per access scale with the compute work, the per-access
+rates (sparse visits, stub calls, non-temporal lines) are pre-scaled
+by that change before their own correction, so a pass that doubles
+ops does not halve the TLB rates. The burstiness knob only moves on
+windows with at least thirty one-second samples and stays within twice
+its target, since clipping at full duty keeps the measured value below
+the knob. Worker threads are the CPU limit when given, else the busy
+cores with headroom of one plus the CV, so the clipped per-second
+factor keeps its mean.
+
+Ratios settle within a 30 s window. Busy cores and burstiness do not:
+with independent per-second jitter a window's mean has standard error
+`cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds; the
+window is sized from the target CV, between 30 s and 300 s, or set by
+`--window`. Convergence is declared after two consecutive windows
+within tolerance; the generator then holds and keeps reporting, or
+keeps adjusting with `--adaptive`. After the pass limit it holds
+regardless and says so.
 
 Targets without a verified or proxy measurement take their knobs from
 the calibration file for this CPU model, or the built-in defaults, and
-are reported as unverified.
+are reported as unverified. DRAM bandwidth without resctrl is modelled
+from the counted misses and the bytes the generator wrote
+non-temporally or dirtied, and fitted against that model.
 
 ## 7. Commands and artifacts
 
@@ -186,9 +203,9 @@ are reported as unverified.
 | `caps` | none | the tier table for this process |
 | `record` | `--cgroup PATH`, `--pid N`, `--host`, or `-- cmd args`; interval, duration | `samples.jsonl`: a header line with host and CPU identity, then one line per sample |
 | `aggregate` | one or more `samples.jsonl` | `profile.json`: `count`, `cpu`, `avg`, `pctiles`, `provenance` |
-| `run` | `profile.json` with `--pick avg|pNN`, or `--set key=value`; scratch dir; duration | load, plus `report.json` and a table on stdout |
-| `calibrate` | profile, on a host with counters | `calibration.json` keyed by CPU model |
-| `compare` | a profile and a report or recording | per-field error table |
+| `run` | `profile.json` with `--pick avg|pNN`, or `--set key=value`; `--calibration` to start from; `--knobs` to fix; scratch dir; duration | load, plus `report.json` and a table on stdout |
+| `calibrate` | the `run` inputs, on a host with counters; stops once converged | `calibration.json`: knobs, CPU model, threads and tiers |
+| `compare` | a profile and a report, recording or profile | per-field error table, optionally JSON |
 
 ## 8. Testing
 

@@ -198,6 +198,7 @@ pub fn measured_from(
         itlb_pki: ratio(v("itlb_misses_per_sec"), instr, 1000.0),
         accesses_per_s,
         cv_samples: 0,
+        instructions_per_s: instr,
     }
 }
 

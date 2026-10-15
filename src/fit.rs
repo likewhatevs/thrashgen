@@ -27,6 +27,16 @@ pub struct Measured {
     pub accesses_per_s: f64,
     /// One-second samples behind `cv`.
     pub cv_samples: usize,
+    /// Instructions per second, for instructions per access.
+    pub instructions_per_s: Option<f64>,
+}
+
+impl Measured {
+    /// Instructions per generator access, when both are known.
+    pub fn instructions_per_access(&self) -> Option<f64> {
+        let i = self.instructions_per_s?;
+        (self.accesses_per_s > 0.0 && i > 0.0).then(|| i / self.accesses_per_s)
+    }
 }
 
 /// The targets the fitter drives, in the same units.
@@ -153,6 +163,8 @@ pub struct Fitter {
     pub limits: Limits,
     /// Passes taken so far.
     pub passes: u32,
+    /// Last pass's ops and instructions per access, for the secant slope.
+    pub last_ops_ipa: Option<(f64, f64)>,
 }
 
 /// A correction ratio raised to the damping, kept to a sane range.
@@ -172,6 +184,7 @@ impl Fitter {
             threads: threads.max(1),
             limits,
             passes: 0,
+            last_ops_ipa: None,
         }
     }
 
@@ -269,11 +282,30 @@ impl Fitter {
             .all(|s| s.within)
     }
 
-    /// One pass: move each knob by its correction ratio, damped.
+    /// Instructions one compute iteration costs, used until two passes
+    /// give a measured slope.
+    fn instructions_per_op(chains: u8) -> f64 {
+        2.0 * f64::from(chains) + 2.0
+    }
+
+    /// One pass. Busy cores, burstiness and IPC move by damped
+    /// correction ratios. The ops rule is model-based: instructions per
+    /// access are measured, the slope against ops comes from a secant
+    /// over the last two passes, and ops is set to the count the MPKI
+    /// target needs. The per-access rates are then set from their
+    /// measured efficiency against the instructions per access the next
+    /// pass will have, so a change in ops never drags them off target.
     pub fn step(&mut self, knobs: &Knobs, m: &Measured, goal: &Goal) -> Knobs {
         self.passes += 1;
         let d = self.damping;
         let mut k = knobs.clone();
+        let geometric = |old: f64, new: f64| {
+            if old > 0.0 && new > 0.0 {
+                old * (new / old).powf(d)
+            } else {
+                new
+            }
+        };
 
         if let (Some(t), Some(v)) = (goal.cores, m.cores) {
             k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
@@ -290,12 +322,33 @@ impl Fitter {
             };
         }
 
-        let work_before = f64::from(knobs.ops) * f64::from(knobs.chains);
-        if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
-            // More instructions per access dilute the misses.
-            k.ops = (f64::from(k.ops) * factor(v, t, d))
-                .clamp(OPS_RANGE.0, OPS_RANGE.1)
-                .round() as u32;
+        // Instructions per access now, and the slope against ops.
+        let ipa = m.instructions_per_access();
+        let ops_now = f64::from(knobs.ops);
+        let mut slope = Self::instructions_per_op(knobs.chains);
+        if let (Some(ipa), Some((ops_prev, ipa_prev))) = (ipa, self.last_ops_ipa) {
+            if (ops_now - ops_prev).abs() >= 1.0 {
+                let s = (ipa - ipa_prev) / (ops_now - ops_prev);
+                if s.is_finite() && s > 0.1 * slope && s < 10.0 * slope {
+                    slope = s;
+                }
+            }
+        }
+        if let Some(ipa) = ipa {
+            self.last_ops_ipa = Some((ops_now, ipa));
+        }
+
+        let mut ops = ops_now;
+        match (goal.mpki, m.mpki, ipa) {
+            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 => {
+                // Misses per access stay put when only ops moves, so the
+                // instructions per access the target needs are known.
+                let misses_per_access = v / 1000.0 * ipa;
+                let want_ipa = misses_per_access * 1000.0 / t;
+                ops += d * (want_ipa - ipa) / slope;
+            }
+            (Some(t), Some(v), None) => ops *= factor(v, t, d),
+            _ => {}
         }
         if let (Some(t), Some(v)) = (goal.ipc, m.ipc) {
             // Longer runs let the prefetcher stream, raising IPC at equal
@@ -303,9 +356,7 @@ impl Fitter {
             // unless MPKI is not a target and compute is free to grow.
             let g = factor(t, v, d);
             if goal.mpki.is_none() {
-                k.ops = (f64::from(k.ops) * g)
-                    .clamp(OPS_RANGE.0, OPS_RANGE.1)
-                    .round() as u32;
+                ops *= g;
             }
             k.lines = (k.lines * g).clamp(1.0, 64.0);
             // Chain count is the coarse step, taken only once the fine
@@ -322,56 +373,50 @@ impl Fitter {
                 };
             }
         }
+        k.ops = ops.clamp(OPS_RANGE.0, OPS_RANGE.1).round() as u32;
 
-        // Instructions per access scale with the compute work; the
-        // per-access rates are pre-scaled so their per-instruction
-        // rates hold, and only then corrected on their own.
-        let work_after = f64::from(k.ops) * f64::from(k.chains);
-        let q = if work_before > 0.0 {
-            work_after / work_before
-        } else {
-            1.0
+        // Instructions per access after this pass, by the same model, and
+        // the access rate it implies at unchanged cycles per instruction.
+        let ipa_next = ipa.map(|i| (i + slope * (f64::from(k.ops) - ops_now)).max(1.0));
+        let aps_next = match (ipa, ipa_next) {
+            (Some(i), Some(n)) if m.accesses_per_s > 0.0 => m.accesses_per_s * i / n,
+            _ => m.accesses_per_s,
         };
-        k.tlbvisits *= q;
-        k.codevisits *= q;
-        k.ntlines = (f64::from(k.ntlines) * q)
-            .round()
-            .clamp(0.0, f64::from(NTLINES_MAX)) as u32;
 
         if let (Some(t), Some(v)) = (goal.dram, m.dram) {
-            if m.accesses_per_s > 0.0 {
-                let per_line = 64.0 * m.accesses_per_s;
-                let nt_now = f64::from(k.ntlines) * per_line;
-                let other = (v - nt_now).max(0.0);
-                let need = ((t - other) / per_line).max(0.0);
-                let next = f64::from(k.ntlines) + d * (need - f64::from(k.ntlines));
-                k.ntlines = next.round().clamp(0.0, f64::from(NTLINES_MAX)) as u32;
+            if aps_next > 0.0 {
+                let per_line_now = 64.0 * m.accesses_per_s;
+                let nt_now = f64::from(k.ntlines) * per_line_now;
+                let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
+                let need_lines = ((t / aps_next - other_per_access) / 64.0).max(0.0);
+                k.ntlines = geometric(f64::from(k.ntlines).max(0.5), need_lines)
+                    .round()
+                    .clamp(0.0, f64::from(NTLINES_MAX)) as u32;
             }
         }
-        if let (Some(t), Some(v)) = (goal.dtlb_pki, m.dtlb_pki) {
-            k.tlbvisits = if k.tlbvisits > 0.0 {
-                (k.tlbvisits * factor(t, v, d)).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
-            } else if t > 0.0 {
-                VISITS_RANGE.0 * 100.0
-            } else {
-                0.0
+        let rate_rule = |target: Option<f64>, measured: Option<f64>, visits: f64| -> f64 {
+            let (Some(t), Some(v)) = (target, measured) else {
+                return visits;
             };
-            if t == 0.0 {
-                k.tlbvisits = 0.0;
+            if t <= 0.0 {
+                return 0.0;
             }
-        }
-        if let (Some(t), Some(v)) = (goal.itlb_pki, m.itlb_pki) {
-            k.codevisits = if k.codevisits > 0.0 {
-                (k.codevisits * factor(t, v, d)).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
-            } else if t > 0.0 {
-                VISITS_RANGE.0 * 100.0
-            } else {
-                0.0
-            };
-            if t == 0.0 {
-                k.codevisits = 0.0;
+            match (ipa, ipa_next) {
+                (Some(ipa), Some(next)) if visits > 0.0 && v > 0.0 => {
+                    // Events per visit as measured, then the visits the
+                    // target needs at next pass's instructions per access.
+                    let per_visit = v / 1000.0 * ipa / visits;
+                    let want = t / 1000.0 * next / per_visit;
+                    geometric(visits, want).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
+                }
+                _ if visits > 0.0 => {
+                    (visits * factor(t, v, d)).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
+                }
+                _ => VISITS_RANGE.0 * 100.0,
             }
-        }
+        };
+        k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits);
+        k.codevisits = rate_rule(goal.itlb_pki, m.itlb_pki, k.codevisits);
         k.sparse_pages = k.sparse_pages.clamp(1, self.limits.sparse_capacity.max(1));
         k.code_pages = k.code_pages.clamp(1, self.limits.code_capacity.max(1));
         k
@@ -429,6 +474,7 @@ mod tests {
             itlb_pki: Some(1000.0 * k.codevisits * walk / instr),
             accesses_per_s: aps,
             cv_samples: 300,
+            instructions_per_s: Some(instr * aps),
         }
     }
 
@@ -688,7 +734,7 @@ mod tests {
             let mut f = Fitter::new(4, LIMITS);
             let k = Knobs { duty, cv, ops, chains: 2, lines, ntlines: nt, tlbvisits: tv, codevisits: cvis, sparse_pages: 2048, code_pages: 16384, ..Knobs::default() };
             let goal = Goal { cores: Some(2.0), cv: Some(0.3), ipc: Some(1.2), mpki: Some(5.0), dram: Some(4e9), dtlb_pki: Some(2.0), itlb_pki: Some(0.1) };
-            let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps, cv_samples: 300 };
+            let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps, cv_samples: 300, instructions_per_s: Some(aps * 100.0) };
             let next = f.step(&k, &m, &goal);
             let b = Buffers::new(1 << 20, false, 2048, 16384).unwrap();
             prop_assert!(next.validate(&b).is_ok(), "{next:?}");

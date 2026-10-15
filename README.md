@@ -18,5 +18,16 @@ fails for lack of a counter. See `docs/design.md` for the observables
 and their definitions, `docs/privileges.md` for what each privilege
 level buys, and `docs/testing.md` for how correctness is checked.
 
-Status: under construction. Subcommands are listed by `thrashgen --help`
-and implemented in the order given in `docs/design.md`.
+```sh
+thrashgen caps                                   # what this process can measure
+thrashgen record --cgroup system.slice/app.service --duration 3600 -o app.jsonl
+thrashgen aggregate app.jsonl -o app.json
+thrashgen run app.json --pick p80 --duration 600 --report replay.json
+thrashgen compare app.json replay.json --pick p80
+```
+
+`run` fits its knobs window by window until every target it can
+measure is within tolerance, then holds. `calibrate` does the same and
+saves the knobs for the CPU model, so a host without counters can
+start from them. Hardware-dependent behaviour is checked by the tests
+and experiments described in `docs/testing.md`.
