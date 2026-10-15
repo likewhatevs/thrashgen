@@ -10,6 +10,7 @@ pub mod cgroup;
 pub mod cli;
 pub mod cpu;
 pub mod events;
+pub mod footprint;
 pub mod measure;
 pub mod perf;
 pub mod plan;
