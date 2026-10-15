@@ -442,12 +442,14 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut last_sample: Option<Sample> = None;
     let mut converged = false;
     let mut streak = 0u32;
-    let cpu_step = Duration::from_secs(1);
     let window_len = Duration::from_secs_f64(window_s);
     let deadline = settings
         .duration_s
         .map(|d| start + Duration::from_secs_f64(d));
-    let mut next_cpu = start + cpu_step;
+    // Busy-cores ticks sit on wall-clock second boundaries, where the
+    // workers redraw their duty factor; a tick straddling two seconds
+    // would average two draws and halve the variance it measures.
+    let mut next_cpu = Instant::now() + Duration::from_secs_f64(1.0 - unix_now().fract());
     let mut window_end = window.started + window_len;
 
     loop {
@@ -470,7 +472,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         if now >= next_cpu || stop {
             let c = sampler.cpu_tick(unix_now()).context("busy-cores sample")?;
             window.cpu_series.push(c.cores);
-            next_cpu += cpu_step;
+            next_cpu =
+                Instant::now() + Duration::from_secs_f64((1.0 - unix_now().fract()).max(0.05));
         }
         if now >= window_end || stop {
             let seconds = window.started.elapsed().as_secs_f64();

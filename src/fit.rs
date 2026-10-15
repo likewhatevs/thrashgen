@@ -165,6 +165,8 @@ pub struct Fitter {
     pub passes: u32,
     /// Last pass's ops and instructions per access, for the secant slope.
     pub last_ops_ipa: Option<(f64, f64)>,
+    /// Last pass's IPC, to notice when line length stops moving it.
+    pub last_ipc: Option<f64>,
 }
 
 /// A correction ratio raised to the damping, kept to a sane range.
@@ -185,6 +187,7 @@ impl Fitter {
             limits,
             passes: 0,
             last_ops_ipa: None,
+            last_ipc: None,
         }
     }
 
@@ -359,19 +362,27 @@ impl Fitter {
                 ops *= g;
             }
             k.lines = (k.lines * g).clamp(1.0, 64.0);
-            // Chain count is the coarse step, taken only once the fine
-            // knob has nothing left to give.
-            if k.lines >= 64.0 && g > 1.0 + self.tol.ratio {
+            // Chain count is the coarse step, taken once the fine knob is
+            // at its range or has stopped moving IPC: a pass that grew
+            // the run length past half its range without lifting IPC by
+            // the tolerance means the chains cap it.
+            let stalled = self
+                .last_ipc
+                .is_some_and(|prev| v < prev * (1.0 + self.tol.ratio));
+            if g > 1.0 + self.tol.ratio && (k.lines >= 64.0 || (knobs.lines >= 32.0 && stalled)) {
                 k.chains = match k.chains {
                     1 => 2,
                     _ => 4,
                 };
-            } else if k.lines <= 1.0 && g < 1.0 - self.tol.ratio {
+            } else if g < 1.0 - self.tol.ratio
+                && (k.lines <= 1.0 || (knobs.lines <= 2.0 && stalled))
+            {
                 k.chains = match k.chains {
                     4 => 2,
                     _ => 1,
                 };
             }
+            self.last_ipc = Some(v);
         }
         k.ops = ops.clamp(OPS_RANGE.0, OPS_RANGE.1).round() as u32;
 

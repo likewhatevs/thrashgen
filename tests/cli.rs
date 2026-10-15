@@ -411,3 +411,78 @@ fn aggregate_reports_bad_input() {
         .failure()
         .stderr(predicate::str::contains("percentile 150"));
 }
+
+#[cfg(feature = "hw-tests")]
+#[test]
+fn run_fits_counter_targets_on_real_hardware() {
+    let dir = tempfile::tempdir().unwrap();
+    let report_path = dir.path().join("report.json");
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "run",
+            "--set",
+            "cpu_usage_cores=2",
+            "--set",
+            "ipc=0.8",
+            "--set",
+            "l3_mpki=8",
+            "--set",
+            "dtlb_pki=1",
+            "--set",
+            "itlb_pki=0.05",
+        ])
+        .args([
+            "--duration",
+            "40",
+            "--window",
+            "5",
+            "--pin",
+            "no",
+            "--main-bytes",
+            "1G",
+            "--report",
+        ])
+        .arg(&report_path)
+        .arg("--scratch-dir")
+        .arg(dir.path())
+        .assert()
+        .success();
+    let report: thrashgen::report::Report =
+        serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+    let row = |key: &str| {
+        report
+            .targets
+            .iter()
+            .find(|r| r.key == key)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(row("ipc").tier, thrashgen::report::Tier::Verified);
+    assert!(matches!(
+        row("l3_mpki").tier,
+        thrashgen::report::Tier::Verified | thrashgen::report::Tier::Proxy
+    ));
+    assert_eq!(row("dtlb_pki").tier, thrashgen::report::Tier::Verified);
+    assert!(report.windows.len() >= 6, "{}", report.windows.len());
+    let first = report.windows.first().unwrap();
+    let last = report.windows.last().unwrap();
+    let err = |w: &thrashgen::report::WindowRow, key: &str| {
+        w.values
+            .iter()
+            .find(|v| v.key == key)
+            .unwrap()
+            .error
+            .unwrap()
+            .abs()
+    };
+    for key in ["l3_mpki", "dtlb_pki", "itlb_pki"] {
+        assert!(
+            err(last, key) <= err(first, key).max(0.1),
+            "{key}: first {} last {}",
+            err(first, key),
+            err(last, key)
+        );
+    }
+    assert!(err(last, "l3_mpki") < 0.3, "{}", err(last, "l3_mpki"));
+}
