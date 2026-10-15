@@ -56,6 +56,14 @@ impl AnonBuffer {
     /// hugepages; whether the kernel granted them is reported by
     /// [`huge_bytes`](Self::huge_bytes).
     pub fn new(len: usize, huge: bool) -> io::Result<AnonBuffer> {
+        let buf = Self::new_untouched(len, huge)?;
+        touch(buf.ptr, len);
+        Ok(buf)
+    }
+
+    /// Map `len` bytes without touching them; pages fault in on first
+    /// use, so untouched ones never count as resident.
+    pub fn new_untouched(len: usize, huge: bool) -> io::Result<AnonBuffer> {
         let size = NonZeroUsize::new(len)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty buffer"))?;
         // SAFETY: anonymous mapping with no address hint.
@@ -76,7 +84,6 @@ impl AnonBuffer {
             // SAFETY: the range is exactly what was just mapped.
             buf.huge_advised = unsafe { madvise(ptr, len, MmapAdvise::MADV_HUGEPAGE) }.is_ok();
         }
-        touch(ptr, len);
         Ok(buf)
     }
 
@@ -333,6 +340,13 @@ mod tests {
         let after = rss().0;
         assert!(after < during, "{during} -> {after}");
         assert!(AnonBuffer::new(0, false).is_err());
+        let lazy = AnonBuffer::new_untouched(64 << 20, false).unwrap();
+        let (anon_lazy, _) = rss();
+        assert!(
+            anon_lazy < after + (32 << 20),
+            "untouched pages are not resident: {after} -> {anon_lazy}"
+        );
+        drop(lazy);
     }
 
     #[test]

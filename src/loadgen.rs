@@ -42,8 +42,8 @@ pub struct Knobs {
     pub wfrac: f64,
     /// Lines written with non-temporal stores per access.
     pub ntlines: u32,
-    /// Sparse-stream loads per access.
-    pub tlbvisits: u32,
+    /// Sparse-stream loads per access; may be below one.
+    pub tlbvisits: f64,
     /// Pages the sparse stream picks from; at most the buffer's capacity.
     pub sparse_pages: usize,
     /// Stub calls per access; may be below one.
@@ -64,7 +64,7 @@ impl Default for Knobs {
             lines: 4,
             wfrac: 0.25,
             ntlines: 0,
-            tlbvisits: 0,
+            tlbvisits: 0.0,
             sparse_pages: 1,
             codevisits: 0.0,
             code_pages: 1,
@@ -123,11 +123,15 @@ impl Knobs {
                 self.code_pages
             )));
         }
-        if !(self.codevisits >= 0.0 && self.codevisits.is_finite()) {
-            return Err(KnobError(format!(
-                "codevisits must be finite and non-negative, got {}",
-                self.codevisits
-            )));
+        for (name, v) in [
+            ("codevisits", self.codevisits),
+            ("tlbvisits", self.tlbvisits),
+        ] {
+            if !(v >= 0.0 && v.is_finite()) {
+                return Err(KnobError(format!(
+                    "{name} must be finite and non-negative, got {v}"
+                )));
+            }
         }
         if self.period_ms == 0 {
             return Err(KnobError("period_ms must be positive".into()));
@@ -150,11 +154,17 @@ pub fn duty_factor(seed: u64, second: u64, cv: f64) -> f64 {
 }
 
 /// Executable pages, one tiny stub each at a page-dependent offset.
+/// Stub pages are spaced [`CODE_STRIDE`] pages apart in virtual memory
+/// and the gaps are never touched, so no 16 KiB block is fully mapped
+/// and AMD's TLB cannot coalesce neighbouring pages into one entry.
 #[derive(Debug)]
 pub struct CodePages {
     buf: AnonBuffer,
     pages: usize,
 }
+
+/// Virtual pages between consecutive stub pages.
+pub const CODE_STRIDE: usize = 4;
 
 /// `lea rax, [rdi+1]; ret`
 #[cfg(target_arch = "x86_64")]
@@ -169,9 +179,11 @@ impl CodePages {
     /// Write stubs into `pages` fresh pages and make them executable.
     #[cfg(target_arch = "x86_64")]
     pub fn new(pages: usize) -> std::io::Result<CodePages> {
-        let buf = AnonBuffer::new(pages * PAGE, false)?;
+        let buf = AnonBuffer::new_untouched(pages * CODE_STRIDE * PAGE, false)?;
         for i in 0..pages {
-            let dst = buf.as_ptr().wrapping_add(i * PAGE + Self::offset(i));
+            let dst = buf
+                .as_ptr()
+                .wrapping_add(i * CODE_STRIDE * PAGE + Self::offset(i));
             // SAFETY: inside the mapping, which is writable until mprotect.
             unsafe { std::ptr::copy_nonoverlapping(STUB.as_ptr(), dst, STUB.len()) };
         }
@@ -180,7 +192,7 @@ impl CodePages {
         unsafe {
             mprotect(
                 ptr,
-                pages * PAGE,
+                pages * CODE_STRIDE * PAGE,
                 ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
             )
         }?;
@@ -209,7 +221,10 @@ impl CodePages {
     /// Call the stub on page `i` with `x`; it returns `x + 1`.
     #[inline]
     pub fn call(&self, i: usize, x: u64) -> u64 {
-        let addr = self.buf.as_ptr().wrapping_add(i * PAGE + Self::offset(i));
+        let addr = self
+            .buf
+            .as_ptr()
+            .wrapping_add(i * CODE_STRIDE * PAGE + Self::offset(i));
         // SAFETY: `addr` is a stub written by `new` in a page that is
         // now executable, with the C ABI the stub implements.
         let f: extern "C" fn(u64) -> u64 = unsafe { std::mem::transmute(addr) };
@@ -349,7 +364,7 @@ impl Worker {
         k: &Knobs,
         rng: &mut Xoshiro256PlusPlus,
         state: &mut [u64; 4],
-        code_acc: &mut f64,
+        acc: &mut [f64; 2],
     ) {
         let main = self.buffers.main.as_ptr();
         let main_pages = self.buffers.main.len() / PAGE;
@@ -374,17 +389,19 @@ impl Worker {
             nt_store_line(main.wrapping_add(page * PAGE + line * LINE), state[1]);
         }
         let sparse = self.buffers.sparse.as_ptr();
-        for _ in 0..k.tlbvisits {
+        acc[0] += k.tlbvisits;
+        while acc[0] >= 1.0 {
             let page = rng.random_range(0..k.sparse_pages);
             let p = sparse.wrapping_add(page * PAGE + (page % (PAGE / LINE)) * LINE);
             // SAFETY: inside the sparse buffer.
             state[2] ^= unsafe { std::ptr::read_volatile(p.cast::<u64>()) };
+            acc[0] -= 1.0;
         }
-        *code_acc += k.codevisits;
-        while *code_acc >= 1.0 {
+        acc[1] += k.codevisits;
+        while acc[1] >= 1.0 {
             let page = rng.random_range(0..k.code_pages);
             state[3] = self.buffers.code.call(page, state[3]);
-            *code_acc -= 1.0;
+            acc[1] -= 1.0;
         }
         compute(k.ops, k.chains, state);
     }
@@ -402,7 +419,7 @@ impl Worker {
         let mut rng =
             Xoshiro256PlusPlus::seed_from_u64(self.seed.wrapping_add(self.index as u64 + 1));
         let mut state = [self.seed | 1, 2, 3, 4];
-        let mut code_acc = 0.0;
+        let mut acc = [0.0f64; 2];
         let mut last_second = u64::MAX;
         let mut factor = 1.0;
         while !self.stop.load(Ordering::Relaxed) {
@@ -419,7 +436,7 @@ impl Worker {
             let mut accesses = 0u64;
             while Instant::now() < busy_until {
                 for _ in 0..BATCH {
-                    self.access(&k, &mut rng, &mut state, &mut code_acc);
+                    self.access(&k, &mut rng, &mut state, &mut acc);
                 }
                 accesses += u64::from(BATCH);
             }
@@ -600,6 +617,7 @@ mod tests {
         assert!(bad(|k| k.sparse_pages = 0).0.contains("sparse_pages"));
         assert!(bad(|k| k.code_pages = 17).0.contains("code_pages"));
         assert!(bad(|k| k.codevisits = -1.0).0.contains("codevisits"));
+        assert!(bad(|k| k.tlbvisits = f64::INFINITY).0.contains("tlbvisits"));
         assert!(bad(|k| k.period_ms = 0).0.contains("period"));
         assert_eq!(b.sparse_capacity(), 64);
         assert_eq!(b.code_capacity(), 16);
@@ -618,6 +636,11 @@ mod tests {
         }
         assert_ne!(CodePages::offset(1), CodePages::offset(2));
         assert!(CodePages::offset(1000) + STUB.len() <= PAGE);
+        assert_eq!(
+            c.buf.len(),
+            8 * CODE_STRIDE * PAGE,
+            "stride reserved, gaps untouched"
+        );
     }
 
     #[test]
@@ -636,7 +659,7 @@ mod tests {
             duty: 0.5,
             sparse_pages: 64,
             code_pages: 16,
-            tlbvisits: 2,
+            tlbvisits: 2.5,
             codevisits: 0.5,
             ntlines: 1,
             ..Knobs::default()
