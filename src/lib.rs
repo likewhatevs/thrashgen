@@ -5,5 +5,6 @@
 //! documents its own contract.
 
 pub mod aggregate;
+pub mod cli;
 pub mod profile;
 pub mod samples;
