@@ -45,6 +45,48 @@ TaoBench from Meta's DCPerf is not in the set: it needs its own
 client/server harness and is not packaged on this host. The harness
 takes any command, so adding it is one line once it is installed.
 
+## Results
+
+Run on the Zen 4 host described in `docs/design.md`, unprivileged:
+counters in user mode only, L3 misses through the DRAM-fill proxy,
+bandwidth modelled and so absent from both recordings. Two minutes
+recorded, seven minutes replayed, the replay recorded over its last
+167 s. Plots and data are under `docs/experiments/`; `summary.svg`
+puts every ratio on one chart.
+
+| benchmark | within tolerance | busy cores | memory | IPC | L3 MPKI | what missed |
+| --- | --- | --- | --- | --- | --- | --- |
+| schbench | 10 of 10 | -0.2% | anon +0.2% | +1.8% | 0.0048 vs 0.0049 | nothing |
+| sysbench | 10 of 10 | -0.2% | anon +0.5 MB on 1.6 MB | -3.6% | both near zero | nothing |
+| stress-ng | 7 of 10 | -0.1% | anon 1.075 GB exact | 0.58 vs 0.22 | 13.9 vs 17.6 | IPC, MPKI, dTLB rate |
+| fio | 5 of 10 | -5.2% | page cache 1.00 GB vs 1.03 GB | 1.31 vs 0.68 | 0.14 vs 0.24 | burstiness, IPC, MPKI, both TLB rates |
+
+The two compute-bound benchmarks replay within tolerance on every
+field. The two memory-bound ones replay their busy cores and memory
+exactly and miss on the counter ratios, for reasons the design doc's
+limits predict:
+
+- **stress-ng** streams sequentially through 1 GiB with hugepages, so
+  it misses the L3 at every line but almost never the TLB, and its IPC
+  is that of a store stream. The generator's main stream is random: at
+  one op per access and two lines per visit it reaches 14 MPKI, and at
+  that point its IPC floor is 0.58 against 0.22, while its random pages
+  cost one L2 TLB hit per visit against stress-ng's near zero. A
+  sequential stream mode would close all three.
+- **fio** spends most of its time in the kernel; the user-mode view the
+  recorder gets without `CAP_PERFMON` is a thin slice of syscall
+  wrappers with a high TLB rate per instruction. The replay reproduces
+  the page cache and the busy cores, and its burstiness sat within a
+  few percent of the target in its own windows from the eighth pass
+  on, but the recorder saw a lower CV over 167 s than over the
+  benchmark's full two minutes, and the user-mode ratios of a
+  kernel-bound process are not something a user-mode generator can
+  match.
+
+The fitter converged in six passes on schbench; on the other three it
+ran out of its twelve passes while still closing, with sysbench's IPC
+within tolerance from pass ten.
+
 ## Reading the results
 
 The comparison is between two recordings taken the same way, so it

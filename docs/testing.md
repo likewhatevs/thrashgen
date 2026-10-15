@@ -19,9 +19,11 @@ assumptions. They cover:
   without hardware;
 - the CLI surface, through `assert_cmd`.
 
-Coverage is measured with `cargo llvm-cov`. Hardware-only code paths
-are excluded from the headline number by the `hw-tests` feature gate,
-not by `#[ignore]`, so no test is silently skipped.
+Coverage is measured with `cargo llvm-cov`; the unit, CLI and plot
+tests together cover 96% of lines and 94% of regions as of the
+experiment results in `docs/experiments.md`. Hardware-only code paths
+are excluded from that number by the `hw-tests` feature gate, not by
+`#[ignore]`, so no test is silently skipped.
 
 ## Hardware tests: `cargo test --features hw-tests`
 
