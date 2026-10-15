@@ -83,8 +83,10 @@ impl MonGroup {
             .map(|_| ())
     }
 
-    /// `mbm_total_bytes` summed over L3 domains. Domains reporting
-    /// `Unavailable` are skipped; if none reports, that is an error.
+    /// `mbm_total_bytes` summed over L3 domains. A domain reporting
+    /// `Unavailable` counts as zero: the kernel says so until the first
+    /// hardware sample after a group is made, and the totals are
+    /// cumulative from that point, so zero is the right baseline.
     pub fn total_bytes(&self) -> io::Result<u64> {
         let sample = ResctrlReader::new(self.dir.clone(), false)
             .and_then(|r| r.read_all())
@@ -93,22 +95,19 @@ impl MonGroup {
             .mon_stat
             .and_then(|m| m.l3_mon_stat)
             .unwrap_or_default();
-        let mut total = 0u64;
-        let mut seen = false;
-        for stat in stats.values() {
-            if let Some(RmidBytes::Bytes(b)) = stat.mbm_total_bytes {
-                total += b;
-                seen = true;
-            }
-        }
-        if seen {
-            Ok(total)
-        } else {
-            Err(io::Error::new(
+        if stats.is_empty() {
+            return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                format!("{}: no domain reports mbm_total_bytes", self.dir.display()),
-            ))
+                format!("{}: no L3 monitoring domains", self.dir.display()),
+            ));
         }
+        Ok(stats
+            .values()
+            .filter_map(|s| match s.mbm_total_bytes {
+                Some(RmidBytes::Bytes(b)) => Some(b),
+                _ => None,
+            })
+            .sum())
     }
 }
 
@@ -168,11 +167,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = Root::at(tmp.path());
         fake_mount(&root.path(mount), &[("00", "Unavailable")]);
+        assert_eq!(
+            Resctrl::new(&root, mount)
+                .root_group()
+                .total_bytes()
+                .unwrap(),
+            0,
+            "unavailable counts as zero"
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Root::at(tmp.path());
+        fake_mount(&root.path(mount), &[]);
         let err = Resctrl::new(&root, mount)
             .root_group()
             .total_bytes()
             .unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported, "no domains at all");
     }
 
     #[test]
@@ -273,6 +283,7 @@ mod root_tests {
             .unwrap();
         g.add_self().unwrap();
         let before = g.total_bytes().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
         let mut buf = vec![0u8; 512 << 20];
         for round in 0..3u8 {
             for (i, b) in buf.iter_mut().enumerate().step_by(64) {

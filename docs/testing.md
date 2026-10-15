@@ -30,18 +30,25 @@ count the test's own threads at the default `perf_event_paranoid`.
 They fail, not skip, when the PMU is missing, so a passing run proves
 the counters were real.
 
-## Root tests: `sudo cargo test --features root-tests`
+## Root tests: build as the user, run the binary as root
 
 Need `CAP_PERFMON` or root: per-CPU and uncore counters, resctrl
 groups, filter validation on AMD's L3 PMU. The feature implies
 `hw-tests`. They also fail rather than skip when the privilege is
-missing. Use a separate target directory so root does not own the
-build artifacts the unprivileged build uses:
+missing. Build the test binary unprivileged, then run only the root
+tests from it as root, one at a time, since two of them share an L3
+and would see each other's misses:
 
 ```sh
-sudo env PATH="$PATH" CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup" \
-  CARGO_TARGET_DIR=target/root cargo test --features root-tests
+sudo mount -t resctrl resctrl /sys/fs/resctrl
+bin=$(cargo test --features root-tests --no-run 2>&1 | sed -n 's/.*(\(target[^)]*thrashgen-[^)]*\))/\1/p')
+sudo "$bin" root_tests --test-threads=1
+sudo umount /sys/fs/resctrl
 ```
+
+Compiling as root is avoided on purpose: it leaves root-owned
+artifacts behind and, on this host, rustc under sudo could not write
+its dependency files at all.
 
 ## Experiments: `experiments/all.sh`
 

@@ -17,6 +17,9 @@ use perf_event::{Builder, Counter};
 
 use crate::events::Encoded;
 
+/// `PERF_TYPE_BREAKPOINT`, the last fixed type; dynamic PMUs number above it.
+const PERF_TYPE_BREAKPOINT: u32 = 5;
+
 /// A counter to open: a name for reports and the encoded event.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Spec {
@@ -158,9 +161,13 @@ pub fn builder<'a>(spec: &Spec, target: &Target<'a>, opts: Options) -> Builder<'
             .config2(spec.enc.config2),
     );
     b.attrs_mut().type_ = spec.enc.type_id;
+    // Uncore PMUs count no task in particular, so the kernel rejects
+    // any exclude bit on them; the core PMU's events use the fixed raw
+    // type and take the mode asked for.
+    let uncore = spec.enc.type_id > PERF_TYPE_BREAKPOINT;
     b.enabled(false)
-        .exclude_kernel(!opts.kernel)
-        .exclude_hv(true)
+        .exclude_kernel(!opts.kernel && !uncore)
+        .exclude_hv(!uncore)
         .inherit(opts.inherit)
         .pinned(opts.pinned);
     match *target {
@@ -329,7 +336,7 @@ mod tests {
         let spec = Spec::new(
             "x",
             Encoded {
-                type_id: 13,
+                type_id: 4,
                 config: 0x104,
                 config1: 7,
                 config2: 9,
@@ -345,7 +352,7 @@ mod tests {
             },
         );
         let a = b.attrs();
-        assert_eq!(a.type_, 13);
+        assert_eq!(a.type_, 4);
         assert_eq!((a.config, a.config1, a.config2), (0x104, 7, 9));
         assert_eq!(a.inherit(), 1);
         assert_eq!(a.exclude_kernel(), 1);
@@ -366,6 +373,30 @@ mod tests {
         assert_eq!(a.exclude_kernel(), 0);
         assert_eq!(a.inherit(), 0);
         assert_eq!(a.pinned(), 1);
+
+        let uncore = Spec::new(
+            "l3",
+            Encoded {
+                type_id: 13,
+                config: 0x104,
+                config1: 0,
+                config2: 0,
+            },
+        );
+        let b = builder(
+            &uncore,
+            &Target::Cpu(0),
+            Options {
+                kernel: false,
+                inherit: false,
+                pinned: false,
+            },
+        );
+        assert_eq!(
+            (b.attrs().exclude_kernel(), b.attrs().exclude_hv()),
+            (0, 0),
+            "uncore events take no exclude bits"
+        );
 
         let hw = Spec::instructions();
         assert_eq!(hw.enc.type_id, 0, "PERF_TYPE_HARDWARE");
@@ -422,7 +453,15 @@ mod tests {
         let err = Counters::open(&[spec], &Target::SelfThreads, Options::default()).unwrap_err();
         assert_eq!(err.name, "bogus");
         assert_eq!(err.target, "own threads");
-        assert_eq!(err.source.raw_os_error(), Some(libc::ENOENT), "{err}");
+        // No such PMU gives ENOENT; a kernel that checks the mode first
+        // answers EACCES at the default paranoid level.
+        assert!(
+            matches!(
+                err.source.raw_os_error(),
+                Some(libc::ENOENT) | Some(libc::EACCES)
+            ),
+            "{err}"
+        );
         let empty = Counters::open(&[], &Target::SelfThreads, Options::default()).unwrap();
         assert!(empty.is_empty());
         assert_eq!(empty.len(), 0);

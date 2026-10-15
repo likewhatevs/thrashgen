@@ -219,6 +219,12 @@ impl StoppedChild {
     }
 }
 
+/// A scope that no longer exists: its cgroup was removed or its process
+/// exited, so its files are gone. The recording ends there.
+fn scope_gone(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::NotFound
+}
+
 /// Record `what` with `settings`, writing JSON lines to `out`.
 pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summary> {
     if settings.interval_s <= 0.0 || settings.cpu_interval_s <= 0.0 {
@@ -381,26 +387,57 @@ pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summ
         let t = unix_now();
         if stop {
             if t > last_interval_t + settings.cpu_interval_s / 2.0 {
-                let c = sampler.cpu_tick(t).context("busy-cores sample")?;
-                write_record(&mut *out, &Record::Cpu(c))?;
-                summary.cpu_samples += 1;
-                let s = sampler.interval_tick(t).context("interval sample")?;
-                write_record(&mut *out, &Record::Sample(s))?;
-                summary.samples += 1;
+                match (sampler.cpu_tick(t), sampler.interval_tick(t)) {
+                    (Ok(c), Ok(s)) => {
+                        write_record(&mut *out, &Record::Cpu(c))?;
+                        summary.cpu_samples += 1;
+                        write_record(&mut *out, &Record::Sample(s))?;
+                        summary.samples += 1;
+                    }
+                    (Err(e), _) | (_, Err(e)) if scope_gone(&e) => {
+                        summary
+                            .notes
+                            .push("the scope vanished before the final sample".into());
+                    }
+                    (Err(e), _) => return Err(e).context("busy-cores sample"),
+                    (_, Err(e)) => return Err(e).context("interval sample"),
+                }
             }
             out.flush()?;
             break;
         }
         if start.elapsed() >= next_cpu {
-            let c = sampler.cpu_tick(t).context("busy-cores sample")?;
-            write_record(&mut *out, &Record::Cpu(c))?;
-            summary.cpu_samples += 1;
+            match sampler.cpu_tick(t) {
+                Ok(c) => {
+                    write_record(&mut *out, &Record::Cpu(c))?;
+                    summary.cpu_samples += 1;
+                }
+                Err(e) if scope_gone(&e) => {
+                    summary
+                        .notes
+                        .push("the scope vanished; recording ended".into());
+                    out.flush()?;
+                    break;
+                }
+                Err(e) => return Err(e).context("busy-cores sample"),
+            }
             next_cpu += cpu_step;
         }
         if start.elapsed() >= next_interval {
-            let s = sampler.interval_tick(t).context("interval sample")?;
-            write_record(&mut *out, &Record::Sample(s))?;
-            summary.samples += 1;
+            match sampler.interval_tick(t) {
+                Ok(s) => {
+                    write_record(&mut *out, &Record::Sample(s))?;
+                    summary.samples += 1;
+                }
+                Err(e) if scope_gone(&e) => {
+                    summary
+                        .notes
+                        .push("the scope vanished; recording ended".into());
+                    out.flush()?;
+                    break;
+                }
+                Err(e) => return Err(e).context("interval sample"),
+            }
             last_interval_t = t;
             next_interval += step;
         }
@@ -588,6 +625,37 @@ mod tests {
             bw_note,
             !rec.header.provenance.contains_key("dram_bytes_per_sec"),
             "{summary:?}"
+        );
+    }
+
+    #[test]
+    fn a_process_that_exits_ends_the_recording_with_a_note() {
+        // Reap the child as soon as it exits; a zombie keeps its /proc
+        // entry and the recording would see it as alive but idle.
+        let mut short = std::process::Command::new("sleep")
+            .arg("0.3")
+            .spawn()
+            .unwrap();
+        let pid = short.id() as i32;
+        let reaper = std::thread::spawn(move || short.wait());
+        let mut out = Vec::new();
+        let settings = Settings {
+            interval_s: 0.2,
+            cpu_interval_s: 0.1,
+            duration_s: Some(3.0),
+            child_stdout_to_stderr: false,
+        };
+        let summary = run(&What::Pid(pid), &settings, &mut out).unwrap();
+        reaper.join().unwrap().unwrap();
+        assert!(
+            summary.notes.iter().any(|n| n.contains("vanished")),
+            "{summary:?}"
+        );
+        let rec = samples::Recording::read(out.as_slice()).unwrap();
+        assert!(
+            rec.cpu.len() >= 2 && rec.cpu.len() < 20,
+            "{}",
+            rec.cpu.len()
         );
     }
 

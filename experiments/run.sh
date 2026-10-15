@@ -39,7 +39,8 @@ unit=thrashgen-$name-replay-$$
 run_in_scope "$unit" "$bin" run "$out/orig.json" --duration "$replay_secs" --scratch-dir "$scratch" --report "$out/report.json" > "$out/run.log" 2>&1 &
 replay_pid=$!
 wait_for_scope "$(scope_path "$unit")"
-"$bin" record --cgroup "$(scope_path "$unit")" --interval "$interval" --duration "$replay_secs" -o "$out/replay.jsonl" 2> "$out/record-replay.log"
+# The replay's scope vanishes the moment it exits, so stop recording a little earlier.
+"$bin" record --cgroup "$(scope_path "$unit")" --interval "$interval" --duration "$((replay_secs - 5))" -o "$out/replay.jsonl" 2> "$out/record-replay.log"
 wait $replay_pid
 "$bin" aggregate "$out/replay.jsonl" -o "$out/replay.json"
 "$bin" compare "$out/orig.json" "$out/replay.json" --json "$out/compare.json" | tee "$out/compare.txt"
