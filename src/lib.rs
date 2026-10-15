@@ -15,6 +15,7 @@ pub mod perf;
 pub mod plan;
 pub mod profile;
 pub mod record;
+pub mod resctrl;
 pub mod sampler;
 pub mod samples;
 pub mod sys;

@@ -22,7 +22,8 @@ use crate::events::{Sysfs, table_for};
 use crate::measure::Scope;
 use crate::perf;
 use crate::plan::{Access, ScopeInfo, plan};
-use crate::sampler::{BandwidthSource, LiveCounters, Sampler};
+use crate::resctrl::{MonGroup, Resctrl};
+use crate::sampler::{LiveCounters, Sampler};
 use crate::samples::{self, FORMAT_VERSION, Header, Record, write_record};
 use crate::topology::Topology;
 
@@ -74,18 +75,6 @@ pub struct Summary {
     pub cpu_samples: usize,
     /// Fallbacks and skipped tasks, for the user.
     pub notes: Vec<String>,
-}
-
-/// Placeholder until resctrl bandwidth lands.
-struct NoBandwidth;
-
-impl BandwidthSource for NoBandwidth {
-    fn read_bytes(&mut self) -> io::Result<u64> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "no bandwidth source",
-        ))
-    }
 }
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -292,6 +281,42 @@ pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summ
         }
     };
 
+    let bandwidth = match Resctrl::from_facts(&root, &facts) {
+        None => {
+            summary.notes.push(
+                "DRAM bandwidth not measured: resctrl is not mounted with mbm_total_bytes".into(),
+            );
+            None
+        }
+        Some(rc) if matches!(what, What::Host) => Some(rc.root_group()),
+        Some(rc) => {
+            let tids: Vec<i32> = match &info {
+                ScopeInfo::Cgroup { tids, .. } | ScopeInfo::Process { tids } => tids.clone(),
+                _ => Vec::new(),
+            };
+            match rc.create_mon_group(&format!("thrashgen-{}", std::process::id())) {
+                Ok(group) => match group.add_tasks(&tids) {
+                    Ok(_) => {
+                        if matches!(what, What::Cgroup(_)) {
+                            summary.notes.push("DRAM bandwidth covers the cgroup's current tasks and their descendants; tasks that join later are not counted".into());
+                        }
+                        Some(group)
+                    }
+                    Err(e) => {
+                        summary.notes.push(format!("DRAM bandwidth not measured: cannot add tasks to the resctrl group: {e}"));
+                        None
+                    }
+                },
+                Err(e) => {
+                    summary.notes.push(format!(
+                        "DRAM bandwidth not measured: cannot create a resctrl group: {e}"
+                    ));
+                    None
+                }
+            }
+        }
+    };
+
     let plan = plan(&info, &access, table, &sysfs, &topo).context("plan counters")?;
     summary.notes.extend(plan.notes.iter().cloned());
     let (mut live, skipped) =
@@ -300,8 +325,14 @@ pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summ
     live.enable().context("enable counters")?;
     let counters = if live.is_empty() { None } else { Some(live) };
 
-    let mut sampler: Sampler<LiveCounters, NoBandwidth> =
-        Sampler::new(scope, root, plan.fields.clone(), counters, None, vec![]);
+    let mut sampler: Sampler<LiveCounters, MonGroup> = Sampler::new(
+        scope,
+        root,
+        plan.fields.clone(),
+        counters,
+        bandwidth,
+        vec![],
+    );
     let header = Header {
         version: FORMAT_VERSION,
         host: nix::unistd::gethostname()
@@ -547,6 +578,12 @@ mod tests {
                 .all(|s| s.values.contains_key("memory_current_bytes"))
         );
         assert!(rec.cpu.iter().all(|c| c.scope == "host"));
+        let bw_note = summary.notes.iter().any(|n| n.contains("DRAM bandwidth"));
+        assert_eq!(
+            bw_note,
+            !rec.header.provenance.contains_key("dram_bytes_per_sec"),
+            "{summary:?}"
+        );
     }
 
     #[test]
