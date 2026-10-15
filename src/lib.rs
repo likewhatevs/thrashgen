@@ -5,8 +5,10 @@
 //! documents its own contract.
 
 pub mod aggregate;
+pub mod caps;
 pub mod cli;
 pub mod cpu;
 pub mod events;
 pub mod profile;
 pub mod samples;
+pub mod sys;

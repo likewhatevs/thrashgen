@@ -17,9 +17,19 @@ fn help_lists_every_subcommand() {
 }
 
 #[test]
+fn caps_prints_facts_and_rules() {
+    let mut cmd = Command::cargo_bin("thrashgen").unwrap();
+    cmd.arg("caps").assert().success().stdout(
+        predicate::str::contains("perf_event_paranoid")
+            .and(predicate::str::contains("own threads, user mode"))
+            .and(predicate::str::contains("page cache residency")),
+    );
+}
+
+#[test]
 fn unimplemented_subcommand_fails_cleanly() {
     let mut cmd = Command::cargo_bin("thrashgen").unwrap();
-    cmd.arg("caps")
+    cmd.arg("record")
         .assert()
         .failure()
         .stderr(predicate::str::contains("not implemented"));

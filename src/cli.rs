@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::aggregate;
+use crate::caps::{Expectations, Facts, Root};
 use crate::samples::Recording;
 
 /// Record a container's resource footprint and replay it as synthetic load.
@@ -57,7 +58,8 @@ pub fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Aggregate(args) => run_aggregate(args),
-        Command::Caps | Command::Record | Command::Run | Command::Calibrate | Command::Compare => {
+        Command::Caps => run_caps(),
+        Command::Record | Command::Run | Command::Calibrate | Command::Compare => {
             bail!("not implemented yet: {:?}", cli.command)
         }
     }
@@ -83,5 +85,13 @@ fn run_aggregate(args: AggregateArgs) -> Result<()> {
         }
         None => io::stdout().write_all(text.as_bytes())?,
     }
+    Ok(())
+}
+
+fn run_caps() -> Result<()> {
+    let facts = Facts::detect(&Root::default());
+    let expectations = Expectations::from_facts(&facts);
+    let mut out = io::stdout().lock();
+    write!(out, "{facts}\n{expectations}")?;
     Ok(())
 }
