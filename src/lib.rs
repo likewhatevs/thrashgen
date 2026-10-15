@@ -4,5 +4,6 @@
 //! observables, the measurement tiers and the load generator; each module
 //! documents its own contract.
 
+pub mod aggregate;
 pub mod profile;
 pub mod samples;

@@ -94,15 +94,25 @@ profile from any number of recordings:
   numerators to summed denominators, never a mean of ratios.
 - **Percentiles**: over all scopes' samples, not over container values,
   so minute-scale spikes survive. For ratios, over per-sample ratios.
+  Linear interpolation between order statistics, as NumPy's default.
+- **Sample weight**: a scope's samples are weighted by their actual
+  interval length, so a short final interval does not count as much as
+  a full one.
 - **Burstiness** (`cpu_usage_cv_1s`): for each scope and each window of
   W seconds (default 300), the mean m and variance v of the 1 Hz
   usage samples; then `sqrt(mean v) / mean m` over all windows. Pooled
   this way, N independent average containers carry the fleet's summed
   variance, and idle containers, whose own CV diverges, do not dominate.
-  The percentile fields are per-window `sqrt(v) / m`.
+  The percentile fields are per-window `sqrt(v) / m`, over windows with
+  a positive mean. Variance is the population variance of the window.
+  A trailing partial window is kept when it is at least half full, or
+  when it is the only one, so a short recording still yields a value.
 
 The profile also records `count`, the number of scopes it was built
-from, and the CPU vendor, family and model.
+from, and the CPU vendor, family and model. A scope is one scope name
+in one recording, so the same cgroup recorded twice is two containers.
+Recordings from different CPU models, or that measured a field with
+different provenance, are refused rather than silently mixed.
 
 ## 4. Measurement tiers
 
