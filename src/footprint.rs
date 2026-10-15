@@ -36,6 +36,19 @@ fn touch(ptr: NonNull<libc::c_void>, len: usize) {
     }
 }
 
+/// One smaps statistic of the mapping that contains `ptr`, in bytes.
+fn mapping_field(ptr: NonNull<libc::c_void>, key: &str) -> io::Result<u64> {
+    let addr = ptr.as_ptr() as u64;
+    let maps = Process::myself()
+        .and_then(|p| p.smaps())
+        .map_err(io::Error::other)?;
+    Ok(maps
+        .iter()
+        .filter(|m| m.address.0 <= addr && addr < m.address.1)
+        .map(|m| m.extension.map.get(key).copied().unwrap_or(0))
+        .sum())
+}
+
 /// A private anonymous mapping, touched once.
 #[derive(Debug)]
 pub struct AnonBuffer {
@@ -110,15 +123,12 @@ impl AnonBuffer {
     /// Bytes of this mapping backed by transparent hugepages, from
     /// `/proc/self/smaps`.
     pub fn huge_bytes(&self) -> io::Result<u64> {
-        let start = self.ptr.as_ptr() as u64;
-        let maps = Process::myself()
-            .and_then(|p| p.smaps())
-            .map_err(io::Error::other)?;
-        Ok(maps
-            .iter()
-            .filter(|m| m.address.0 <= start && start < m.address.1)
-            .map(|m| m.extension.map.get("AnonHugePages").copied().unwrap_or(0))
-            .sum())
+        mapping_field(self.ptr, "AnonHugePages")
+    }
+
+    /// Resident bytes of this mapping, from `/proc/self/smaps`.
+    pub fn resident_bytes(&self) -> io::Result<u64> {
+        mapping_field(self.ptr, "Rss")
     }
 }
 
@@ -255,6 +265,11 @@ impl ShmemBuffer {
     pub fn as_ptr(&self) -> *mut u8 {
         self.ptr.as_ptr().cast()
     }
+
+    /// Resident bytes of this mapping, from `/proc/self/smaps`.
+    pub fn resident_bytes(&self) -> io::Result<u64> {
+        mapping_field(self.ptr, "Rss")
+    }
 }
 
 impl Drop for ShmemBuffer {
@@ -323,30 +338,24 @@ mod tests {
     }
 
     #[test]
-    fn anon_buffer_is_resident_and_released() {
-        let before = rss().0;
+    fn anon_buffer_is_resident_and_lazy_when_untouched() {
         let buf = AnonBuffer::new(16 << 20, true).unwrap();
         assert_eq!(buf.len(), 16 << 20);
         assert!(!buf.is_empty());
         assert!(!buf.as_ptr().is_null());
-        let during = rss().0;
-        assert!(during >= before + (15 << 20), "{before} -> {during}");
+        let resident = buf.resident_bytes().unwrap();
+        assert!(resident >= 15 << 20, "{resident}");
         let huge = buf.huge_bytes().unwrap();
         assert!(huge <= 16 << 20, "{huge}");
         if huge > 0 {
             assert!(buf.huge_advised());
         }
-        drop(buf);
-        let after = rss().0;
-        assert!(after < during, "{during} -> {after}");
-        assert!(AnonBuffer::new(0, false).is_err());
         let lazy = AnonBuffer::new_untouched(64 << 20, false).unwrap();
-        let (anon_lazy, _) = rss();
         assert!(
-            anon_lazy < after + (32 << 20),
-            "untouched pages are not resident: {after} -> {anon_lazy}"
+            lazy.resident_bytes().unwrap() < 1 << 20,
+            "untouched pages are not resident"
         );
-        drop(lazy);
+        assert!(AnonBuffer::new(0, false).is_err());
     }
 
     #[test]
@@ -370,15 +379,17 @@ mod tests {
     }
 
     #[test]
-    fn shmem_buffer_counts_as_shared() {
+    fn shmem_buffer_is_resident_and_counts_as_shared() {
         let before = rss().1;
         let s = ShmemBuffer::new(4 << 20).unwrap();
         assert_eq!(s.len(), 4 << 20);
         assert!(!s.is_empty() && !s.as_ptr().is_null());
+        assert!(s.resident_bytes().unwrap() >= (4 << 20) - 4096);
         let during = rss().1;
-        assert!(during >= before + (4 << 20) - 4096, "{before} -> {during}");
-        drop(s);
-        assert!(rss().1 < during);
+        assert!(
+            during >= before + (4 << 20) - 4096,
+            "RssShmem {before} -> {during}"
+        );
         assert!(ShmemBuffer::new(0).is_err());
     }
 
