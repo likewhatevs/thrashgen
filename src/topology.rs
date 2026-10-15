@@ -105,13 +105,18 @@ impl Topology {
         self.cpus.iter().find(|c| c.id == id)
     }
 
-    /// Distinct L3 domains, each the ascending list of CPUs sharing one
-    /// L3, in order of their first CPU.
+    /// Distinct L3 domains, each the ascending list of online CPUs
+    /// sharing one L3, in order of their first CPU.
     pub fn l3_domains(&self) -> Vec<Vec<u32>> {
         let mut out: Vec<Vec<u32>> = Vec::new();
         for l3 in self.cpus.iter().filter_map(|c| c.l3.as_ref()) {
-            if !out.contains(l3) {
-                out.push(l3.clone());
+            let online: Vec<u32> = l3
+                .iter()
+                .copied()
+                .filter(|id| self.cpu(*id).is_some())
+                .collect();
+            if !out.contains(&online) {
+                out.push(online);
             }
         }
         out.sort_by_key(|d| d.first().copied());
@@ -173,8 +178,11 @@ mod tests {
         assert_eq!(c33.siblings, [1, 33]);
         assert_eq!(c33.package, 0);
         assert_eq!(c33.l3.as_deref().unwrap().len(), 16);
-        assert_eq!(t.l3_domains().len(), 2);
-        assert_eq!(t.l3_domains()[1][0], 8);
+        assert_eq!(
+            t.l3_domains(),
+            [vec![0, 1, 32, 33], vec![8]],
+            "online members only"
+        );
         assert_eq!(t.l3_domain_of(32).unwrap()[..3], [0, 1, 2]);
         assert_eq!(t.l3_domain_of(99), None);
         assert_eq!(t.cpu(2), None);

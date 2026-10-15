@@ -12,6 +12,7 @@ pub mod cpu;
 pub mod events;
 pub mod measure;
 pub mod perf;
+pub mod plan;
 pub mod profile;
 pub mod samples;
 pub mod sys;
