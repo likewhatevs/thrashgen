@@ -11,6 +11,7 @@ pub mod cli;
 pub mod cpu;
 pub mod events;
 pub mod footprint;
+pub mod loadgen;
 pub mod measure;
 pub mod perf;
 pub mod plan;
