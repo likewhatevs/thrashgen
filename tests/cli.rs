@@ -27,9 +27,67 @@ fn caps_prints_facts_and_rules() {
 }
 
 #[test]
+fn record_then_aggregate_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = dir.path().join("rec.jsonl");
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "record",
+            "--interval",
+            "0.3",
+            "--cpu-interval",
+            "0.1",
+            "--duration",
+            "0.35",
+            "-o",
+        ])
+        .arg(&rec)
+        .args([
+            "--",
+            "sh",
+            "-c",
+            "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("recorded"));
+    let out = Command::cargo_bin("thrashgen")
+        .unwrap()
+        .arg("aggregate")
+        .arg(&rec)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let profile =
+        thrashgen::profile::Profile::from_json(std::str::from_utf8(&out).unwrap()).unwrap();
+    assert_eq!(profile.count, 1);
+    assert!(profile.avg["cpu_usage_cores"] > 0.0, "{:?}", profile.avg);
+    assert!(profile.avg.contains_key("anon_bytes"));
+    assert!(profile.provenance.contains_key("cpu_usage_cores"));
+}
+
+#[test]
+fn record_requires_exactly_one_target() {
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args(["record", "--duration", "0.1"])
+        .assert()
+        .failure();
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args(["record", "--host", "--pid", "1", "--duration", "0.1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
 fn unimplemented_subcommand_fails_cleanly() {
     let mut cmd = Command::cargo_bin("thrashgen").unwrap();
-    cmd.arg("record")
+    cmd.arg("run")
         .assert()
         .failure()
         .stderr(predicate::str::contains("not implemented"));

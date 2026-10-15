@@ -30,7 +30,19 @@ impl LiveCounters {
     /// Open every group. `cgroup` is the cgroup directory for
     /// [`TargetPlan::CgroupOnCpu`] groups.
     pub fn open(plan: &Plan, cgroup: Option<&File>) -> Result<LiveCounters, OpenError> {
+        Self::open_with(plan, cgroup, false).map(|(live, _)| live)
+    }
+
+    /// Like [`open`](Self::open), but when `lenient` a task that has
+    /// exited between planning and opening is skipped and named in the
+    /// returned notes instead of failing the whole set.
+    pub fn open_with(
+        plan: &Plan,
+        cgroup: Option<&File>,
+        lenient: bool,
+    ) -> Result<(LiveCounters, Vec<String>), OpenError> {
         let mut groups = Vec::with_capacity(plan.groups.len());
+        let mut notes = Vec::new();
         for g in &plan.groups {
             let target = match g.target {
                 TargetPlan::SelfThreads => Target::SelfThreads,
@@ -53,9 +65,19 @@ impl LiveCounters {
                 inherit: g.opts.inherit,
                 pinned: g.opts.pinned,
             };
-            groups.push(Counters::open(&g.specs, &target, opts)?);
+            match Counters::open(&g.specs, &target, opts) {
+                Ok(c) => groups.push(c),
+                Err(e)
+                    if lenient
+                        && matches!(g.target, TargetPlan::Task(_))
+                        && e.source.raw_os_error() == Some(libc::ESRCH) =>
+                {
+                    notes.push(format!("{target}: exited before counters were attached"));
+                }
+                Err(e) => return Err(e),
+            }
         }
-        Ok(LiveCounters { groups })
+        Ok((LiveCounters { groups }, notes))
     }
 
     /// Start counting.
@@ -633,6 +655,22 @@ mod tests {
         let empty = LiveCounters::open(&Plan::default(), None).unwrap();
         assert!(empty.is_empty());
         assert_eq!(empty.len(), 0);
+
+        let gone = Plan {
+            groups: vec![Group {
+                target: TargetPlan::Task(i32::MAX - 1),
+                specs: vec![Spec::instructions()],
+                opts: Options::default(),
+            }],
+            fields: BTreeMap::new(),
+            notes: vec![],
+        };
+        let strict = LiveCounters::open(&gone, None).unwrap_err();
+        assert_eq!(strict.source.raw_os_error(), Some(libc::ESRCH), "{strict}");
+        let (live, notes) = LiveCounters::open_with(&gone, None, true).unwrap();
+        assert!(live.is_empty());
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].contains("exited before"));
     }
 }
 
