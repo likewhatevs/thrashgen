@@ -39,8 +39,13 @@ unit=thrashgen-$name-replay-$$
 run_in_scope "$unit" "$bin" run "$out/orig.json" --duration "$replay_secs" --scratch-dir "$scratch" --report "$out/report.json" > "$out/run.log" 2>&1 &
 replay_pid=$!
 wait_for_scope "$(scope_path "$unit")"
-# The replay's scope vanishes the moment it exits, so stop recording a little earlier.
-"$bin" record --cgroup "$(scope_path "$unit")" --interval "$interval" --duration "$((replay_secs - 5))" -o "$out/replay.jsonl" 2> "$out/record-replay.log"
+# The comparison is against the replay as it holds its fit, not as it
+# searches for it, so the recording starts after a warm-up of most of
+# the replay; and the scope vanishes the moment the replay exits, so it
+# stops a little earlier.
+warmup=${WARMUP_SECS:-$((replay_secs * 6 / 10))}
+sleep "$warmup"
+"$bin" record --cgroup "$(scope_path "$unit")" --interval "$interval" --duration "$((replay_secs - warmup - 5))" -o "$out/replay.jsonl" 2> "$out/record-replay.log"
 wait $replay_pid
 "$bin" aggregate "$out/replay.jsonl" -o "$out/replay.json"
 "$bin" compare "$out/orig.json" "$out/replay.json" --json "$out/compare.json" | tee "$out/compare.txt"

@@ -3,7 +3,10 @@
 End-to-end evidence that a replay looks like the original to the same
 recorder. Each experiment records a benchmark, aggregates the recording
 into a profile, replays the profile with `run`, records the replay the
-same way, and compares the two profiles field by field. Both the
+same way once it has had sixty percent of its time to fit, and
+compares the two profiles field by field. The warm-up keeps the search
+for the knobs out of the comparison; what is compared is the replay as
+it holds. Both the
 benchmark and the replay run in a transient user scope
 (`systemd-run --user --scope`), so the recorder reads a cgroup with
 the same accounting for each: busy time and memory from the cgroup
