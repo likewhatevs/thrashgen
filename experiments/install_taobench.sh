@@ -48,14 +48,15 @@ if [ ! -f "$folly_inst/lib/pkgconfig/libfolly.pc" ]; then
     if git apply --check "$tb/folly_zlib_uri.patch" 2>/dev/null; then
       git apply "$tb/folly_zlib_uri.patch"
     fi
-    # getdeps drives any sccache it finds on PATH, and one set up for
-    # cargo does not serve C++ builds; hide it. Older folly releases
-    # also predate CMake 4's removal of pre-3.5 compatibility.
-    path=$PATH
-    if sccache=$(command -v sccache); then
-      path=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$(dirname "$sccache")" | paste -sd: -)
-    fi
-    PATH=$path CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    # getdeps makes any sccache on PATH the compiler launcher and drives
+    # its server; a host's sccache is set up for its own builds, not
+    # this one. A shim that runs the compiler directly takes its place.
+    # Older folly releases also predate CMake 4's removal of pre-3.5
+    # compatibility.
+    mkdir -p "$build/shim"
+    printf '#!/bin/sh\ncase $1 in --*) exit 0;; esac\nexec "$@"\n' > "$build/shim/sccache"
+    chmod +x "$build/shim/sccache"
+    PATH="$build/shim:$PATH" CMAKE_POLICY_VERSION_MINIMUM=3.5 \
       ./build/fbcode_builder/getdeps.py --allow-system-packages build --no-tests \
       --scratch-path "$folly_scratch" --num-jobs "$jobs"
   )
