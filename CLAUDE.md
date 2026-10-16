@@ -8,3 +8,5 @@ coverage: `cargo llvm-cov --summary-only`.
 design: docs/design.md is the contract; update it in the same commit as
 the code it describes. each observable's definition lives there once.
 commits: one feature per commit, tests included.
+status: docs/status.md lists what is verified and what is open;
+update it when an item closes.
