@@ -14,8 +14,9 @@ files, counters attached to the scope's threads.
 
 The harness is `experiments/run.sh`; `experiments/all.sh` runs the set
 below and draws the plots with `examples/experiment_plot.rs`. The set
-takes about fifty minutes: each benchmark records for two minutes and
-each replay fits for seven. `RECORD_SECS` and `REPLAY_SECS` shorten
+takes about an hour: each benchmark records for two minutes and each
+replay fits for seven, and TaoBench fills its cache for three minutes
+first. `RECORD_SECS` and `REPLAY_SECS` shorten
 that for a smoke run; the replay needs at least a few windows of the
 length `docs/design.md` section 6 gives to converge. Nothing else
 should run on the host meanwhile: a build alongside a recording shows

@@ -46,7 +46,8 @@ mkdir -p "$fio_dir"
 "$root/experiments/run.sh" sysbench  "$record" "$replay" -- sysbench cpu --threads=4 --time="$record" run
 "$root/experiments/run.sh" fio       "$record" "$replay" -- fio --name=pagecache --directory="$fio_dir" --rw=randread --bs=4k --size=1G --numjobs=2 --ioengine=psync --direct=0 --time_based --runtime="$record" --group_reporting
 rm -rf "$fio_dir"
-# TaoBench's cache starts empty; give it a minute to fill before recording.
-BENCH_WARMUP_SECS=${TAOBENCH_WARMUP_SECS:-60} \
-  "$root/experiments/run.sh" taobench "$record" "$replay" -- "$root/experiments/taobench.sh" "$((record + ${TAOBENCH_WARMUP_SECS:-60}))"
+# TaoBench's cache starts empty and fills at its slow-path rate, about three
+# minutes for 2 GiB; record it once the hit rate has settled.
+BENCH_WARMUP_SECS=${TAOBENCH_WARMUP_SECS:-180} \
+  "$root/experiments/run.sh" taobench "$record" "$replay" -- "$root/experiments/taobench.sh" "$((record + ${TAOBENCH_WARMUP_SECS:-180}))"
 cargo run --release -q --manifest-path "$root/Cargo.toml" --example experiment_plot -- "$OUT_DIR"
