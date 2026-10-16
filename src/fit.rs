@@ -500,8 +500,14 @@ impl Fitter {
         {
             k.lines = (k.lines * 0.5).max(LINES_MIN);
         }
+        // A target under twice the absolute floor is met by the floor
+        // alone and its measurement is mostly noise; chasing it swung ops
+        // between one and tens of thousands, so the ops rule stays quiet.
+        let mpki_noise = goal
+            .mpki
+            .is_some_and(|t| t < 2.0 * absolute_tolerance("l3_mpki"));
         match (goal.mpki, m.mpki, ipa) {
-            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 => {
+            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 && !mpki_noise => {
                 // Misses per access follow the run length the IPC rule just
                 // chose; at that length, the instructions per access the
                 // target needs are known, and the work that gives them.
@@ -509,7 +515,7 @@ impl Fitter {
                 let want_ipa = misses_per_access * 1000.0 / t;
                 work += d * (want_ipa - ipa) / slope;
             }
-            (Some(t), Some(v), None) => work *= factor(v, t, d),
+            (Some(t), Some(v), None) if !mpki_noise => work *= factor(v, t, d),
             _ => {}
         }
         k.ops = (work / k.chains.max(1.0))

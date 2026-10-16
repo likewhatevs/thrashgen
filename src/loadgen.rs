@@ -626,13 +626,15 @@ impl Worker {
                 let at = if dependent && i > 0 {
                     // Each further line of a dependent visit lands in a page
                     // of its own and waits for the line before: the term is
-                    // zero, but neither the compiler nor the core can know
-                    // that until the load returns. Scattered over one page
+                    // zero, but with both operands opaque neither the
+                    // compiler nor the core can know that until the load
+                    // returns. A shift or mask the compiler could see
+                    // through was folded away. Scattered over one page
                     // instead, the region prefetcher fetched the lot.
                     let d = rng.next();
                     scale32((d >> 32) as u32, p.pages) * PAGE
                         + scale32(d as u32, PAGE_LINES) * LINE
-                        + (std::hint::black_box(chase) >> 63 >> 1) as usize
+                        + (std::hint::black_box(chase) & std::hint::black_box(0u64)) as usize
                 } else {
                     page * PAGE + (line0 + i) * LINE
                 };
