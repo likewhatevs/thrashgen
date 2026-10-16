@@ -76,6 +76,9 @@ pub struct ResctrlFacts {
     pub mon_features: Vec<String>,
     /// `mon_groups` under the root group is writable, so groups can be made.
     pub can_make_groups: bool,
+    /// Groups under `mon_groups` whose `tasks` file is writable, so this
+    /// process can put tasks into them without making a group.
+    pub usable_groups: Vec<String>,
 }
 
 /// Facts about the process and the host, with no interpretation.
@@ -188,10 +191,20 @@ impl Facts {
                 })
                 .unwrap_or_default();
             let can_make_groups = access(&dir.join("mon_groups"), AccessFlags::W_OK).is_ok();
+            let mut usable_groups: Vec<String> = std::fs::read_dir(dir.join("mon_groups"))
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter(|e| access(&e.path().join("tasks"), AccessFlags::W_OK).is_ok())
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            usable_groups.sort();
             ResctrlFacts {
                 mount,
                 mon_features,
                 can_make_groups,
+                usable_groups,
             }
         });
 
@@ -338,9 +351,16 @@ impl Expectations {
             None => Rule::new(false, "resctrl is not mounted"),
             Some(_) if !resctrl_read.ok => Rule::new(false, resctrl_read.why.clone()),
             Some(r) if r.can_make_groups => Rule::new(true, "mon_groups is writable"),
+            Some(r) if !r.usable_groups.is_empty() => Rule::new(
+                true,
+                format!(
+                    "writable groups under mon_groups: {}",
+                    r.usable_groups.join(" ")
+                ),
+            ),
             Some(_) => Rule::new(
                 false,
-                "mon_groups is not writable; needs root or a chowned group",
+                "neither mon_groups nor any group under it is writable; needs root or a chowned group",
             ),
         };
         let cgroup_stats = match &f.cgroup {
@@ -682,6 +702,29 @@ mod tests {
         fs::remove_dir(root.path("/sys/fs/resctrl/mon_groups")).unwrap();
         let e = Expectations::from_facts(&Facts::detect(&root));
         assert!(e.resctrl_read.ok && !e.resctrl_group.ok);
+
+        // A group someone made and chowned to us, under a mon_groups we
+        // cannot write: usable, and the rule says which.
+        let groups = root.path("/sys/fs/resctrl/mon_groups");
+        fs::create_dir_all(groups.join("theirs")).unwrap();
+        fs::create_dir_all(groups.join("ours")).unwrap();
+        fs::write(groups.join("ours/tasks"), "").unwrap();
+        fs::write(groups.join("theirs/tasks"), "").unwrap();
+        let ro = |p: &Path, mode: u32| {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap()
+        };
+        ro(&groups.join("theirs/tasks"), 0o444);
+        ro(&groups, 0o555);
+        let f = Facts::detect(&root);
+        let r = f.resctrl.as_ref().unwrap();
+        assert!(!r.can_make_groups);
+        assert_eq!(r.usable_groups, ["ours"]);
+        let e = Expectations::from_facts(&f);
+        assert!(e.resctrl_group.ok, "{}", e.resctrl_group.why);
+        assert!(e.resctrl_group.why.contains("ours"));
+        ro(&groups, 0o755);
+        ro(&groups.join("theirs/tasks"), 0o644);
     }
 
     #[test]

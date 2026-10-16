@@ -370,10 +370,18 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     // Bandwidth: a resctrl group with this thread in it, inherited by the workers.
     let bandwidth: Option<MonGroup> = match Resctrl::from_facts(&root, &facts) {
         Some(rc) => match rc
-            .create_mon_group(&format!("thrashgen-{}", std::process::id()))
+            .acquire_group(&format!("thrashgen-{}", std::process::id()))
             .and_then(|g| g.add_self().map(|()| g))
         {
-            Ok(g) => Some(g),
+            Ok(g) => {
+                if !g.is_owned() {
+                    notes.push(format!(
+                        "DRAM bandwidth from the existing resctrl group {}",
+                        g.dir().display()
+                    ));
+                }
+                Some(g)
+            }
             Err(e) => {
                 notes.push(format!(
                     "DRAM bandwidth modelled: cannot use a resctrl group: {e}"

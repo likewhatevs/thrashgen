@@ -305,11 +305,17 @@ pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summ
                 ScopeInfo::Cgroup { tids, .. } | ScopeInfo::Process { tids } => tids.clone(),
                 _ => Vec::new(),
             };
-            match rc.create_mon_group(&format!("thrashgen-{}", std::process::id())) {
+            match rc.acquire_group(&format!("thrashgen-{}", std::process::id())) {
                 Ok(group) => match group.add_tasks(&tids) {
                     Ok(_) => {
                         if matches!(what, What::Cgroup(_)) {
                             summary.notes.push("DRAM bandwidth covers the cgroup's current tasks and their descendants; tasks that join later are not counted".into());
+                        }
+                        if !group.is_owned() {
+                            summary.notes.push(format!(
+                                "DRAM bandwidth from the existing resctrl group {}; the tasks stay in it after recording",
+                                group.dir().display()
+                            ));
                         }
                         Some(group)
                     }
@@ -320,7 +326,7 @@ pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summ
                 },
                 Err(e) => {
                     summary.notes.push(format!(
-                        "DRAM bandwidth not measured: cannot create a resctrl group: {e}"
+                        "DRAM bandwidth not measured: no resctrl group: {e}"
                     ));
                     None
                 }

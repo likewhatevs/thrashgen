@@ -5,6 +5,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use nix::unistd::AccessFlags;
 use resctrlfs::{ResctrlReader, RmidBytes};
 
 use crate::caps::{Facts, Root};
@@ -55,12 +56,57 @@ impl Resctrl {
         std::fs::create_dir(&dir)?;
         Ok(MonGroup { dir, owned: true })
     }
+
+    /// An existing group under `mon_groups` whose `tasks` file this
+    /// process can write and that holds no tasks: what root makes and
+    /// chowns for a tool that cannot make groups itself. The first by
+    /// name; not removed on drop.
+    pub fn find_idle_group(&self) -> io::Result<Option<MonGroup>> {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(self.mount.join("mon_groups"))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        dirs.sort();
+        for dir in dirs {
+            let tasks = dir.join("tasks");
+            if nix::unistd::access(&tasks, AccessFlags::W_OK).is_err() {
+                continue;
+            }
+            if std::fs::read_to_string(&tasks).is_ok_and(|t| t.trim().is_empty()) {
+                return Ok(Some(MonGroup { dir, owned: false }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A group to put tasks in: one made under `name`, or failing that
+    /// an idle group someone made for us.
+    pub fn acquire_group(&self, name: &str) -> io::Result<MonGroup> {
+        let err = match self.create_mon_group(name) {
+            Ok(g) => return Ok(g),
+            Err(e) => e,
+        };
+        match self.find_idle_group() {
+            Ok(Some(g)) => Ok(g),
+            Ok(None) => Err(io::Error::new(
+                err.kind(),
+                format!("{err}; no idle writable group under mon_groups either"),
+            )),
+            Err(e) => Err(io::Error::new(err.kind(), format!("{err}; {e}"))),
+        }
+    }
 }
 
 impl MonGroup {
     /// The group directory.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Whether this process made the group and removes it on drop.
+    pub fn is_owned(&self) -> bool {
+        self.owned
     }
 
     /// Add tasks by thread id. Tasks that no longer exist are skipped;
@@ -226,6 +272,66 @@ mod tests {
     }
 
     #[test]
+    fn idle_groups_are_found_and_used_when_none_can_be_made() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Root::at(tmp.path());
+        let mount = Path::new("/sys/fs/resctrl");
+        fake_mount(&root.path(mount), &[("00", "1")]);
+        let rc = Resctrl::new(&root, mount);
+        assert!(rc.find_idle_group().unwrap().is_none(), "no groups yet");
+        let groups = root.path(mount).join("mon_groups");
+        for (name, tasks) in [
+            (
+                "busy", "123
+",
+            ),
+            ("ours", ""),
+            ("theirs", ""),
+        ] {
+            fake_mount(&groups.join(name), &[("00", "2")]);
+            fs::write(groups.join(name).join("tasks"), tasks).unwrap();
+        }
+        let chmod =
+            |p: &Path, m: u32| fs::set_permissions(p, fs::Permissions::from_mode(m)).unwrap();
+        chmod(&groups.join("theirs/tasks"), 0o444);
+        let g = rc.find_idle_group().unwrap().unwrap();
+        assert!(g.dir().ends_with("ours"), "{}", g.dir().display());
+        assert!(!g.is_owned());
+        let dir = g.dir().to_path_buf();
+        drop(g);
+        assert!(dir.is_dir(), "a found group is not removed");
+
+        assert!(
+            rc.acquire_group("made").unwrap().is_owned(),
+            "made when possible"
+        );
+        chmod(&groups, 0o555);
+        let g = rc.acquire_group("made-2").unwrap();
+        assert!(!g.is_owned() && g.dir().ends_with("ours"));
+        fs::write(
+            groups.join("ours/tasks"),
+            "5
+",
+        )
+        .unwrap();
+        let err = rc.acquire_group("made-3").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("no idle writable group"), "{err}");
+        chmod(&groups, 0o755);
+        chmod(&groups.join("theirs/tasks"), 0o644);
+        let tmp = tempfile::tempdir().unwrap();
+        let rc = Resctrl::new(&Root::at(tmp.path()), mount);
+        assert!(rc.find_idle_group().is_err(), "no mon_groups directory");
+        assert!(
+            rc.acquire_group("x")
+                .unwrap_err()
+                .to_string()
+                .contains("No such file")
+        );
+    }
+
+    #[test]
     fn from_facts_needs_bandwidth_monitoring() {
         let root = Root::default();
         let mut facts = Facts::detect(&Root::at(concat!(
@@ -237,6 +343,7 @@ mod tests {
             mount: "/sys/fs/resctrl".into(),
             mon_features: vec!["llc_occupancy".into()],
             can_make_groups: true,
+            usable_groups: Vec::new(),
         });
         assert_eq!(Resctrl::from_facts(&root, &facts), None);
         facts

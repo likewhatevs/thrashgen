@@ -11,7 +11,7 @@ source at v7.1 (`kernel/events/core.c`, `include/linux/perf_event.h`,
 | `perf_event_paranoid` at most 0, or `CAP_PERFMON` | per-CPU events, per-cgroup events (which are per-CPU by construction), uncore PMUs such as AMD's L3 counters, which reject task-scoped events |
 | same uid as the target, ptrace allowed by yama | attaching counters to another process's existing threads |
 | `CAP_PERFMON` | attaching to any process or cgroup, all modes |
-| resctrl mounted and a monitoring group owned by the tool's uid | per-scope DRAM bandwidth; the kernel lets a task's owner or root write that task into a group |
+| resctrl mounted and a monitoring group owned by the tool's uid | per-scope DRAM bandwidth; the kernel lets a task's owner or root write that task into a group, so the tool uses an idle group it can write when it cannot make one |
 | root | mounting resctrl and creating groups |
 | Yama `ptrace_scope` at most 1 | holding a recorded command at its exec with `PTRACE_TRACEME` so counters attach before it runs; otherwise the command starts first and the note says so |
 
