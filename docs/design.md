@@ -210,22 +210,28 @@ The IPC ladder gives the shares back first: the sequential walk when
 IPC is high, dependent visits when it is short; a share under a tenth
 goes back whole and the ladder continues in the same pass. The order
 then depends on the regime. Memory-bound, at one miss per thousand
-instructions or more, with IPC high: random visits are made dependent,
-a fifth more per pass, once compute is down to one chain, at one op,
-or has stopped moving IPC; then chains fall, then run length. Compute-bound with IPC high:
-shorter runs, fewer chains, dependent visits last. IPC short: longer
-runs, more chains, then a sequential walk that lets the prefetcher
-stream. Past 4096 ops per access the stream is pure dilution and run
-length halves each pass, down to one visit per 1024 accesses, since
-every miss dropped saves a thousand instructions of compute; the sparse and code visits
-may then grow to a quarter of the instructions per access. dTLB
+instructions or more with an IPC target below 1.5, and IPC high:
+random visits
+are made dependent, a fifth more per pass, once compute is down to one
+chain, at one op, or has stopped moving IPC; then run length falls,
+undamped, which is less overlap while the ops rule keeps MPKI; then
+chains. Compute-bound with IPC high: shorter runs, fewer chains; with
+both at their floors and a visit on only a share of accesses, the
+whole access scales up, compute and visit share together, so the slow
+chain carries more of the instructions at the same misses per
+instruction; dependent visits last. At one op with MPKI short, run
+length follows the shortfall undamped. IPC short: longer runs, more
+chains, then a sequential walk that lets the prefetcher stream. Past
+4096 ops per access the stream is pure dilution and run length halves
+each pass, down to one visit per 1024 accesses, since every miss
+dropped saves a thousand instructions of compute; the sparse and code
+visits may then grow to a quarter of the instructions per access. dTLB
 events beyond what the sparse stream can account for, at one per
 visit, come from the main stream's own pages; when they alone exceed
 the target the working set shrinks, by at most half per pass, unless
-IPC is short, in which case
-the sequential share rises instead, or IPC is high, in which case dTLB
-waits. A shrink that cost misses beyond what the run length explains
-is undone and not tried again.
+IPC is short, in which case the sequential share rises instead, or IPC
+is high, in which case dTLB waits. A shrink that cost misses beyond
+what the run length explains is undone and not tried again.
 
 Ratios settle within a 30 s window, the fit window, which `--window`
 can change. Busy cores and burstiness do not: with independent

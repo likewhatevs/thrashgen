@@ -49,9 +49,9 @@ pub struct Knobs {
     /// each worker walks its own slice of the working set.
     #[serde(default)]
     pub seq: f64,
-    /// Share of the random visits whose page is computed from the
-    /// value the previous visit loaded, so the miss cannot issue until
-    /// that load completes, 0 to 1.
+    /// Share of the random visits whose page, and each line within,
+    /// is computed from the value loaded just before it, so no miss
+    /// can issue until the previous one completes, 0 to 1.
     #[serde(default)]
     pub dep: f64,
     /// Fraction of the main buffer, from its start, that the main and
@@ -578,6 +578,7 @@ impl Worker {
             c.lines -= 1.0;
         }
         let lines = p.lines_whole + extra;
+        let mut dependent = false;
         if lines > 0 {
             c.seq += k.seq;
             let (page, line0) = if c.seq >= 1.0 {
@@ -602,6 +603,7 @@ impl Worker {
                     // keeps this a branch: folded into a conditional
                     // move, every visit would carry the dependency.
                     c.dep -= 1.0;
+                    dependent = true;
                     draw ^= std::hint::black_box(chase);
                 }
                 // The offset leaves room for the longer of the two run
@@ -617,7 +619,14 @@ impl Worker {
             };
             let stores = p.stores[extra];
             for i in 0..lines {
-                let q = main.wrapping_add(page * PAGE + (line0 + i) * LINE);
+                let mut at = page * PAGE + (line0 + i) * LINE;
+                if dependent && i > 0 {
+                    // Each line after the first waits for the one before:
+                    // the term is zero, but neither the compiler nor the
+                    // core can know that until the load returns.
+                    at += (std::hint::black_box(chase) >> 63 >> 1) as usize;
+                }
+                let q = main.wrapping_add(at);
                 // SAFETY: inside the main buffer.
                 unsafe {
                     let v = std::ptr::read_volatile(q.cast::<u64>());

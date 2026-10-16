@@ -183,7 +183,8 @@ const SHARE_SMALL: f64 = 0.1;
 /// dilution: run length then falls to one line, since every miss it
 /// drops saves a thousand instructions of compute.
 pub const OPS_DILUTION_CAP: u32 = 4096;
-/// MPKI from which the stall on misses, not compute, sets IPC.
+/// MPKI from which, with an IPC target below 1.5, the stall on misses
+/// rather than compute sets IPC.
 const MEMORY_BOUND_MPKI: f64 = 1.0;
 /// Smallest run length: one visit per 1024 accesses.
 const LINES_MIN: f64 = 1.0 / 1024.0;
@@ -423,7 +424,7 @@ impl Fitter {
                 .zip(m.mpki)
                 .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
             let lines_locked = g < 1.0 && knobs.ops <= 1 && mpki_short;
-            let memory_bound = m.mpki.is_some_and(|x| x >= MEMORY_BOUND_MPKI);
+            let memory_bound = m.mpki.is_some_and(|x| x >= MEMORY_BOUND_MPKI) && t < 1.5;
             // The shares are given back first: a sequential walk when IPC
             // is high, dependent misses when it is short. A small share
             // goes back whole and the ladder continues this pass.
@@ -445,21 +446,30 @@ impl Fitter {
             let lines_move = |k: &mut Knobs| k.lines = (k.lines * g).clamp(1.0, 64.0);
             if !handled && g < 1.0 && memory_bound {
                 // Stalls set IPC here: serialize the misses once compute is
-                // down to a chain or has stopped helping, else cut it.
+                // down to a chain or has stopped helping; then fewer lines
+                // per visit, which is less overlap, undamped since the
+                // ops rule keeps MPKI; then compute.
                 if k.dep < 1.0 && (k.chains <= 1.0 || stalled || knobs.ops <= 1) {
                     dep_up(&mut k);
+                } else if lines_can_move {
+                    k.lines = (k.lines * g.max(0.25)).max(1.0);
                 } else if chains_can_move {
                     chains_move(&mut k);
-                } else if lines_can_move {
-                    lines_move(&mut k);
                 }
             } else if !handled && g < 1.0 {
-                // Compute sets IPC: shorter runs, then fewer chains, and
-                // dependent misses as the last resort.
+                // Compute sets IPC: shorter runs, then fewer chains. With
+                // both at their floors and a visit on only a share of
+                // accesses, the access is scaled up whole, compute and
+                // visits alike, so the slow chain carries more of the
+                // instructions at unchanged misses per instruction.
                 if lines_can_move && !stalled {
                     lines_move(&mut k);
                 } else if chains_can_move {
                     chains_move(&mut k);
+                } else if k.lines <= 1.0 && goal.mpki.is_some() {
+                    let up = (1.0 / g).powi(2).min(4.0);
+                    work *= up;
+                    k.lines = (k.lines * up).min(64.0);
                 } else {
                     dep_up(&mut k);
                 }
@@ -498,7 +508,9 @@ impl Fitter {
             // Compute cannot go below one op per access; past that, more
             // lines per access are the only way to more misses.
             if k.ops <= 1 && knobs.ops <= 1 && v < t * (1.0 - self.tol.ratio) {
-                k.lines = (k.lines * factor(t, v, d)).clamp(LINES_MIN, 64.0);
+                // Undamped: misses follow run length about linearly, and
+                // passes are few.
+                k.lines = (k.lines * factor(t, v, 1.0)).clamp(LINES_MIN, 64.0);
             }
         }
 
@@ -637,10 +649,11 @@ mod tests {
         } else {
             1.55 * lines
         } * miss_rate;
-        // Overlapped misses cost a fraction of their latency; dependent
-        // ones the whole of it; a sequential walk is mostly prefetched.
-        let overlap = (0.3 + 0.7 * k.dep) * (1.0 - 0.6 * k.seq);
-        let stall = misses * 250.0 * overlap / (1.0 + 0.3 * lines);
+        // Overlapped misses cost a fraction of their latency and the
+        // prefetcher hides more of a longer run; dependent visits pay the
+        // whole latency per line; a sequential walk is mostly prefetched.
+        let overlap = (1.0 - k.dep) * 0.3 / (1.0 + 0.3 * lines) + k.dep;
+        let stall = misses * 250.0 * overlap * (1.0 - 0.6 * k.seq);
         let main_tlb = ((1.0 - k.seq) + k.seq * lines / 64.0) * tlb_rate * lines.min(1.0);
         let cycles = ops * 4.0 / chains_eff + stall + 10.0;
         let duty = k.duty;
@@ -938,6 +951,44 @@ mod tests {
         };
         let next = f.step(&Knobs::default(), &m, &goal);
         assert_eq!(next.seq, 0.0, "{next:?}");
+    }
+
+    #[test]
+    fn compute_floor_scales_the_access_up_when_ipc_is_still_high() {
+        // fio-like at the floors: no compute left to slow, a visit on a
+        // share of accesses, IPC still twice the target. Both compute and
+        // the visit share grow, so misses per instruction hold.
+        let mut f = Fitter::new(1, LIMITS);
+        let goal = Goal {
+            ipc: Some(0.89),
+            mpki: Some(0.018),
+            dtlb_pki: Some(8.7),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 1,
+            chains: 0.25,
+            lines: 0.5,
+            tlbvisits: 2000.0,
+            sparse_pages: 2048,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(2.5),
+            mpki: Some(0.018),
+            dtlb_pki: Some(10.0),
+            accesses_per_s: 2.0e4,
+            instructions_per_s: Some(1.0e9),
+            ..Measured::default()
+        };
+        f.last_ipc = Some(2.5);
+        let next = f.step(&k, &m, &goal);
+        let up = (1.0 / factor(0.89, 2.5, 0.5)).powi(2).min(4.0);
+        assert!(next.ops > 1, "{next:?}");
+        assert!(
+            (next.lines / k.lines - up).abs() < 1e-9,
+            "visits scale by the same factor as compute: {next:?}"
+        );
     }
 
     #[test]
