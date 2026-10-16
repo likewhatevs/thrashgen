@@ -151,7 +151,7 @@ PRNG, not from loaded data, so misses overlap.
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
 | `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks) |
 | `codevisits`, code page count | iTLB rate | calls through a function pointer into one-instruction stubs placed one per executable page at varying offsets; `codevisits` may be below one per access |
-| `huge` | main-stream page walks | `MADV_HUGEPAGE` on the main buffer; the report shows what THP actually backed |
+| `huge` | main-stream page walks | `MADV_HUGEPAGE` on the main buffer; the report shows what THP actually backed. Without it the buffer is advised `MADV_NOHUGEPAGE`, since a THP policy of `always` would otherwise back it with hugepages anyway |
 
 Footprint: the main buffer is anonymous memory touched once at start;
 page cache is a file of `pagecache_bytes` in a disk-backed scratch

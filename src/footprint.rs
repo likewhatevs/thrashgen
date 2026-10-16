@@ -113,6 +113,8 @@ impl AnonBuffer {
             // SAFETY: the range is exactly what was just mapped.
             buf.huge_advised = unsafe { madvise(ptr, len, MmapAdvise::MADV_HUGEPAGE) }.is_ok();
         } else {
+            // Explicit, not merely absent: a THP policy of `always` would
+            // otherwise back the buffer with hugepages.
             // SAFETY: as above.
             let _ = unsafe { madvise(ptr, len, MmapAdvise::MADV_NOHUGEPAGE) };
         }
