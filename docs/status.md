@@ -49,17 +49,12 @@ In rough order of value.
 3. **Bandwidth experiment under resctrl.** Mount resctrl, give the
    recorder and the replay a monitoring group, and compare measured
    bandwidth with the model the unprivileged replay uses.
-4. **Named per-field flags.** `run` and `calibrate` take any field
-   through `--set key=value`; there is no `--ipc 1.2`. If wanted,
-   generate one option per entry of `FIELDS` in `src/profile.rs` so
-   the two cannot drift.
-5. **`memory_limit_bytes`.** Accepted, aggregated and carried as a
+4. **`memory_limit_bytes`.** Accepted, aggregated and carried as a
    hint, read by nothing, as the specification's "not enforced"
    allows. A warning when the memory targets exceed it would cost a
    few lines in `src/run.rs`.
-6. **TaoBench** in the experiment set once DCPerf is installed; the
+5. **TaoBench** in the experiment set once DCPerf is installed; the
    harness takes any command.
-7. **License.** None chosen; `Cargo.toml` has no `license` field.
 
 ## Conventions
 

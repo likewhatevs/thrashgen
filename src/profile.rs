@@ -51,6 +51,8 @@ pub struct FieldSpec {
     pub key: &'static str,
     /// Unit, for reports.
     pub unit: &'static str,
+    /// One line for `--help`.
+    pub help: &'static str,
     /// Role in fitting.
     pub role: Role,
     /// Aggregation rule.
@@ -61,42 +63,49 @@ pub struct FieldSpec {
 pub const FIELDS: &[FieldSpec] = &[
     FieldSpec {
         key: "cpu_limit_cores",
+        help: "CPU limit in cores; sets the worker thread count",
         unit: "cores",
         role: Role::Hint,
         agg: Agg::Static,
     },
     FieldSpec {
         key: "memory_limit_bytes",
+        help: "memory limit; noted when the memory targets exceed it",
         unit: "bytes",
         role: Role::Hint,
         agg: Agg::Static,
     },
     FieldSpec {
         key: "cpu_usage_cores",
+        help: "busy cores: CPU time per second of wall clock",
         unit: "cores",
         role: Role::Target,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "cpu_usage_cv_1s",
+        help: "burstiness: coefficient of variation of one-second busy cores",
         unit: "",
         role: Role::Target,
         agg: Agg::PooledCv,
     },
     FieldSpec {
         key: "instructions_per_sec",
+        help: "retired instructions per second",
         unit: "1/s",
         role: Role::Consistency,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "cycles_per_sec",
+        help: "CPU cycles per second",
         unit: "1/s",
         role: Role::Consistency,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "ipc",
+        help: "instructions per cycle",
         unit: "",
         role: Role::Target,
         agg: Agg::RatioOfSums {
@@ -107,12 +116,14 @@ pub const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         key: "l3_misses_per_sec",
+        help: "last-level cache misses per second",
         unit: "1/s",
         role: Role::Consistency,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "l3_mpki",
+        help: "last-level cache misses per thousand instructions",
         unit: "per 1000 instr",
         role: Role::Target,
         agg: Agg::RatioOfSums {
@@ -123,18 +134,21 @@ pub const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         key: "dram_bytes_per_sec",
+        help: "DRAM bandwidth",
         unit: "bytes/s",
         role: Role::Target,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "dtlb_misses_per_sec",
+        help: "data TLB events per second",
         unit: "1/s",
         role: Role::Consistency,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "dtlb_pki",
+        help: "data TLB events per thousand instructions",
         unit: "per 1000 instr",
         role: Role::Target,
         agg: Agg::RatioOfSums {
@@ -145,12 +159,14 @@ pub const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         key: "itlb_misses_per_sec",
+        help: "instruction TLB events per second",
         unit: "1/s",
         role: Role::Consistency,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "itlb_pki",
+        help: "instruction TLB events per thousand instructions",
         unit: "per 1000 instr",
         role: Role::Target,
         agg: Agg::RatioOfSums {
@@ -161,36 +177,42 @@ pub const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         key: "memory_current_bytes",
+        help: "total memory charged to the scope",
         unit: "bytes",
         role: Role::Target,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "anon_bytes",
+        help: "anonymous memory",
         unit: "bytes",
         role: Role::Target,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "pagecache_bytes",
+        help: "page cache",
         unit: "bytes",
         role: Role::Target,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "shmem_bytes",
+        help: "shared memory",
         unit: "bytes",
         role: Role::Target,
         agg: Agg::Mean,
     },
     FieldSpec {
         key: "tlb_host_ipc",
+        help: "IPC of the host the TLB rates came from",
         unit: "",
         role: Role::Provenance,
         agg: Agg::Static,
     },
     FieldSpec {
         key: "tlb_host_minutes",
+        help: "minutes of TLB sampling behind the rates",
         unit: "minutes",
         role: Role::Provenance,
         agg: Agg::Static,

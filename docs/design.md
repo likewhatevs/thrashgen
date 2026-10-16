@@ -225,7 +225,7 @@ non-temporally or dirtied, and fitted against that model.
 | `caps` | none | the tier table for this process |
 | `record` | `--cgroup PATH`, `--pid N`, `--host`, or `-- cmd args`; interval, duration | `samples.jsonl`: a header line with host and CPU identity, then one line per sample |
 | `aggregate` | one or more `samples.jsonl` | `profile.json`: `count`, `cpu`, `avg`, `pctiles`, `provenance` |
-| `run` | `profile.json` with `--pick avg|pNN`, or `--set key=value`; `--calibration` to start from; `--knobs` to fix; scratch dir; duration | load, plus `report.json` and a table on stdout |
+| `run` | `profile.json` with `--pick avg|pNN`, `--set key=value`, or one option per field such as `--ipc`; `--calibration` to start from; `--knobs` to fix; scratch dir; duration | load, plus `report.json` and a table on stdout |
 | `calibrate` | the `run` inputs, on a host with counters; stops once converged | `calibration.json`: knobs, CPU model, threads and tiers |
 | `compare` | a profile and a report, recording or profile | per-field error table, optionally JSON |
 

@@ -24,6 +24,7 @@ thrashgen record --cgroup system.slice/app.service --duration 3600 -o app.jsonl
 thrashgen aggregate app.jsonl -o app.json
 thrashgen run app.json --pick p80 --duration 600 --report replay.json
 thrashgen compare app.json replay.json --pick p80
+thrashgen run --cpu-usage-cores 2 --ipc 1.2 --l3-mpki 5 --duration 300   # targets without a profile
 ```
 
 `run` fits its knobs window by window until every target it can

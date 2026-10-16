@@ -13,7 +13,7 @@ use crate::calibration::Calibration;
 use crate::caps::{Expectations, Facts, Root};
 use crate::compare;
 use crate::loadgen::Knobs;
-use crate::profile::{Pick, Profile, Targets};
+use crate::profile::{FIELDS, Pick, Profile, Role, Targets};
 use crate::record;
 use crate::run;
 use crate::samples::Recording;
@@ -80,9 +80,12 @@ pub struct RunArgs {
     /// Column of the profile to replay: avg or a percentile such as p80
     #[arg(long, default_value = "avg")]
     pick: String,
-    /// Override or add a target, as key=value; repeatable
+    /// Override or add a field, as key=value; repeatable. The field
+    /// options below do the same and win when both name a field
     #[arg(long = "set", value_name = "KEY=VALUE")]
     sets: Vec<String>,
+    #[command(flatten)]
+    fields: FieldArgs,
     /// Stop after this many seconds; default runs until interrupted
     #[arg(long)]
     duration: Option<f64>,
@@ -138,6 +141,65 @@ pub struct CalibrateArgs {
     /// Write the calibration here
     #[arg(short, long)]
     output: PathBuf,
+}
+
+/// One option per row of the field table, `--ipc 1.2` and so on. The
+/// options are generated from [`FIELDS`] so the two cannot drift.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FieldArgs {
+    /// Fields given on the command line, in table order.
+    pub values: Vec<(&'static str, f64)>,
+}
+
+/// The option name of a field: its key with dashes for underscores.
+pub fn flag_name(key: &str) -> String {
+    key.replace('_', "-")
+}
+
+impl clap::FromArgMatches for FieldArgs {
+    fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        let values = FIELDS
+            .iter()
+            .filter_map(|f| matches.get_one::<f64>(f.key).map(|v| (f.key, *v)))
+            .collect();
+        Ok(FieldArgs { values })
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &clap::ArgMatches) -> Result<(), clap::Error> {
+        *self = Self::from_arg_matches(matches)?;
+        Ok(())
+    }
+}
+
+impl clap::Args for FieldArgs {
+    fn augment_args(mut cmd: clap::Command) -> clap::Command {
+        for f in FIELDS {
+            let role = match f.role {
+                Role::Hint => "hint",
+                Role::Target => "target",
+                Role::Consistency => "recorded, not fitted",
+                Role::Provenance => "provenance",
+            };
+            let unit = if f.unit.is_empty() {
+                String::new()
+            } else {
+                format!(", {}", f.unit)
+            };
+            cmd = cmd.arg(
+                clap::Arg::new(f.key)
+                    .long(flag_name(f.key))
+                    .value_name("VALUE")
+                    .help(format!("{} ({role}{unit})", f.help))
+                    .help_heading("Fields")
+                    .value_parser(clap::value_parser!(f64)),
+            );
+        }
+        cmd
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        Self::augment_args(cmd)
+    }
 }
 
 /// Parse a byte count with an optional K, M, G or T suffix (powers of 1024).
@@ -295,11 +357,13 @@ fn run_record(args: RecordArgs) -> Result<()> {
     Ok(())
 }
 
-/// Targets from a profile column plus overrides.
+/// Targets from a profile column, then `--set` overrides, then the
+/// named field options.
 pub fn targets_from(
     profile: Option<&std::path::Path>,
     pick: &str,
     sets: &[String],
+    fields: &[(&str, f64)],
 ) -> Result<Targets> {
     let mut targets = match profile {
         Some(path) => {
@@ -315,15 +379,23 @@ pub fn targets_from(
     for s in sets {
         targets.set_from_arg(s)?;
     }
+    for (key, value) in fields {
+        targets.set(key, *value)?;
+    }
     if targets.is_empty() {
-        bail!("no targets: give a profile or --set key=value");
+        bail!("no targets: give a profile, --set key=value or a field option such as --ipc");
     }
     Ok(targets)
 }
 
 /// Settings and targets from the run arguments.
 fn run_setup(args: &RunArgs) -> Result<(Targets, run::Settings, Vec<String>)> {
-    let targets = targets_from(args.profile.as_deref(), &args.pick, &args.sets)?;
+    let targets = targets_from(
+        args.profile.as_deref(),
+        &args.pick,
+        &args.sets,
+        &args.fields.values,
+    )?;
     let pin = match args.pin.as_str() {
         "auto" => run::Pin::Auto,
         "yes" => run::Pin::Yes,
@@ -417,7 +489,7 @@ fn run_calibrate(args: CalibrateArgs) -> Result<()> {
 }
 
 fn run_compare(args: CompareArgs) -> Result<()> {
-    let expected = targets_from(Some(&args.expected), &args.pick, &[])?;
+    let expected = targets_from(Some(&args.expected), &args.pick, &[], &[])?;
     let actual = compare::load_actual(&args.actual)?;
     let pick: Pick = args.actual_pick.parse()?;
     let values = compare::actual_values(&actual, &pick)?;
@@ -453,18 +525,55 @@ mod tests {
             Some(std::path::Path::new(fixture)),
             "p80",
             &["ipc=9".into()],
+            &[],
         )
         .unwrap();
         assert_eq!(t.get("ipc"), Some(9.0));
         assert_eq!(t.get("cpu_limit_cores"), Some(8.0));
         assert!(
-            targets_from(None, "avg", &[])
+            targets_from(None, "avg", &[], &[])
                 .unwrap_err()
                 .to_string()
                 .contains("no targets")
         );
-        assert!(targets_from(None, "avg", &["nope=1".into()]).is_err());
-        assert!(targets_from(Some(std::path::Path::new("/nonexistent")), "avg", &[]).is_err());
-        assert!(targets_from(Some(std::path::Path::new(fixture)), "p42", &[]).is_err());
+        assert!(targets_from(None, "avg", &["nope=1".into()], &[]).is_err());
+        assert!(targets_from(None, "avg", &[], &[("nope", 1.0)]).is_err());
+        assert!(targets_from(None, "avg", &[], &[("ipc", -1.0)]).is_err());
+        assert!(targets_from(Some(std::path::Path::new("/nonexistent")), "avg", &[], &[]).is_err());
+        assert!(targets_from(Some(std::path::Path::new(fixture)), "p42", &[], &[]).is_err());
+    }
+
+    #[test]
+    fn every_field_is_a_named_option() {
+        for f in FIELDS {
+            let flag = format!("--{}", flag_name(f.key));
+            let cli = Cli::try_parse_from(["thrashgen", "run", &flag, "2.5"]).unwrap();
+            let Command::Run(args) = cli.command else {
+                panic!("not run")
+            };
+            assert_eq!(args.fields.values, vec![(f.key, 2.5)], "{flag}");
+        }
+        let cli = Cli::try_parse_from([
+            "thrashgen",
+            "calibrate",
+            "-o",
+            "c.json",
+            "--ipc",
+            "1",
+            "--set",
+            "ipc=3",
+            "--l3-mpki",
+            "4",
+        ])
+        .unwrap();
+        let Command::Calibrate(args) = cli.command else {
+            panic!("not calibrate")
+        };
+        let t = targets_from(None, "avg", &args.run.sets, &args.run.fields.values).unwrap();
+        assert_eq!(t.get("ipc"), Some(1.0), "a field option wins over --set");
+        assert_eq!(t.get("l3_mpki"), Some(4.0));
+        assert!(Cli::try_parse_from(["thrashgen", "run", "--ipc", "fast"]).is_err());
+        assert!(Cli::try_parse_from(["thrashgen", "run", "--ipc"]).is_err());
+        assert_eq!(flag_name("l3_mpki"), "l3-mpki");
     }
 }
