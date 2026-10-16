@@ -70,6 +70,10 @@ pub struct Settings {
     pub huge: bool,
     /// Fixed knobs: no fitting, just run and report.
     pub knobs: Option<Knobs>,
+    /// Open counters on the workers. Off, the run takes no PMU
+    /// counters, so a recorder watching it has them to itself, and
+    /// every counter target is reported unverified.
+    pub counters: bool,
     /// Knobs to start fitting from, typically a calibration.
     pub initial_knobs: Option<Knobs>,
     /// Stop once two consecutive windows are within tolerance.
@@ -92,6 +96,7 @@ impl Default for Settings {
             code_capacity: 16384,
             huge: true,
             knobs: None,
+            counters: true,
             initial_knobs: None,
             stop_when_converged: false,
         }
@@ -399,16 +404,21 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     };
 
     // Counters, before the workers exist so inherit covers them.
-    let plan = plan(
-        &ScopeInfo::SelfThreads {
-            pinned_cpus: pinned.clone(),
-        },
-        &access,
-        table,
-        &sysfs,
-        &topo,
-    )
-    .context("plan counters")?;
+    let plan = if settings.counters {
+        plan(
+            &ScopeInfo::SelfThreads {
+                pinned_cpus: pinned.clone(),
+            },
+            &access,
+            table,
+            &sysfs,
+            &topo,
+        )
+        .context("plan counters")?
+    } else {
+        notes.push("counters not opened: counter targets are unverified".into());
+        crate::plan::Plan::default()
+    };
     notes.extend(plan.notes.iter().cloned());
     let (mut live, skipped) =
         LiveCounters::open_with(&plan, None, false).context("open counters")?;
@@ -921,6 +931,46 @@ mod tests {
         assert_eq!(generator_pins(Some(vec![4, 5]), 3), Some(vec![4, 5, 4]));
         assert_eq!(generator_pins(None, 3), None);
         assert!(!affinity_cpus().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_run_without_counters_reports_its_targets_unverified() {
+        let mut t = Targets::new();
+        t.set("cpu_usage_cores", 1.0).unwrap();
+        t.set("ipc", 1.0).unwrap();
+        let settings = Settings {
+            counters: false,
+            knobs: Some(Knobs {
+                duty: 0.2,
+                sparse_pages: 1,
+                code_pages: 1,
+                ..Knobs::default()
+            }),
+            main_bytes: Some(1 << 20),
+            sparse_capacity: 1,
+            code_capacity: 1,
+            duration_s: Some(0.3),
+            window_s: Some(0.2),
+            scratch_dir: std::env::temp_dir(),
+            ..Settings::default()
+        };
+        let mut out = Vec::new();
+        let report = run(&t, &settings, &mut out).unwrap();
+        let ipc = report.targets.iter().find(|r| r.key == "ipc").unwrap();
+        assert_eq!(ipc.tier, Tier::Unverified);
+        assert_eq!(ipc.measured, None);
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("counters not opened"))
+        );
+        let cores = report
+            .targets
+            .iter()
+            .find(|r| r.key == "cpu_usage_cores")
+            .unwrap();
+        assert!(cores.measured.is_some(), "busy cores need no counters");
     }
 
     #[test]

@@ -2,11 +2,13 @@
 
 End-to-end evidence that a replay looks like the original to the same
 recorder. Each experiment records a benchmark, aggregates the recording
-into a profile, replays the profile with `run`, records the replay the
-same way once it has had sixty percent of its time to fit, and
-compares the two profiles field by field. The warm-up keeps the search
-for the knobs out of the comparison; what is compared is the replay as
-it holds. Both the
+into a profile, fits knobs to the profile with `run`, then runs the
+knobs it ended on again with `--knobs` and `--no-counters`, records
+that run the same way as the benchmark, and compares the two profiles
+field by field. The second run keeps the search for the knobs out of
+the comparison, and keeps the recorder's counters to itself: a fitting
+run and a recorder attached to it share the core's six counters, and
+the time-multiplexed readings on both sides drifted apart. Both the
 benchmark and the replay run in a transient user scope
 (`systemd-run --user --scope`), so the recorder reads a cgroup with
 the same accounting for each: busy time and memory from the cgroup
@@ -14,11 +16,12 @@ files, counters attached to the scope's threads.
 
 The harness is `experiments/run.sh`; `experiments/all.sh` runs the set
 below and draws the plots with `examples/experiment_plot.rs`. The set
-takes about an hour: each benchmark records for two minutes and each
-replay fits for eight, and TaoBench fills its cache for three minutes
-first. `RECORD_SECS` and `REPLAY_SECS` shorten
-that for a smoke run; the replay needs at least a few windows of the
-length `docs/design.md` section 6 gives to converge. Nothing else
+takes about an hour: each benchmark records for two minutes, each
+replay fits for five and holds for two and a half, and TaoBench fills
+its cache for three minutes first. `FIT_SECS` and `HOLD_SECS` change
+the two replay lengths, and `RECORD_SECS` the recording; a smoke run
+can shorten all three, but the fit needs at least a few windows of
+the length `docs/design.md` section 6 gives to converge. Nothing else
 should run on the host meanwhile: a build alongside a recording shows
 up in its misses and bandwidth.
 
@@ -37,7 +40,8 @@ restore them on exit. Each `<name>` directory holds:
 | file | what |
 | --- | --- |
 | `orig.jsonl`, `orig.json` | recording and profile of the benchmark |
-| `report.json`, `run.log` | the replay's own report and fit log |
+| `report.json`, `run.log`, `knobs.json` | the fitting run's report and log, and the knobs it ended on |
+| `hold-report.json`, `hold.log` | the fixed-knob run that was recorded |
 | `replay.jsonl`, `replay.json` | recording and profile of the replay |
 | `compare.txt`, `compare.json` | field-by-field comparison |
 | `ratio.svg` | replay over original per observable |

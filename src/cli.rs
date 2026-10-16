@@ -125,6 +125,9 @@ pub struct RunArgs {
     /// Fixed knobs as JSON: run them as given, with no fitting
     #[arg(long)]
     knobs: Option<PathBuf>,
+    /// Open no PMU counters, leaving them to a recorder; needs --knobs
+    #[arg(long, requires = "knobs")]
+    no_counters: bool,
     /// Start fitting from a calibration written by `calibrate`
     #[arg(long)]
     calibration: Option<PathBuf>,
@@ -436,6 +439,7 @@ fn run_setup(args: &RunArgs) -> Result<(Targets, run::Settings, Vec<String>)> {
         sparse_capacity: args.sparse_pages,
         code_capacity: args.code_pages,
         huge: !args.no_huge,
+        counters: !args.no_counters,
         knobs,
         initial_knobs,
         stop_when_converged: false,
