@@ -105,7 +105,7 @@ pub struct RunArgs {
     #[arg(long)]
     adaptive: bool,
     /// Fitter passes before holding regardless
-    #[arg(long, default_value_t = 12)]
+    #[arg(long, default_value_t = 15)]
     max_passes: u32,
     /// Worker threads; default derives them from the targets
     #[arg(long)]

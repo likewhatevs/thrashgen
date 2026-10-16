@@ -452,7 +452,7 @@ impl Fitter {
                 if k.dep < 1.0 && (k.chains <= 1.0 || stalled || knobs.ops <= 1) {
                     dep_up(&mut k);
                 } else if lines_can_move {
-                    k.lines = (k.lines * g.max(0.25)).max(1.0);
+                    k.lines = (k.lines * factor(t, v, 1.0)).max(1.0);
                 } else if chains_can_move {
                     chains_move(&mut k);
                 }

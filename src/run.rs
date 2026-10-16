@@ -85,7 +85,7 @@ impl Default for Settings {
             pin: Pin::Auto,
             seed: 1,
             adaptive: false,
-            max_passes: 12,
+            max_passes: 15,
             threads: None,
             main_bytes: None,
             sparse_capacity: 16384,
@@ -107,10 +107,11 @@ pub const DEFAULT_MAIN_BYTES: u64 = 1 << 30;
 /// Smallest main buffer the streams make sense on.
 pub const MIN_MAIN_BYTES: u64 = 1 << 20;
 
-/// Fit window length: ratios settle within 30 s; an explicit request
-/// overrides.
+/// Fit window length: the ratios settle within a few seconds and are
+/// read over the whole window, so 20 s is plenty and buys passes; an
+/// explicit request overrides.
 pub fn window_seconds(requested: Option<f64>) -> f64 {
-    requested.map(|r| r.max(0.1)).unwrap_or(30.0)
+    requested.map(|r| r.max(0.1)).unwrap_or(20.0)
 }
 
 /// Rolling window for busy cores and burstiness: the tolerance needs
@@ -741,7 +742,7 @@ mod tests {
     #[test]
     fn window_lengths() {
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        assert!(close(window_seconds(None), 30.0));
+        assert!(close(window_seconds(None), 20.0));
         assert!(close(window_seconds(Some(2.0)), 2.0));
         assert!(close(window_seconds(Some(0.0)), 0.1));
         assert!(close(long_window_seconds(None, 0.05), 30.0));

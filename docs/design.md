@@ -145,10 +145,10 @@ PRNG, not from loaded data, so misses overlap.
 | `threads` | busy cores | default `cpu_limit_cores`, capped at the CPUs in the affinity mask; each worker pinned to one CPU so uncore attribution is possible |
 | `duty` | busy cores | busy fraction of each 10 ms period |
 | `cv` | burstiness | per-second factor from a lognormal with mean 1 and CV `cv` (σ² = ln(1 + cv²), μ = −σ²/2); seeded from the wall-clock second so all threads move together |
-| `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 0.25 to 4: a fraction mixes the two nearest of 1, 2 and 4, and below one a share of the iterations runs a long-latency division chain; `ops` iterations, kept alive with an empty `asm!` barrier |
+| `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 0.25 to 4: a fraction mixes the two nearest of 1, 2 and 4, and below one a share of the iterations runs a long-latency square-root chain; `ops` iterations, kept alive with an empty `asm!` barrier |
 | `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer, 1/1024 to 64; below one it is the share of accesses that visit at all, so a profile with one miss per hundred thousand instructions needs no hundred thousand ops of compute per access; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
 | `seq` | dTLB rate down and IPC up at equal MPKI | share of visits that continue where the worker's last one ended, inside the worker's own slice of the working set, never crossing a page within a visit; a walk changes page once per 64 lines and lets the prefetcher stream |
-| `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value the previous visit loaded, so the next miss cannot issue until the last one completes |
+| `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value loaded before it, and whose lines are scattered over the page with each waiting for the line before, so no miss can issue until the previous one completes and the prefetcher has no run to follow |
 | `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
 | `wfrac` | write share | fraction of main-stream lines stored to |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
@@ -233,8 +233,9 @@ IPC is short, in which case the sequential share rises instead, or IPC
 is high, in which case dTLB waits. A shrink that cost misses beyond
 what the run length explains is undone and not tried again.
 
-Ratios settle within a 30 s window, the fit window, which `--window`
-can change. Busy cores and burstiness do not: with independent
+Ratios settle within a 20 s window, the fit window, which `--window`
+can change; they are read over the whole window, so the length buys
+passes rather than precision. Busy cores and burstiness do not: with independent
 per-second jitter a window's mean has standard error
 `cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds. They
 are therefore judged on a rolling window of that length, between 30 s

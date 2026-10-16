@@ -51,7 +51,9 @@ pub struct Knobs {
     pub seq: f64,
     /// Share of the random visits whose page, and each line within,
     /// is computed from the value loaded just before it, so no miss
-    /// can issue until the previous one completes, 0 to 1.
+    /// can issue until the previous one completes, 0 to 1. The lines
+    /// of such a visit are scattered over the page rather than run
+    /// together, or the prefetcher would fetch them regardless.
     #[serde(default)]
     pub dep: f64,
     /// Fraction of the main buffer, from its start, that the main and
@@ -386,14 +388,17 @@ fn compute(ops: u32, chains: u8, s: &mut [u64; 4]) {
 /// Lowest `chains` value: every iteration on the slow chain.
 pub const SLOWEST_CHAINS: f64 = 0.25;
 
-/// `ops` iterations of one dependent chain built on integer division,
-/// whose latency is several times a multiply's, for compute IPC below
-/// what a single multiply chain gives.
+/// `ops` iterations of one dependent chain through a floating-point
+/// square root and back, some thirty cycles for a handful of
+/// instructions, for compute IPC well below what a multiply chain
+/// gives. Integer division was faster than its reputation here, since
+/// a small divisor makes the divider quick.
 #[inline(always)]
 fn compute_slow(ops: u32, s: &mut [u64; 4]) {
     let mut a = s[0] | 1;
     for _ in 0..ops {
-        a = a.wrapping_add(0x9E37_79B9_7F4A_7C15) / ((a & 0xff) | 3);
+        let f = ((a >> 1) | 1) as f64;
+        a ^= (f.sqrt() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         // SAFETY: an empty asm block that only pins a register.
         unsafe {
             std::arch::asm!("/* {0} */", inout(reg) a, options(nomem, nostack, preserves_flags))
@@ -618,13 +623,20 @@ impl Worker {
                 )
             };
             let stores = p.stores[extra];
+            // A dependent visit scatters its lines over the page, six
+            // bits of a draw each, so the prefetcher has no run to follow.
+            let mut scatter = if dependent { rng.next() } else { 0 };
             for i in 0..lines {
                 let mut at = page * PAGE + (line0 + i) * LINE;
-                if dependent && i > 0 {
-                    // Each line after the first waits for the one before:
-                    // the term is zero, but neither the compiler nor the
-                    // core can know that until the load returns.
-                    at += (std::hint::black_box(chase) >> 63 >> 1) as usize;
+                if dependent {
+                    at = page * PAGE + (scatter as usize & (PAGE_LINES - 1)) * LINE;
+                    scatter = scatter.rotate_right(6);
+                    if i > 0 {
+                        // Each line waits for the one before: the term is
+                        // zero, but neither the compiler nor the core can
+                        // know that until the load returns.
+                        at += (std::hint::black_box(chase) >> 63 >> 1) as usize;
+                    }
                 }
                 let q = main.wrapping_add(at);
                 // SAFETY: inside the main buffer.
@@ -1155,6 +1167,46 @@ mod tests {
             c.dep.abs() < 1e-9,
             "10000 dependent visits consumed the carry"
         );
+    }
+
+    #[test]
+    fn dependent_visits_scatter_their_lines_within_one_page() {
+        let b = small_buffers();
+        let knobs = Knobs {
+            lines: 4.0,
+            wfrac: 1.0,
+            dep: 1.0,
+            ops: 1,
+            ..Knobs::default()
+        };
+        let w = bench_worker(&b, 0, 1, &knobs);
+        let before = line_words(&b);
+        let pace = Pace::new(&knobs, &w);
+        let mut rng = Draws::seeded(5);
+        let mut state = [1u64, 2, 3, 4];
+        let mut c = Carry::default();
+        let mut chase = 0u64;
+        for _ in 0..200 {
+            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+        }
+        let lines = changed(&before, &b);
+        let pages: std::collections::BTreeSet<usize> =
+            lines.iter().map(|l| l / PAGE_LINES).collect();
+        assert!(
+            pages.len() <= 200 && pages.len() > 150,
+            "{} pages",
+            pages.len()
+        );
+        assert!(
+            lines.len() > 600 && lines.len() <= 800,
+            "{} lines",
+            lines.len()
+        );
+        let runs = lines
+            .windows(2)
+            .filter(|w| w[1] == w[0] + 1 && w[1] / PAGE_LINES == w[0] / PAGE_LINES)
+            .count();
+        assert!(runs < lines.len() / 4, "{runs} adjacent pairs: not a run");
     }
 
     #[test]
