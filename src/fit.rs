@@ -376,6 +376,17 @@ impl Fitter {
         self.passes += 1;
         let d = self.damping;
         let mut k = knobs.clone();
+        // A sequential walk is prefetched, and the L3 miss proxy does not
+        // count prefetched lines, so the walk costs counted misses. It is
+        // only for profiles with misses to spare: none asked for, within
+        // the absolute floor, or not short.
+        let misses_to_spare = match (goal.mpki, m.mpki) {
+            (None, _) => true,
+            (Some(t), Some(v)) => {
+                (v - t).abs() <= absolute_tolerance("l3_mpki") || v >= t * (1.0 - self.tol.ratio)
+            }
+            (Some(_), None) => false,
+        };
 
         if let (Some(t), Some(v)) = (goal.cores, m.cores) {
             k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
@@ -496,7 +507,7 @@ impl Fitter {
                     lines_move(&mut k);
                 } else if chains_can_move {
                     chains_move(&mut k);
-                } else if k.seq < 1.0 {
+                } else if k.seq < 1.0 && misses_to_spare {
                     k.seq = (k.seq.max(SHARE_SEED) * g).clamp(0.0, 1.0);
                 }
             }
@@ -630,14 +641,16 @@ impl Fitter {
                     .is_some_and(|(t, v)| v > t * (1.0 + self.tol.ratio));
                 if k.wset > wset_min && !self.wset_blocked && !ipc_short {
                     k.wset = (k.wset * f).clamp(wset_min, 1.0);
-                } else if !ipc_high {
+                } else if !ipc_high && misses_to_spare {
                     k.seq = (k.seq.max(SHARE_SEED) / f).clamp(0.0, 1.0);
-                } else {
+                } else if ipc_high {
                     // A walk would raise IPC further; fewer visits per
                     // access dilute the events instead, and the ops rule
                     // answers for the misses they take with them.
                     k.lines = (k.lines * f).max(LINES_MIN);
                 }
+                // Otherwise dTLB waits: every lever left would cost misses
+                // the profile cannot spare.
             }
         }
         k.sparse_pages = k.sparse_pages.clamp(1, self.limits.sparse_capacity.max(1));
@@ -910,7 +923,10 @@ mod tests {
         let k2 = f.step(&k1, &measured(1.0), &goal);
         assert_eq!(k2.wset, 1.0, "undone");
         assert!(f.wset_blocked);
-        assert!(k2.seq > 0.0, "dTLB excess goes to the sequential share now");
+        assert_eq!(
+            k2.seq, 0.0,
+            "misses short: the walk would cost them, so dTLB waits"
+        );
         // A shrink that keeps its misses stands.
         let mut g = Fitter::new(4, LIMITS);
         let k1 = g.step(&k0, &measured(10.0), &goal);
