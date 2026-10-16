@@ -2,12 +2,15 @@
 # Record a benchmark, replay its profile, record the replay the same way,
 # and compare. Usage: experiments/run.sh NAME RECORD_SECS REPLAY_SECS -- command...
 # Both the benchmark and the replay run in a transient user scope so the
-# recorder sees a cgroup with the same accounting for each.
+# recorder sees a cgroup with the same accounting for each. OUT_DIR
+# chooses where NAME's outputs go; BENCH_WARMUP_SECS delays the
+# recording for a benchmark that needs to fill up first, and the command
+# must then run that much longer than RECORD_SECS.
 set -euo pipefail
 name=$1 record_secs=$2 replay_secs=$3; shift 3
 [ "$1" = "--" ] && shift
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=$root/experiments/out/$name
+out=${OUT_DIR:-$root/experiments/out}/$name
 bin=${THRASHGEN:-$root/target/release/thrashgen}
 scratch=${SCRATCH_DIR:-/var/tmp}
 interval=${INTERVAL:-5}
@@ -30,6 +33,7 @@ echo "== $name: recording the benchmark for ${record_secs}s"
 run_in_scope "$unit" "$@" > "$out/benchmark.log" 2>&1 &
 bench_pid=$!
 wait_for_scope "$(scope_path "$unit")"
+sleep "${BENCH_WARMUP_SECS:-0}"
 "$bin" record --cgroup "$(scope_path "$unit")" --interval "$interval" --duration "$record_secs" -o "$out/orig.jsonl" 2> "$out/record-orig.log"
 wait $bench_pid || echo "benchmark exited with $? (see benchmark.log)" >&2
 "$bin" aggregate "$out/orig.jsonl" -o "$out/orig.json"

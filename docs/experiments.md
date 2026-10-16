@@ -14,13 +14,24 @@ files, counters attached to the scope's threads.
 
 The harness is `experiments/run.sh`; `experiments/all.sh` runs the set
 below and draws the plots with `examples/experiment_plot.rs`. The set
-takes about forty minutes: each benchmark records for two minutes and
+takes about fifty minutes: each benchmark records for two minutes and
 each replay fits for seven. `RECORD_SECS` and `REPLAY_SECS` shorten
 that for a smoke run; the replay needs at least a few windows of the
 length `docs/design.md` section 6 gives to converge. Nothing else
 should run on the host meanwhile: a build alongside a recording shows
-up in its misses and bandwidth. Outputs land in
-`experiments/out/<name>/`:
+up in its misses and bandwidth.
+
+`MODE` chooses the privilege the whole set runs with, and each mode
+writes under its own directory, `experiments/out/<mode>/<name>/`:
+
+| mode | what changes | why |
+| --- | --- | --- |
+| `user` | nothing: unprivileged, as in a container | the default view |
+| `kernel` | `perf_event_paranoid` set to 1 for the run | both recordings count kernel mode, so kernel-bound work is in the ratios |
+| `resctrl` | resctrl mounted, two monitoring groups chowned to the user | DRAM bandwidth measured for both, instead of modelled for the replay and absent for the original |
+
+The two privileged modes use `sudo` for exactly those settings and
+restore them on exit. Each `<name>` directory holds:
 
 | file | what |
 | --- | --- |
@@ -31,8 +42,9 @@ up in its misses and bandwidth. Outputs land in
 | `ratio.svg` | replay over original per observable |
 | `cores.svg` | busy cores at 1 Hz, benchmark and replay |
 
-`experiments/out/summary.svg` puts every experiment's ratios on one
-chart.
+`experiments/out/<mode>/summary.svg` puts every experiment's ratios on
+one chart. `experiments/publish.sh` copies the small files of every
+mode into `docs/experiments/<mode>/`.
 
 ## The set
 
@@ -42,10 +54,14 @@ chart.
 | stress-ng | `stress-ng --vm 4 --vm-bytes 1G --vm-keep --vm-method write64` | memory-bound writes, page faults, low IPC |
 | sysbench | `sysbench cpu --threads=4 run` | compute-bound, high IPC, almost no misses |
 | fio | `fio --rw=randread --bs=4k --size=1G --numjobs=2 --direct=0` | page cache reads, kernel-mode heavy |
+| taobench | `experiments/taobench.sh`: the TaoBench server with 8 fast threads and 2 GiB of cache, driven by its client in a scope of its own | a key-value server: many threads, TLS, a cache that misses the L3 by design |
 
-TaoBench from Meta's DCPerf is not in the set: it needs its own
-client/server harness and is not packaged on this host. The harness
-takes any command, so adding it is one line once it is installed.
+TaoBench is Meta's DCPerf benchmark of a memcached-derived server.
+`experiments/install_taobench.sh` builds its server and client from
+DCPerf's sources without the rest of DCPerf and installs them under
+`~/.local/share/taobench`; the wrapper sizes the server like DCPerf's
+own runner does, scaled down to a small container's worth of threads,
+and records only the server.
 
 ## Results
 
