@@ -37,3 +37,6 @@ Implemented for Linux on x86_64, with event tables for AMD Zen 3 to 5,
 Intel Skylake-SP through Granite Rapids and Sierra Forest, and Arm
 Neoverse; the code stream (iTLB) is x86_64 only and other
 architectures report it as unavailable.
+
+Licensed under the GNU General Public License, version 2 only; see
+`LICENSE`.
