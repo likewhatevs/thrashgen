@@ -190,6 +190,27 @@ pub fn duty_factor(seed: u64, second: u64, cv: f64) -> f64 {
     dist.sample(&mut rng)
 }
 
+/// Mean and coefficient of variation of the busy fraction a worker
+/// actually runs at `duty` and `cv`: the per-second factor clipped at
+/// full duty, so the mean falls short of `duty` and the CV of the
+/// knob once the clip bites. Sampled from the same distribution the
+/// workers draw from, with a fixed seed, so the fitter can set both
+/// knobs from the model instead of measuring them for minutes.
+pub fn clipped_duty_stats(duty: f64, cv: f64) -> (f64, f64) {
+    if cv <= 0.0 {
+        return (duty.min(1.0), 0.0);
+    }
+    const N: u64 = 4096;
+    let dist = LogNormal::from_mean_cv(1.0, cv).expect("finite cv");
+    let mut rng = Xoshiro256PlusPlus::seed_from_u64(0x5EED);
+    let xs: Vec<f64> = (0..N)
+        .map(|_| (duty * dist.sample(&mut rng)).min(1.0))
+        .collect();
+    let mean = xs.iter().sum::<f64>() / N as f64;
+    let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / N as f64;
+    (mean, if mean > 0.0 { var.sqrt() / mean } else { 0.0 })
+}
+
 /// Executable pages, one tiny stub each at a page-dependent offset.
 /// Stub pages are spaced [`CODE_STRIDE`] pages apart in virtual memory
 /// and the gaps are never touched, so no 16 KiB block is fully mapped
@@ -864,6 +885,19 @@ mod tests {
             );
             assert!(xs.iter().all(|x| *x > 0.0));
         }
+    }
+
+    #[test]
+    fn clipped_duty_statistics() {
+        assert_eq!(clipped_duty_stats(0.3, 0.0), (0.3, 0.0));
+        let (m, c) = clipped_duty_stats(0.3, 0.5);
+        assert!(
+            (m - 0.3).abs() < 0.02 && (c - 0.5).abs() < 0.05,
+            "{m} {c}: barely clipped"
+        );
+        let (m, c) = clipped_duty_stats(0.9, 0.8);
+        assert!(m < 0.85 && c < 0.5, "{m} {c}: the clip bites");
+        assert_eq!(clipped_duty_stats(0.9, 0.8), (m, c), "deterministic");
     }
 
     #[test]

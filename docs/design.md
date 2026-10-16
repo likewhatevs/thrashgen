@@ -183,9 +183,15 @@ busy cores; chains, then ops and lines for IPC and MPKI; ntlines for
 bandwidth; tlbvisits; codevisits; repeat until every verified target is
 within tolerance or the pass limit is hit.
 
-Busy cores, burstiness and IPC move by the factor target / achieved
-raised to a damping exponent of one half, bounded to a quarter and
-four times per pass. Line run length answers to IPC; the chain count,
+Busy cores and burstiness are not fitted within the budget: the duty
+and burstiness knobs are solved from the clipped-lognormal model,
+the per-second factor clipped at full duty, so that the clipped mean
+and CV meet the targets, with the mean given priority when the duty
+cannot carry the CV. They are then judged, and corrected by the
+factor target / achieved, only once the rolling window below holds
+thirty one-second samples. IPC moves by the same factor raised to a
+damping exponent of one half, bounded to a quarter and four times per
+pass. Line run length answers to IPC; the chain count,
 continuous between a quarter and four by mixing the two nearest loops
 within an access, with a division chain below one, moves only once the run length is at its range or a pass
 past half the range has stopped lifting IPC. The ops rule is
@@ -247,9 +253,12 @@ far from where the model said; ops stop at 80k and visits at 10k per
 access, some 200k instructions, so an access never outlasts the busy
 part of a period.
 
-Ratios settle within a 20 s window, the fit window, which `--window`
-can change; they are read over the whole window, so the length buys
-passes rather than precision. Busy cores and burstiness do not: with independent
+The fit has a budget of about thirty seconds. Ratios are read over
+the whole fit window and the workers take new knobs within a period,
+so a 2 s window is enough and fifteen passes fit the budget;
+`--window` changes it. Two consecutive windows at the same knobs are
+averaged for the fitter, so a single noisy window, a neighbour's burst
+or a page-cache refill, moves nothing on its own. Busy cores and burstiness do not: with independent
 per-second jitter a window's mean has standard error
 `cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds. They
 are therefore judged on a rolling window of that length, between 30 s

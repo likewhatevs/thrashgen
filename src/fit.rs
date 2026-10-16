@@ -2,7 +2,7 @@
 //! pure functions of the last window's measurements so they can be
 //! driven against a simulated machine in tests.
 
-use crate::loadgen::{Knobs, SLOWEST_CHAINS};
+use crate::loadgen::{Knobs, SLOWEST_CHAINS, clipped_duty_stats};
 use crate::profile::Targets;
 
 /// What one window measured, in profile units. Fields the tier cannot
@@ -276,9 +276,52 @@ impl Fitter {
         (wanted.ceil().max(1.0) as usize).min(max.max(1))
     }
 
+    /// Duty and burstiness knobs for a busy fraction and CV per worker,
+    /// from the clipped model: the knobs that give the target mean and
+    /// CV once the per-second factor is clipped at full duty. A CV the
+    /// duty cannot carry is approached as far as the clip allows.
+    pub fn duty_cv_knobs(mean: f64, cv: f64) -> (f64, f64) {
+        let mean = mean.clamp(0.0, 1.0);
+        if cv <= 0.0 || mean == 0.0 {
+            return (mean, 0.0);
+        }
+        // Nested bisection, the mean first: at a given knob the clipped
+        // mean rises with duty, so there is a duty for the mean unless
+        // even full duty falls short, in which case the knob clips too
+        // much and must fall; among the knobs that keep the mean in
+        // reach, the clipped CV rises with the knob. A coupled
+        // multiplicative iteration ran away to full duty instead.
+        let duty_for = |knob: f64| -> Option<f64> {
+            if clipped_duty_stats(1.0, knob).0 < mean - 1e-3 {
+                return None;
+            }
+            let (mut lo, mut hi) = (0.0, 1.0);
+            for _ in 0..24 {
+                let mid = 0.5 * (lo + hi);
+                if clipped_duty_stats(mid, knob).0 < mean {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            Some(0.5 * (lo + hi))
+        };
+        let (mut lo, mut hi) = (0.0, 3.0);
+        for _ in 0..24 {
+            let mid = 0.5 * (lo + hi);
+            match duty_for(mid) {
+                Some(duty) if clipped_duty_stats(duty, mid).1 < cv => lo = mid,
+                _ => hi = mid,
+            }
+        }
+        let knob = lo;
+        (duty_for(knob).unwrap_or(1.0), knob)
+    }
+
     /// A first guess from the goal alone.
     pub fn initial_knobs(&self, goal: &Goal, regime: TlbRegime) -> Knobs {
         let cores = goal.cores.unwrap_or(self.threads as f64);
+        let (duty, cv) = Self::duty_cv_knobs(cores / self.threads as f64, goal.cv.unwrap_or(0.0));
         let chains = match goal.ipc {
             Some(i) if i < 0.5 => 0.5,
             Some(i) if i < 1.4 => 1.0,
@@ -293,8 +336,8 @@ impl Fitter {
         .min(self.limits.sparse_capacity)
         .max(1);
         Knobs {
-            duty: (cores / self.threads as f64).clamp(0.0, 1.0),
-            cv: goal.cv.unwrap_or(0.0),
+            duty,
+            cv,
             ops: 64,
             chains,
             lines: 8.0,
@@ -399,19 +442,21 @@ impl Fitter {
                 (Some(_), None) => false,
             };
 
-        if let (Some(t), Some(v)) = (goal.cores, m.cores) {
-            k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
-        }
-        if let Some(t) = goal.cv {
-            // A window needs enough one-second samples before its CV
-            // means anything, and the knob stays within twice the target
-            // so clipping at full duty cannot run it away.
-            k.cv = match m.cv {
-                Some(v) if v > 0.0 && k.cv > 0.0 && m.cv_samples >= MIN_CV_SAMPLES => {
-                    (k.cv * factor(t, v, d)).clamp(0.0, 2.0 * t)
+        // Busy cores and burstiness start from the clipped model and are
+        // corrected from measurement only once the rolling window holds
+        // enough one-second samples to mean anything; the ratios below
+        // settle in seconds, these take the better part of a minute.
+        if m.cv_samples >= MIN_CV_SAMPLES {
+            if let (Some(t), Some(v)) = (goal.cores, m.cores) {
+                k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
+            }
+            if let (Some(t), Some(v)) = (goal.cv, m.cv) {
+                // The knob stays within twice the target so clipping at
+                // full duty cannot run it away.
+                if v > 0.0 && k.cv > 0.0 {
+                    k.cv = (k.cv * factor(t, v, d)).clamp(0.0, 2.0 * t);
                 }
-                _ => t,
-            };
+            }
         }
 
         // Instructions per access now, and the slope against compute
@@ -1241,6 +1286,31 @@ mod tests {
         assert_eq!(factor(2.0, 1.0, 0.5), 2.0f64.sqrt());
         assert_eq!(factor(1.0, 0.0, 0.5), 1.0, "no measurement, no move");
         assert_eq!(factor(100.0, 1.0, 1.0), 4.0, "clamped");
+    }
+
+    #[test]
+    fn duty_and_burstiness_come_from_the_clipped_model() {
+        assert_eq!(Fitter::duty_cv_knobs(0.3, 0.0), (0.3, 0.0));
+        assert_eq!(Fitter::duty_cv_knobs(0.0, 0.5), (0.0, 0.0));
+        let (duty, knob) = Fitter::duty_cv_knobs(0.3, 0.6);
+        let (m, c) = clipped_duty_stats(duty, knob);
+        assert!(
+            (m - 0.3).abs() < 0.01 && (c - 0.6).abs() < 0.03,
+            "{duty} {knob} -> {m} {c}"
+        );
+        assert!(
+            duty > 0.3 && knob > 0.6,
+            "both knobs rise to make up for the clip"
+        );
+        // A CV the mean cannot carry: the mean is kept and the CV falls
+        // as short as it must.
+        for (mean, cv) in [(0.6, 0.6), (0.95, 1.5)] {
+            let (duty, knob) = Fitter::duty_cv_knobs(mean, cv);
+            assert!(duty <= 1.0 && knob <= 3.0);
+            let (m, c) = clipped_duty_stats(duty, knob);
+            assert!((m - mean).abs() < 0.01, "the mean is met: {m} for {mean}");
+            assert!(c < cv && c > 0.0, "the CV falls short: {c} for {cv}");
+        }
     }
 
     #[test]

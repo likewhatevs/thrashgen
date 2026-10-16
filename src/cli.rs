@@ -89,7 +89,7 @@ pub struct RunArgs {
     /// Stop after this many seconds; default runs until interrupted
     #[arg(long)]
     duration: Option<f64>,
-    /// Measurement window in seconds; default sizes it from the burstiness target
+    /// Fit window in seconds; busy cores and burstiness are judged on a longer rolling window
     #[arg(long)]
     window: Option<f64>,
     /// Disk-backed directory for the page-cache and slab files

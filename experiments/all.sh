@@ -12,7 +12,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 mode=${MODE:-user}
-record=${RECORD_SECS:-120} replay=${FIT_SECS:-320}
+record=${RECORD_SECS:-120} replay=${FIT_SECS:-45}
 export OUT_DIR=$root/experiments/out/$mode
 mkdir -p "$OUT_DIR"
 cargo build --release -q --manifest-path "$root/Cargo.toml"

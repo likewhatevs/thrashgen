@@ -112,11 +112,32 @@ pub const DEFAULT_MAIN_BYTES: u64 = 1 << 30;
 /// Smallest main buffer the streams make sense on.
 pub const MIN_MAIN_BYTES: u64 = 1 << 20;
 
-/// Fit window length: the ratios settle within a few seconds and are
-/// read over the whole window, so 20 s is plenty and buys passes; an
-/// explicit request overrides.
+/// Fit window length: the workers take new knobs within a period and
+/// the ratios are read over the whole window, so 2 s is enough and
+/// fifteen passes fit in thirty seconds; an explicit request overrides.
 pub fn window_seconds(requested: Option<f64>) -> f64 {
-    requested.map(|r| r.max(0.1)).unwrap_or(20.0)
+    requested.map(|r| r.max(0.1)).unwrap_or(2.0)
+}
+
+/// Two consecutive windows at the same knobs are one longer window:
+/// their ratios are averaged for the fitter, so a single noisy window,
+/// a neighbour's burst or a page-cache refill, moves nothing on its
+/// own. Busy cores and burstiness come from the rolling window already.
+pub fn blend(now: &Measured, prev: &Measured) -> Measured {
+    let avg = |a: Option<f64>, b: Option<f64>| match (a, b) {
+        (Some(x), Some(y)) => Some(0.5 * (x + y)),
+        (x, _) => x,
+    };
+    Measured {
+        ipc: avg(now.ipc, prev.ipc),
+        mpki: avg(now.mpki, prev.mpki),
+        dram: avg(now.dram, prev.dram),
+        dtlb_pki: avg(now.dtlb_pki, prev.dtlb_pki),
+        itlb_pki: avg(now.itlb_pki, prev.itlb_pki),
+        instructions_per_s: avg(now.instructions_per_s, prev.instructions_per_s),
+        accesses_per_s: 0.5 * (now.accesses_per_s + prev.accesses_per_s),
+        ..now.clone()
+    }
 }
 
 /// Rolling window for busy cores and burstiness: the tolerance needs
@@ -507,6 +528,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut windows: Vec<WindowRow> = Vec::new();
     let mut last_statuses: Vec<Status> = Vec::new();
     let mut last_sample: Option<Sample> = None;
+    let mut prev_window: Option<(Knobs, Measured)> = None;
     let mut converged = false;
     let mut streak = 0u32;
     let mut out_of_tolerance = 0u32;
@@ -570,6 +592,13 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 if cores_long.is_some() {
                     m.cores = cores_long;
                 }
+                let raw = m.clone();
+                if let Some((k, p)) = &prev_window {
+                    if *k == knobs {
+                        m = blend(&m, p);
+                    }
+                }
+                prev_window = Some((knobs.clone(), raw));
                 let statuses = fitter.statuses(&m, &goal);
                 writeln!(
                     progress,
@@ -762,7 +791,7 @@ mod tests {
     #[test]
     fn window_lengths() {
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        assert!(close(window_seconds(None), 20.0));
+        assert!(close(window_seconds(None), 2.0));
         assert!(close(window_seconds(Some(2.0)), 2.0));
         assert!(close(window_seconds(Some(0.0)), 0.1));
         assert!(close(long_window_seconds(None, 0.05), 30.0));
@@ -864,6 +893,51 @@ mod tests {
         t.set("memory_limit_bytes", 0.0).unwrap();
         t.set("memory_current_bytes", 9.0e9).unwrap();
         assert_eq!(memory_limit_note(&t), None, "a zero limit means none");
+    }
+
+    #[test]
+    fn two_windows_at_one_setting_blend() {
+        let a = Measured {
+            ipc: Some(1.0),
+            mpki: Some(4.0),
+            dtlb_pki: Some(2.0),
+            itlb_pki: None,
+            dram: Some(2.0e9),
+            accesses_per_s: 100.0,
+            instructions_per_s: Some(1.0e9),
+            cores: Some(2.0),
+            cv: Some(0.1),
+            cv_samples: 40,
+        };
+        let b = Measured {
+            ipc: Some(2.0),
+            mpki: Some(2.0),
+            dtlb_pki: None,
+            itlb_pki: Some(0.5),
+            dram: Some(4.0e9),
+            accesses_per_s: 300.0,
+            instructions_per_s: Some(3.0e9),
+            cores: Some(9.0),
+            cv: Some(0.9),
+            cv_samples: 39,
+        };
+        let m = blend(&a, &b);
+        assert_eq!((m.ipc, m.mpki, m.dram), (Some(1.5), Some(3.0), Some(3.0e9)));
+        assert_eq!(
+            m.dtlb_pki,
+            Some(2.0),
+            "a side without a value keeps the other"
+        );
+        assert_eq!(m.itlb_pki, None, "nothing now, nothing");
+        assert_eq!(
+            (m.accesses_per_s, m.instructions_per_s),
+            (200.0, Some(2.0e9))
+        );
+        assert_eq!(
+            (m.cores, m.cv, m.cv_samples),
+            (Some(2.0), Some(0.1), 40),
+            "rolling-window fields are the window's own"
+        );
     }
 
     #[test]
