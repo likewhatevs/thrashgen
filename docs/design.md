@@ -221,9 +221,10 @@ whole access scales up, compute and visit share together, so the slow
 chain carries more of the instructions at the same misses per
 instruction; dependent visits last. At one op with MPKI short, run
 length follows the shortfall undamped. IPC short: longer runs, more
-chains, then a sequential walk that lets the prefetcher stream, but
-only with misses to spare, since the L3 miss proxy does not count
-prefetched lines and the walk costs counted misses. Past
+chains, then a sequential walk that lets the prefetcher stream; under
+the L3 miss proxy, which does not count prefetched lines, only with
+misses to spare, none asked for or within the absolute floor, since
+the walk then costs counted misses. Past
 4096 ops per access, with misses not short, the stream is pure
 dilution and run length halves each pass, down to one visit per 1024
 accesses, since every miss dropped saves a thousand instructions of
@@ -232,9 +233,10 @@ visits may then grow to a quarter of the instructions per access. dTLB
 events beyond what the sparse stream can account for, at one per
 visit, come from the main stream's own pages; when they alone exceed
 the target the working set shrinks, by at most half per pass; failing
-that the sequential share rises when IPC is not high and misses are to
-spare, or visits per access fall and dilute the events when IPC is
-high; otherwise dTLB waits.
+that, with misses to spare under the proxy or counted misses
+otherwise, the sequential share rises when IPC is not high, or visits
+per access fall and dilute the events when it is; otherwise dTLB
+waits.
 A shrink that cost misses beyond what the run length explains, with
 misses above their absolute floor, is undone and not tried again. Ops
 move at most fourfold per pass, since the miss proxy counts fewer

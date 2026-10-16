@@ -445,6 +445,9 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         main_pages: buffers.main().len() / PAGE,
     };
     let mut fitter = Fitter::new(threads, limits);
+    fitter.proxy_misses = provenance
+        .get("l3_misses_per_sec")
+        .is_some_and(|p| p.method == Method::Proxy);
     let regime = if vendor == Some(Vendor::Amd) {
         TlbRegime::L2Hit
     } else {

@@ -221,6 +221,10 @@ pub struct Fitter {
     /// Shrinking the working set cost misses once, so the dTLB rule
     /// uses the sequential share from then on.
     pub wset_blocked: bool,
+    /// L3 misses come from the core-side DRAM-fill proxy, which does
+    /// not count prefetched lines, so a sequential walk and diluted
+    /// visits cost counted misses.
+    pub proxy_misses: bool,
     /// Last pass's working set, run length and misses per access, to
     /// tell a shrink that cost misses from one that did not.
     pub last_set: Option<(f64, f64, f64)>,
@@ -254,6 +258,7 @@ impl Fitter {
             last_work_ipa: None,
             last_ipc: None,
             wset_blocked: false,
+            proxy_misses: false,
             last_set: None,
         }
     }
@@ -377,16 +382,18 @@ impl Fitter {
         let d = self.damping;
         let mut k = knobs.clone();
         // A sequential walk is prefetched, and the L3 miss proxy does not
-        // count prefetched lines, so the walk costs counted misses. It is
-        // only for profiles with misses to spare: none asked for, within
-        // the absolute floor, or not short.
-        let misses_to_spare = match (goal.mpki, m.mpki) {
-            (None, _) => true,
-            (Some(t), Some(v)) => {
-                (v - t).abs() <= absolute_tolerance("l3_mpki") || v >= t * (1.0 - self.tol.ratio)
-            }
-            (Some(_), None) => false,
-        };
+        // count prefetched lines, so under the proxy the walk costs
+        // counted misses, and so does diluting visits. There, both are
+        // only for profiles with misses to spare: none asked for, or
+        // within the absolute floor. "Not short" was not enough: at
+        // target, the first step of the walk took a third of the misses
+        // away and the fit unravelled.
+        let misses_to_spare = !self.proxy_misses
+            || match (goal.mpki, m.mpki) {
+                (None, _) => true,
+                (Some(t), Some(v)) => (v - t).abs() <= absolute_tolerance("l3_mpki"),
+                (Some(_), None) => false,
+            };
 
         if let (Some(t), Some(v)) = (goal.cores, m.cores) {
             k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
@@ -641,12 +648,11 @@ impl Fitter {
                     .is_some_and(|(t, v)| v > t * (1.0 + self.tol.ratio));
                 if k.wset > wset_min && !self.wset_blocked && !ipc_short {
                     k.wset = (k.wset * f).clamp(wset_min, 1.0);
-                } else if !ipc_high && misses_to_spare {
+                } else if misses_to_spare && !ipc_high {
                     k.seq = (k.seq.max(SHARE_SEED) / f).clamp(0.0, 1.0);
-                } else if ipc_high {
+                } else if misses_to_spare {
                     // A walk would raise IPC further; fewer visits per
-                    // access dilute the events instead, and the ops rule
-                    // answers for the misses they take with them.
+                    // access dilute the events instead.
                     k.lines = (k.lines * f).max(LINES_MIN);
                 }
                 // Otherwise dTLB waits: every lever left would cost misses
@@ -898,8 +904,48 @@ mod tests {
     }
 
     #[test]
+    fn under_the_proxy_a_walk_waits_for_misses_to_spare() {
+        let goal = Goal {
+            ipc: Some(0.22),
+            mpki: Some(20.0),
+            dtlb_pki: Some(0.003),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 1,
+            chains: 0.5,
+            lines: 9.0,
+            dep: 0.5,
+            wset: 0.125,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(0.20),
+            mpki: Some(20.1),
+            dtlb_pki: Some(0.28),
+            accesses_per_s: 1.0e7,
+            instructions_per_s: Some(3.8e9),
+            ..Measured::default()
+        };
+        let mut proxy = Fitter::new(4, LIMITS);
+        proxy.proxy_misses = true;
+        proxy.wset_blocked = true;
+        let next = proxy.step(&k, &m, &goal);
+        assert_eq!(next.seq, 0.0, "{next:?}");
+        assert!(next.lines >= 9.0, "{next:?}");
+        let mut counted = Fitter::new(4, LIMITS);
+        counted.wset_blocked = true;
+        let next = counted.step(&k, &m, &goal);
+        assert!(
+            next.seq > 0.0,
+            "with counted misses the walk is allowed: {next:?}"
+        );
+    }
+
+    #[test]
     fn a_shrink_that_costs_misses_is_undone_and_blocked() {
         let mut f = Fitter::new(4, LIMITS);
+        f.proxy_misses = true;
         let goal = Goal {
             mpki: Some(10.0),
             dtlb_pki: Some(0.0),
