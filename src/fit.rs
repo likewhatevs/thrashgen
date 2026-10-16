@@ -388,6 +388,10 @@ impl Fitter {
         // within the absolute floor. "Not short" was not enough: at
         // target, the first step of the walk took a third of the misses
         // away and the fit unravelled.
+        let mpki_met = goal
+            .mpki
+            .zip(m.mpki)
+            .is_some_and(|(t, v)| (v - t).abs() <= absolute_tolerance("l3_mpki"));
         let misses_to_spare = !self.proxy_misses
             || match (goal.mpki, m.mpki) {
                 (None, _) => true,
@@ -425,6 +429,24 @@ impl Fitter {
                     slope = s;
                 }
             }
+        }
+        // A shrink of the working set that cost misses, beyond what the
+        // run length explains and above the absolute floor, is undone and
+        // not tried again, and the window it spoiled moves nothing else:
+        // the other rules would chase the misses it took away.
+        let mpa_now = m.mpki.zip(ipa).map(|(v, ipa)| v / 1000.0 * ipa);
+        if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa)) = (self.last_set, mpa_now) {
+            if knobs.wset < wset_prev
+                && !mpki_met
+                && mpa < 0.6 * mpa_prev * (knobs.lines / lines_prev.max(1.0))
+            {
+                self.wset_blocked = true;
+                k.wset = wset_prev;
+                return k;
+            }
+        }
+        if let Some(mpa) = mpa_now {
+            self.last_set = Some((knobs.wset, knobs.lines, mpa));
         }
         if let Some(ipa) = ipa {
             self.last_work_ipa = Some((work_now, ipa));
@@ -531,10 +553,6 @@ impl Fitter {
         // thousands, so the ops rule stays quiet there. The relative
         // tolerance does not quiet it: a few percent of MPKI is a few
         // percent of bandwidth too.
-        let mpki_met = goal
-            .mpki
-            .zip(m.mpki)
-            .is_some_and(|(t, v)| (v - t).abs() <= absolute_tolerance("l3_mpki"));
         match (goal.mpki, m.mpki, ipa) {
             (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 && !mpki_met => {
                 // Misses per access follow the run length the IPC rule just
@@ -608,23 +626,6 @@ impl Fitter {
         k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits);
         k.codevisits = rate_rule(goal.itlb_pki, m.itlb_pki, k.codevisits);
 
-        // A shrink of the working set that cost misses, beyond what the
-        // run length explains, is undone and not tried again: misses
-        // have priority, and dTLB falls to the sequential share.
-        let mpa_now = m.mpki.zip(ipa).map(|(v, ipa)| v / 1000.0 * ipa);
-        if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa)) = (self.last_set, mpa_now) {
-            // Misses within the absolute floor are noise, not a cost.
-            if knobs.wset < wset_prev
-                && !mpki_met
-                && mpa < 0.6 * mpa_prev * (knobs.lines / lines_prev.max(1.0))
-            {
-                k.wset = wset_prev;
-                self.wset_blocked = true;
-            }
-        }
-        if let Some(mpa) = mpa_now {
-            self.last_set = Some((knobs.wset, knobs.lines, mpa));
-        }
         // The main stream's own pages cause dTLB events the sparse stream
         // cannot take back. When they alone exceed the target, touch
         // fewer pages, or walk them in order when the set cannot shrink
@@ -970,7 +971,17 @@ mod tests {
         assert_eq!(k2.wset, 1.0, "undone");
         assert!(f.wset_blocked);
         assert_eq!(
-            k2.seq, 0.0,
+            Knobs {
+                wset: k1.wset,
+                ..k2.clone()
+            },
+            k1,
+            "the spoiled window moves nothing else"
+        );
+        let k3 = f.step(&k2, &measured(8.0), &goal);
+        assert_eq!(k3.wset, 1.0, "blocked");
+        assert_eq!(
+            k3.seq, 0.0,
             "misses short: the walk would cost them, so dTLB waits"
         );
         // A shrink that keeps its misses stands.

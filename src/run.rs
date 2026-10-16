@@ -499,6 +499,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut last_sample: Option<Sample> = None;
     let mut converged = false;
     let mut streak = 0u32;
+    let mut out_of_tolerance = 0u32;
     let window_len = Duration::from_secs_f64(window_s);
     let deadline = settings
         .duration_s
@@ -597,8 +598,10 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         .collect(),
                 });
                 streak = if Fitter::converged(&statuses) {
+                    out_of_tolerance = 0;
                     streak + 1
                 } else {
+                    out_of_tolerance += 1;
                     0
                 };
                 converged = streak >= CONVERGED_WINDOWS;
@@ -637,7 +640,11 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     }
                 }
                 last_sample = Some(sample);
-                if fitting && !stop && (settings.adaptive || streak == 0) {
+                // After convergence a single window out of tolerance is
+                // noise, often the recorder attaching; the fit moves again
+                // only when two in a row are out.
+                let refit = streak == 0 && (!converged || out_of_tolerance >= CONVERGED_WINDOWS);
+                if fitting && !stop && (settings.adaptive || refit) {
                     if fitter.passes < settings.max_passes {
                         let next = fitter.step(&knobs, &m, &goal);
                         if next != knobs {

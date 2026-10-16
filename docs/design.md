@@ -238,7 +238,9 @@ otherwise, the sequential share rises when IPC is not high, or visits
 per access fall and dilute the events when it is; otherwise dTLB
 waits.
 A shrink that cost misses beyond what the run length explains, with
-misses above their absolute floor, is undone and not tried again. Ops
+misses above their absolute floor, is undone and not tried again, and
+the window it spoiled moves nothing else, since the other rules would
+chase the misses it took away. Ops
 move at most fourfold per pass, since the miss proxy counts fewer
 misses once compute gives the prefetcher time and a large step lands
 far from where the model said; ops stop at 80k and visits at 10k per
@@ -252,8 +254,10 @@ per-second jitter a window's mean has standard error
 `cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds. They
 are therefore judged on a rolling window of that length, between 30 s
 and 300 s, while the ratios are fitted every fit window. Convergence is declared after two consecutive windows
-within tolerance; the generator then holds and keeps reporting, or
-keeps adjusting with `--adaptive`. After the pass limit it holds
+within tolerance; the generator then holds and keeps reporting, and
+moves again only after two consecutive windows out of tolerance, so a
+single noisy window, often the one in which a recorder attaches, does
+not undo the fit; with `--adaptive` it keeps adjusting. After the pass limit it holds
 regardless and says so.
 
 Targets without a verified or proxy measurement take their knobs from
