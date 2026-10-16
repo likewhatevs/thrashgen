@@ -581,6 +581,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     seconds,
                     pass: fitter.passes,
                     knobs: knobs.clone(),
+                    accesses_per_s: aps,
+                    instructions_per_access: m.instructions_per_access(),
                     values: statuses
                         .iter()
                         .map(|s| WindowValue {

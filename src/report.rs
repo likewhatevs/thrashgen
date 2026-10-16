@@ -90,6 +90,12 @@ pub struct WindowRow {
     pub knobs: Knobs,
     /// Every target's value.
     pub values: Vec<WindowValue>,
+    /// Generator accesses per second, from the worker counters.
+    #[serde(default)]
+    pub accesses_per_s: f64,
+    /// Instructions per access, when the counters allow.
+    #[serde(default)]
+    pub instructions_per_access: Option<f64>,
 }
 
 /// A memory component: requested and finally measured.
@@ -314,6 +320,8 @@ mod tests {
                 measured: Some(4.01e9),
             }],
             windows: vec![WindowRow {
+                accesses_per_s: 0.0,
+                instructions_per_access: None,
                 end_s: 30.0,
                 seconds: 30.0,
                 pass: 1,

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use nix::sched::{CpuSet, sched_setaffinity};
 use nix::sys::mman::{ProtFlags, mprotect};
 use nix::unistd::Pid;
-use rand::{RngExt, SeedableRng};
+use rand::SeedableRng;
 use rand_distr::{Distribution, LogNormal};
 use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
@@ -40,8 +40,9 @@ pub struct Knobs {
     /// dependent chain instead, so compute IPC can fall below the
     /// single-chain floor.
     pub chains: f64,
-    /// Consecutive lines touched per main-stream visit, 1 to 64; a
-    /// fraction alternates between the two nearest counts.
+    /// Consecutive lines touched per main-stream visit, up to 64; a
+    /// fraction alternates between the two nearest counts, and below
+    /// one it is the share of accesses that visit at all.
     pub lines: f64,
     /// Share of main-stream visits that continue where the worker's
     /// last one ended instead of jumping to a random page, 0 to 1;
@@ -136,9 +137,9 @@ impl Knobs {
                 self.chains
             )));
         }
-        if !(self.lines >= 1.0 && self.lines <= (PAGE / LINE) as f64) {
+        if !(self.lines > 0.0 && self.lines <= (PAGE / LINE) as f64) {
             return Err(KnobError(format!(
-                "lines must be 1..={}, got {}",
+                "lines must be above 0 and at most {}, got {}",
                 PAGE / LINE,
                 self.lines
             )));
@@ -404,24 +405,118 @@ fn compute_slow(ops: u32, s: &mut [u64; 4]) {
 /// `ops` iterations split between the two chain counts nearest to
 /// `chains`, so the knob is continuous: 1.5 runs half the iterations
 /// with one chain and half with two; 0.5 runs a third of them on the
-/// slow chain.
-#[inline(always)]
-fn compute_mixed(ops: u32, chains: f64, s: &mut [u64; 4]) {
-    if chains < 1.0 {
-        let slow_frac = ((1.0 - chains) / (1.0 - SLOWEST_CHAINS)).clamp(0.0, 1.0);
-        let slow_ops = (f64::from(ops) * slow_frac).round() as u32;
-        compute(ops - slow_ops, 1, s);
-        compute_slow(slow_ops, s);
-        return;
+/// slow chain. Worked out once per period, not per access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ComputeSplit {
+    lo: (u32, u8),
+    hi: (u32, u8),
+    slow: u32,
+}
+
+impl ComputeSplit {
+    fn of(ops: u32, chains: f64) -> ComputeSplit {
+        if chains < 1.0 {
+            let slow_frac = ((1.0 - chains) / (1.0 - SLOWEST_CHAINS)).clamp(0.0, 1.0);
+            let slow = (f64::from(ops) * slow_frac).round() as u32;
+            return ComputeSplit {
+                lo: (ops - slow, 1),
+                hi: (0, 2),
+                slow,
+            };
+        }
+        let (lo, hi, frac) = if chains <= 2.0 {
+            (1u8, 2u8, chains - 1.0)
+        } else {
+            (2u8, 4u8, (chains - 2.0) / 2.0)
+        };
+        let hi_ops = (f64::from(ops) * frac.clamp(0.0, 1.0)).round() as u32;
+        ComputeSplit {
+            lo: (ops - hi_ops, lo),
+            hi: (hi_ops, hi),
+            slow: 0,
+        }
     }
-    let (lo, hi, frac) = if chains <= 2.0 {
-        (1u8, 2u8, chains - 1.0)
-    } else {
-        (2u8, 4u8, (chains - 2.0) / 2.0)
-    };
-    let hi_ops = (f64::from(ops) * frac.clamp(0.0, 1.0)).round() as u32;
-    compute(ops - hi_ops, lo, s);
-    compute(hi_ops, hi, s);
+
+    #[inline(always)]
+    fn run(&self, s: &mut [u64; 4]) {
+        compute(self.lo.0, self.lo.1, s);
+        if self.hi.0 > 0 {
+            compute(self.hi.0, self.hi.1, s);
+        }
+        if self.slow > 0 {
+            compute_slow(self.slow, s);
+        }
+    }
+}
+
+#[cfg(test)]
+fn compute_mixed(ops: u32, chains: f64, s: &mut [u64; 4]) {
+    ComputeSplit::of(ops, chains).run(s)
+}
+
+/// The streams' random source: SplitMix64, one word of state that
+/// stays in a register, a few instructions a draw.
+#[derive(Clone, Copy, Debug)]
+struct Draws(u64);
+
+impl Draws {
+    fn seeded(seed: u64) -> Draws {
+        Draws(seed)
+    }
+
+    #[inline(always)]
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+}
+
+/// `x` scaled into `0..n` from a uniform 32-bit value: a multiply and
+/// a shift, where a modulus would be a division per access.
+#[inline(always)]
+fn scale32(x: u32, n: usize) -> usize {
+    ((u64::from(x) * n as u64) >> 32) as usize
+}
+
+/// What the knobs mean for the hot path, worked out once per period
+/// so an access does no division, rounding or float-to-int work.
+#[derive(Debug)]
+struct Pace {
+    pages: usize,
+    slice_start: usize,
+    slice_lines: usize,
+    lines_whole: usize,
+    lines_fract: f64,
+    /// Stores for `lines_whole` lines and for one more.
+    stores: [usize; 2],
+    compute: ComputeSplit,
+    /// Accesses between clock checks: a batch of cheap accesses, or a
+    /// single one heavy with compute, which would otherwise overrun
+    /// the busy part of the period.
+    batch: u32,
+}
+
+impl Pace {
+    fn new(k: &Knobs, w: &Worker) -> Pace {
+        let (pages, slice_start, slice_pages) = w.geometry(k.wset);
+        let whole = k.lines as usize;
+        Pace {
+            pages,
+            slice_start,
+            slice_lines: slice_pages * PAGE_LINES,
+            lines_whole: whole,
+            lines_fract: k.lines - whole as f64,
+            stores: [
+                (k.wfrac * whole as f64).round() as usize,
+                (k.wfrac * (whole + 1) as f64).round() as usize,
+            ],
+            compute: ComputeSplit::of(k.ops, k.chains),
+            batch: if k.ops >= 256 { 1 } else { BATCH },
+        }
+    }
 }
 
 struct Worker {
@@ -446,8 +541,6 @@ struct Carry {
     dep: f64,
     /// Line index of the sequential walk within the worker's slice.
     cursor: usize,
-    /// The value the last main-stream line loaded, for dependent visits.
-    chase: u64,
 }
 
 /// Lines per page.
@@ -465,80 +558,102 @@ impl Worker {
         (pages, start, slice.min(pages - start))
     }
 
-    /// One access: the streams, then compute.
+    /// One access: the streams, then compute. `chase` is the value the
+    /// last main-stream line loaded, passed by value and returned so it
+    /// stays in a register and reaches memory only on a dependent visit.
     #[inline(always)]
-    fn access(&self, k: &Knobs, rng: &mut Xoshiro256PlusPlus, state: &mut [u64; 4], c: &mut Carry) {
+    fn access(
+        &self,
+        k: &Knobs,
+        p: &Pace,
+        rng: &mut Draws,
+        state: &mut [u64; 4],
+        c: &mut Carry,
+        mut chase: u64,
+    ) -> u64 {
         let main = self.buffers.main.as_ptr();
-        let (pages, slice_start, slice_pages) = self.geometry(k.wset);
-        c.lines += k.lines.fract();
-        let mut lines = k.lines as usize;
-        if c.lines >= 1.0 {
+        c.lines += p.lines_fract;
+        let extra = usize::from(c.lines >= 1.0);
+        if extra == 1 {
             c.lines -= 1.0;
-            lines += 1;
         }
-        c.seq += k.seq;
-        let (page, line0) = if c.seq >= 1.0 {
-            // Walk the slice line by line, never across a page within
-            // one visit, wrapping at the slice end.
-            c.seq -= 1.0;
-            if c.cursor % PAGE_LINES + lines > PAGE_LINES {
-                c.cursor = (c.cursor / PAGE_LINES + 1) * PAGE_LINES;
-            }
-            if c.cursor >= slice_pages * PAGE_LINES {
-                c.cursor = 0;
-            }
-            let at = (slice_start + c.cursor / PAGE_LINES, c.cursor % PAGE_LINES);
-            c.cursor += lines;
-            at
-        } else {
-            c.dep += k.dep;
-            let draw = rng.random::<u64>();
-            let page = if c.dep >= 1.0 {
-                // The XOR makes the address depend on the previous load
-                // without changing its distribution.
-                c.dep -= 1.0;
-                (draw ^ c.chase) as usize % pages
+        let lines = p.lines_whole + extra;
+        if lines > 0 {
+            c.seq += k.seq;
+            let (page, line0) = if c.seq >= 1.0 {
+                // Walk the slice line by line, never across a page within
+                // one visit, wrapping at the slice end.
+                c.seq -= 1.0;
+                if c.cursor % PAGE_LINES + lines > PAGE_LINES {
+                    c.cursor = (c.cursor / PAGE_LINES + 1) * PAGE_LINES;
+                }
+                if c.cursor >= p.slice_lines {
+                    c.cursor = 0;
+                }
+                let at = (p.slice_start + c.cursor / PAGE_LINES, c.cursor % PAGE_LINES);
+                c.cursor += lines;
+                at
             } else {
-                draw as usize % pages
+                c.dep += k.dep;
+                let mut draw = rng.next();
+                if c.dep >= 1.0 {
+                    // The XOR makes the address depend on the previous
+                    // load without changing its distribution. The barrier
+                    // keeps this a branch: folded into a conditional
+                    // move, every visit would carry the dependency.
+                    c.dep -= 1.0;
+                    draw ^= std::hint::black_box(chase);
+                }
+                // The offset leaves room for the longer of the two run
+                // lengths so the address depends on the draw alone. Made
+                // to depend on the carry, which lives in memory, it waited
+                // on a store that could not commit before the previous
+                // miss returned, and consecutive misses stopped
+                // overlapping: 123 ns an access against 47 on Zen 4.
+                (
+                    scale32((draw >> 32) as u32, p.pages),
+                    scale32(draw as u32, PAGE_LINES - p.lines_whole),
+                )
             };
-            (page, rng.random_range(0..=(PAGE_LINES - lines)))
-        };
-        let stores = (k.wfrac * lines as f64).round() as usize;
-        for i in 0..lines {
-            let p = main.wrapping_add(page * PAGE + (line0 + i) * LINE);
-            // SAFETY: inside the main buffer.
-            unsafe {
-                let v = std::ptr::read_volatile(p.cast::<u64>());
-                c.chase = v;
-                state[0] ^= v;
-                if i < stores {
-                    std::ptr::write_volatile(p.cast::<u64>(), v.wrapping_add(1));
+            let stores = p.stores[extra];
+            for i in 0..lines {
+                let q = main.wrapping_add(page * PAGE + (line0 + i) * LINE);
+                // SAFETY: inside the main buffer.
+                unsafe {
+                    let v = std::ptr::read_volatile(q.cast::<u64>());
+                    chase = v;
+                    state[0] ^= v;
+                    if i < stores {
+                        std::ptr::write_volatile(q.cast::<u64>(), v.wrapping_add(1));
+                    }
                 }
             }
         }
         c.nt += k.ntlines;
         while c.nt >= 1.0 {
-            let page = rng.random_range(0..pages);
-            let line = rng.random_range(0..PAGE_LINES);
+            let draw = rng.next();
+            let page = scale32((draw >> 32) as u32, p.pages);
+            let line = scale32(draw as u32, PAGE_LINES);
             nt_store_line(main.wrapping_add(page * PAGE + line * LINE), state[1]);
             c.nt -= 1.0;
         }
         let sparse = self.buffers.sparse.as_ptr();
         c.tlb += k.tlbvisits;
         while c.tlb >= 1.0 {
-            let page = rng.random_range(0..k.sparse_pages);
-            let p = sparse.wrapping_add(page * PAGE + (page % PAGE_LINES) * LINE);
+            let page = scale32((rng.next() >> 32) as u32, k.sparse_pages);
+            let q = sparse.wrapping_add(page * PAGE + (page % PAGE_LINES) * LINE);
             // SAFETY: inside the sparse buffer.
-            state[2] ^= unsafe { std::ptr::read_volatile(p.cast::<u64>()) };
+            state[2] ^= unsafe { std::ptr::read_volatile(q.cast::<u64>()) };
             c.tlb -= 1.0;
         }
         c.code += k.codevisits;
         while c.code >= 1.0 {
-            let page = rng.random_range(0..k.code_pages);
+            let page = scale32((rng.next() >> 32) as u32, k.code_pages);
             state[3] = self.buffers.code.call(page, state[3]);
             c.code -= 1.0;
         }
-        compute_mixed(k.ops, k.chains, state);
+        p.compute.run(state);
+        chase
     }
 
     fn run(self, cpu: Option<u32>) {
@@ -551,14 +666,15 @@ impl Worker {
                 let _ = sched_setaffinity(Pid::from_raw(0), &set);
             }
         }
-        let mut rng =
-            Xoshiro256PlusPlus::seed_from_u64(self.seed.wrapping_add(self.index as u64 + 1));
+        let mut rng = Draws::seeded(self.seed.wrapping_add(self.index as u64 + 1));
         let mut state = [self.seed | 1, 2, 3, 4];
         let mut carry = Carry::default();
+        let mut chase = 0u64;
         let mut last_second = u64::MAX;
         let mut factor = 1.0;
         while !self.stop.load(Ordering::Relaxed) {
             let k = self.knobs.read().expect("knobs lock").clone();
+            let pace = Pace::new(&k, &self);
             let period = Duration::from_millis(k.period_ms);
             let start = Instant::now();
             let second = crate::record::unix_now() as u64;
@@ -568,16 +684,12 @@ impl Worker {
             }
             let duty = (k.duty * factor).min(1.0);
             let busy_until = start + period.mul_f64(duty);
-            // Clock checks are amortized over a batch of cheap accesses;
-            // an access heavy with compute gets its own, or one batch
-            // would overrun the busy part of the period.
-            let batch = if k.ops >= 256 { 1 } else { BATCH };
             let mut accesses = 0u64;
             while Instant::now() < busy_until {
-                for _ in 0..batch {
-                    self.access(&k, &mut rng, &mut state, &mut carry);
+                for _ in 0..pace.batch {
+                    chase = self.access(&k, &pace, &mut rng, &mut state, &mut carry, chase);
                 }
-                accesses += u64::from(batch);
+                accesses += u64::from(pace.batch);
             }
             let busy = start.elapsed();
             self.stats.accesses.fetch_add(accesses, Ordering::Relaxed);
@@ -765,6 +877,12 @@ mod tests {
         assert!(bad(|k| k.wset = f64::NAN).0.contains("wset"));
         assert!(bad(|k| k.lines = 0.0).0.contains("lines"));
         assert!(bad(|k| k.lines = 65.0).0.contains("lines"));
+        Knobs {
+            lines: 1.0 / 1024.0,
+            ..ok.clone()
+        }
+        .validate(&b)
+        .unwrap();
         assert!(bad(|k| k.lines = f64::NAN).0.contains("lines"));
         assert!(bad(|k| k.sparse_pages = 65).0.contains("sparse_pages"));
         assert!(bad(|k| k.sparse_pages = 0).0.contains("sparse_pages"));
@@ -949,17 +1067,24 @@ mod tests {
         assert_eq!(w.geometry(0.5), (512, 128, 128));
         assert_eq!(w.geometry(1.0), (1024, 256, 256));
         assert_eq!(bench_worker(&b, 3, 4, &knobs).geometry(0.001), (1, 0, 1));
+        let pace = Pace::new(&knobs, &w);
+        assert_eq!(
+            (pace.pages, pace.slice_start, pace.slice_lines, pace.stores),
+            (512, 128, 128 * 64, [3, 4])
+        );
         assert_eq!(
             bench_worker(&b, 5, 8, &knobs).geometry(3.0 / 1024.0),
             (3, 2, 1),
             "more workers than pages share pages"
         );
         let before = line_words(&b);
-        let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
+        let pace = Pace::new(&knobs, &w);
+        let mut rng = Draws::seeded(1);
         let mut state = [1u64, 2, 3, 4];
         let mut c = Carry::default();
+        let mut chase = 0u64;
         for _ in 0..22 {
-            w.access(&knobs, &mut rng, &mut state, &mut c);
+            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         // 21 visits of 3 lines fill lines 0..63 of page 128; the 22nd would
         // straddle, so it moved to page 129.
@@ -971,7 +1096,7 @@ mod tests {
         assert_eq!(c.cursor, PAGE_LINES + 3);
         // The walk wraps at the slice end: 128 pages of 21 visits each.
         for _ in 22..(128 * 21 + 1) {
-            w.access(&knobs, &mut rng, &mut state, &mut c);
+            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         assert_eq!(c.cursor, 3, "back at the slice start");
         let lines = changed(&before, &b);
@@ -996,11 +1121,13 @@ mod tests {
         };
         let w = bench_worker(&b, 0, 1, &knobs);
         let before = line_words(&b);
-        let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
+        let pace = Pace::new(&knobs, &w);
+        let mut rng = Draws::seeded(7);
         let mut state = [1u64, 2, 3, 4];
         let mut c = Carry::default();
+        let mut chase = 0u64;
         for _ in 0..20_000 {
-            w.access(&knobs, &mut rng, &mut state, &mut c);
+            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         let lines = changed(&before, &b);
         assert!(lines.len() > 10_000, "{}", lines.len());
@@ -1014,10 +1141,71 @@ mod tests {
         );
         // Every other visit was dependent: its page came from the draw
         // XOR the value loaded before, which the stores had made non-zero.
-        assert!(c.chase != 0, "the last load saw a stored value");
+        assert!(chase != 0, "the last load saw a stored value");
         assert!(
             c.dep.abs() < 1e-9,
             "10000 dependent visits consumed the carry"
+        );
+    }
+
+    #[test]
+    fn a_run_length_below_one_visits_on_that_share_of_accesses() {
+        let b = small_buffers();
+        let knobs = Knobs {
+            lines: 0.25,
+            wfrac: 1.0,
+            ops: 1,
+            ..Knobs::default()
+        };
+        let w = bench_worker(&b, 0, 1, &knobs);
+        let before = line_words(&b);
+        let pace = Pace::new(&knobs, &w);
+        assert_eq!(
+            (pace.lines_whole, pace.lines_fract, pace.stores),
+            (0, 0.25, [0, 1])
+        );
+        let mut rng = Draws::seeded(3);
+        let mut state = [1u64, 2, 3, 4];
+        let mut c = Carry::default();
+        let mut chase = 0u64;
+        for _ in 0..40 {
+            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+        }
+        assert_eq!(
+            changed(&before, &b).len(),
+            10,
+            "one line every fourth access"
+        );
+        assert_eq!(scale32(u32::MAX, 10), 9);
+        let mut d = Draws::seeded(1);
+        let xs: Vec<u64> = (0..4).map(|_| d.next()).collect();
+        assert!(xs.windows(2).all(|w| w[0] != w[1]));
+        assert_eq!(Draws::seeded(1).next(), xs[0], "deterministic");
+        assert_eq!(scale32(0, 10), 0);
+        assert_eq!(scale32(1 << 31, 10), 5);
+        assert_eq!(
+            ComputeSplit::of(100, 0.5),
+            ComputeSplit {
+                lo: (33, 1),
+                hi: (0, 2),
+                slow: 67
+            }
+        );
+        assert_eq!(
+            ComputeSplit::of(100, 3.0),
+            ComputeSplit {
+                lo: (50, 2),
+                hi: (50, 4),
+                slow: 0
+            }
+        );
+        assert_eq!(
+            ComputeSplit::of(7, 1.0),
+            ComputeSplit {
+                lo: (7, 1),
+                hi: (0, 2),
+                slow: 0
+            }
         );
     }
 

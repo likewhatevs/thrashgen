@@ -146,7 +146,7 @@ PRNG, not from loaded data, so misses overlap.
 | `duty` | busy cores | busy fraction of each 10 ms period |
 | `cv` | burstiness | per-second factor from a lognormal with mean 1 and CV `cv` (σ² = ln(1 + cv²), μ = −σ²/2); seeded from the wall-clock second so all threads move together |
 | `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 0.25 to 4: a fraction mixes the two nearest of 1, 2 and 4, and below one a share of the iterations runs a long-latency division chain; `ops` iterations, kept alive with an empty `asm!` barrier |
-| `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
+| `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer, 1/1024 to 64; below one it is the share of accesses that visit at all, so a profile with one miss per hundred thousand instructions needs no hundred thousand ops of compute per access; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
 | `seq` | dTLB rate down and IPC up at equal MPKI | share of visits that continue where the worker's last one ended, inside the worker's own slice of the working set, never crossing a page within a visit; a walk changes page once per 64 lines and lets the prefetcher stream |
 | `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value the previous visit loaded, so the next miss cannot issue until the last one completes |
 | `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
@@ -210,18 +210,19 @@ The IPC ladder gives the shares back first: the sequential walk when
 IPC is high, dependent visits when it is short; a share under a tenth
 goes back whole and the ladder continues in the same pass. The order
 then depends on the regime. Memory-bound, at one miss per thousand
-instructions or more, with IPC high: random visits are made dependent
-once compute is down to one chain, at one op, or has stopped moving
-IPC; then chains fall, then run length. Compute-bound with IPC high:
+instructions or more, with IPC high: random visits are made dependent,
+a fifth more per pass, once compute is down to one chain, at one op,
+or has stopped moving IPC; then chains fall, then run length. Compute-bound with IPC high:
 shorter runs, fewer chains, dependent visits last. IPC short: longer
 runs, more chains, then a sequential walk that lets the prefetcher
 stream. Past 4096 ops per access the stream is pure dilution and run
-length halves each pass towards one line, since every miss dropped
-saves a thousand instructions of compute; the sparse and code visits
+length halves each pass, down to one visit per 1024 accesses, since
+every miss dropped saves a thousand instructions of compute; the sparse and code visits
 may then grow to a quarter of the instructions per access. dTLB
 events beyond what the sparse stream can account for, at one per
 visit, come from the main stream's own pages; when they alone exceed
-the target the working set shrinks, unless IPC is short, in which case
+the target the working set shrinks, by at most half per pass, unless
+IPC is short, in which case
 the sequential share rises instead, or IPC is high, in which case dTLB
 waits. A shrink that cost misses beyond what the run length explains
 is undone and not tried again.

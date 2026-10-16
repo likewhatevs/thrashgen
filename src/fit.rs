@@ -185,6 +185,11 @@ const SHARE_SMALL: f64 = 0.1;
 pub const OPS_DILUTION_CAP: u32 = 4096;
 /// MPKI from which the stall on misses, not compute, sets IPC.
 const MEMORY_BOUND_MPKI: f64 = 1.0;
+/// Smallest run length: one visit per 1024 accesses.
+const LINES_MIN: f64 = 1.0 / 1024.0;
+/// How much of the random visits turn dependent per pass when IPC is
+/// high in a memory-bound regime.
+const DEP_STEP: f64 = 0.2;
 
 /// The fitter: damped multiplicative updates, one pass per window.
 #[derive(Clone, Debug, PartialEq)]
@@ -435,7 +440,7 @@ impl Fitter {
             } else {
                 k.lines > 1.0 && !lines_locked
             };
-            let dep_up = |k: &mut Knobs| k.dep = (k.dep.max(SHARE_SEED) / g).clamp(0.0, 1.0);
+            let dep_up = |k: &mut Knobs| k.dep = (k.dep + DEP_STEP).min(1.0);
             let chains_move = |k: &mut Knobs| k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
             let lines_move = |k: &mut Knobs| k.lines = (k.lines * g).clamp(1.0, 64.0);
             if !handled && g < 1.0 && memory_bound {
@@ -471,8 +476,8 @@ impl Fitter {
             }
             self.last_ipc = Some(v);
         }
-        if knobs.ops > OPS_DILUTION_CAP && k.lines > 1.0 && goal.mpki.is_some() {
-            k.lines = (k.lines * 0.5).max(1.0);
+        if knobs.ops > OPS_DILUTION_CAP && k.lines > LINES_MIN && goal.mpki.is_some() {
+            k.lines = (k.lines * 0.5).max(LINES_MIN);
         }
         match (goal.mpki, m.mpki, ipa) {
             (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 => {
@@ -493,7 +498,7 @@ impl Fitter {
             // Compute cannot go below one op per access; past that, more
             // lines per access are the only way to more misses.
             if k.ops <= 1 && knobs.ops <= 1 && v < t * (1.0 - self.tol.ratio) {
-                k.lines = (k.lines * factor(t, v, d)).clamp(1.0, 64.0);
+                k.lines = (k.lines * factor(t, v, d)).clamp(LINES_MIN, 64.0);
             }
         }
 
@@ -565,7 +570,9 @@ impl Fitter {
             let excess = v - sparse_at_most;
             let abs_tol = absolute_tolerance("dtlb_pki");
             if excess > t * (1.0 + self.tol.ratio) + abs_tol {
-                let f = factor(t.max(0.5 * abs_tol), excess, d);
+                // Half the set per pass at most: the miss rate is steep at
+                // the cache edge, and the guard above only sees one step.
+                let f = factor(t.max(0.5 * abs_tol), excess, d).max(0.5);
                 let wset_min = (WSET_MIN_PAGES / self.limits.main_pages.max(1) as f64).min(1.0);
                 let ipc_short = goal
                     .ipc
@@ -625,12 +632,16 @@ mod tests {
         let pages = k.wset * LIMITS.main_pages as f64;
         let miss_rate = if pages > 8192.0 { 1.0 } else { 0.02 };
         let tlb_rate = if pages > 36_864.0 { 1.0 } else { 0.05 };
-        let misses = (0.95 * lines + 0.6) * miss_rate;
+        let misses = if lines >= 1.0 {
+            0.95 * lines + 0.6
+        } else {
+            1.55 * lines
+        } * miss_rate;
         // Overlapped misses cost a fraction of their latency; dependent
         // ones the whole of it; a sequential walk is mostly prefetched.
         let overlap = (0.3 + 0.7 * k.dep) * (1.0 - 0.6 * k.seq);
         let stall = misses * 250.0 * overlap / (1.0 + 0.3 * lines);
-        let main_tlb = ((1.0 - k.seq) + k.seq * lines / 64.0) * tlb_rate;
+        let main_tlb = ((1.0 - k.seq) + k.seq * lines / 64.0) * tlb_rate * lines.min(1.0);
         let cycles = ops * 4.0 / chains_eff + stall + 10.0;
         let duty = k.duty;
         let aps = threads as f64 * duty * 3.0e9 / cycles;
@@ -932,12 +943,13 @@ mod tests {
     #[test]
     fn dilution_regime_reaches_a_high_tlb_rate() {
         // fio-like: almost no misses, a high dTLB rate. The run length
-        // falls to one and the visits grow past the fixed ceiling.
+        // falls below one visit per access instead of compute growing
+        // without end.
         let truth = Knobs {
-            ops: 100_000,
+            ops: 300,
             chains: 1.0,
-            lines: 1.0,
-            tlbvisits: 2000.0,
+            lines: 0.05,
+            tlbvisits: 9.0,
             sparse_pages: 2048,
             code_pages: 16384,
             ..Knobs::default()
@@ -945,8 +957,8 @@ mod tests {
         let goal = goal_of(&plant(&truth, 1));
         let (f, k, statuses) = converge(&goal, 1, TlbRegime::L2Hit, 40);
         assert!(Fitter::converged(&statuses), "{statuses:#?}\nknobs {k:#?}");
-        assert_eq!(k.lines, 1.0, "{k:?} after {} passes", f.passes);
-        assert!(k.tlbvisits > 64.0);
+        assert!(k.lines < 1.0, "{k:?} after {} passes", f.passes);
+        assert!(k.ops < OPS_DILUTION_CAP, "{k:?}");
     }
 
     #[test]
