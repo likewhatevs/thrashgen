@@ -7,6 +7,8 @@
 #            recordings count kernel mode too
 #   resctrl  resctrl mounted with two monitoring groups chowned to the
 #            user, so bandwidth is measured, not modelled
+#   noisy    three profiles from a finished user-mode set replayed at
+#            once, each in its own scope, as several containers would
 # The kernel and resctrl modes use sudo for those settings and restore
 # them on exit.
 set -euo pipefail
@@ -19,6 +21,11 @@ cargo build --release -q --manifest-path "$root/Cargo.toml"
 
 case $mode in
   user) ;;
+  noisy)
+    "$root/experiments/noisy.sh" schbench stress-ng taobench
+    cargo run --release -q --manifest-path "$root/Cargo.toml" --example experiment_plot -- "$OUT_DIR"
+    exit 0
+    ;;
   kernel)
     prev=$(sysctl -n kernel.perf_event_paranoid)
     sudo sysctl -q "kernel.perf_event_paranoid=1"

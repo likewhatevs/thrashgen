@@ -33,6 +33,7 @@ writes under its own directory, `experiments/out/<mode>/<name>/`:
 | `user` | nothing: unprivileged, as in a container | the default view |
 | `kernel` | `perf_event_paranoid` set to 1 for the run | both recordings count kernel mode, so kernel-bound work is in the ratios |
 | `resctrl` | resctrl mounted, two monitoring groups chowned to the user | DRAM bandwidth measured for both, instead of modelled for the replay and absent for the original |
+| `noisy` | the schbench, stress-ng and TaoBench profiles of a finished `user` set, fitted and held at the same time, each in its own scope | several containers on one host: each instance measures only its own scope and sees the others through the caches and the memory bus |
 
 The two privileged modes use `sudo` for exactly those settings and
 restore them on exit. Each `<name>` directory holds:
