@@ -146,7 +146,15 @@ pub struct Limits {
     pub main_pages: usize,
 }
 
-const OPS_RANGE: (f64, f64) = (1.0, 1.0e6);
+/// Ops per access. The top, with the visit ceiling, keeps an access
+/// near 200k instructions at most, so the duty cycle keeps its clock.
+const OPS_RANGE: (f64, f64) = (1.0, 8.0e4);
+/// Sparse or code visits per access at most, for the same reason.
+const VISITS_CAP: f64 = 1.0e4;
+/// Ops move at most this much per pass: the proxy for L3 misses counts
+/// fewer of them once compute gives the prefetcher time, so a large
+/// step lands far from where the model said.
+const OPS_STEP_MAX: f64 = 4.0;
 /// One-second samples a window needs before its burstiness is trusted.
 pub const MIN_CV_SAMPLES: usize = 30;
 
@@ -521,6 +529,7 @@ impl Fitter {
             (Some(t), Some(v), None) if !mpki_met => work *= factor(v, t, d),
             _ => {}
         }
+        let work = work.clamp(work_now / OPS_STEP_MAX, work_now * OPS_STEP_MAX);
         k.ops = (work / k.chains.max(1.0))
             .clamp(OPS_RANGE.0, OPS_RANGE.1)
             .round() as u32;
@@ -557,7 +566,9 @@ impl Fitter {
         }
         // Visits per access may grow with the access itself: a visit is a
         // few instructions, so a quarter of them is the ceiling.
-        let visits_max = VISITS_RANGE.1.max(ipa_next.unwrap_or(0.0) / 4.0);
+        let visits_max = VISITS_RANGE
+            .1
+            .max((ipa_next.unwrap_or(0.0) / 4.0).min(VISITS_CAP));
         let rate_rule = |target: Option<f64>, measured: Option<f64>, visits: f64| -> f64 {
             let (Some(t), Some(v)) = (target, measured) else {
                 return visits;
@@ -584,7 +595,10 @@ impl Fitter {
         // have priority, and dTLB falls to the sequential share.
         let mpa_now = m.mpki.zip(ipa).map(|(v, ipa)| v / 1000.0 * ipa);
         if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa)) = (self.last_set, mpa_now) {
-            if knobs.wset < wset_prev && mpa < 0.6 * mpa_prev * (knobs.lines / lines_prev.max(1.0))
+            // Misses within the absolute floor are noise, not a cost.
+            if knobs.wset < wset_prev
+                && !mpki_met
+                && mpa < 0.6 * mpa_prev * (knobs.lines / lines_prev.max(1.0))
             {
                 k.wset = wset_prev;
                 self.wset_blocked = true;
@@ -617,8 +631,12 @@ impl Fitter {
                 if k.wset > wset_min && !self.wset_blocked && !ipc_short {
                     k.wset = (k.wset * f).clamp(wset_min, 1.0);
                 } else if !ipc_high {
-                    // A walk would raise IPC further; IPC has priority.
                     k.seq = (k.seq.max(SHARE_SEED) / f).clamp(0.0, 1.0);
+                } else {
+                    // A walk would raise IPC further; fewer visits per
+                    // access dilute the events instead, and the ops rule
+                    // answers for the misses they take with them.
+                    k.lines = (k.lines * f).max(LINES_MIN);
                 }
             }
         }

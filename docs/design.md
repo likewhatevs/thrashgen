@@ -231,8 +231,14 @@ events beyond what the sparse stream can account for, at one per
 visit, come from the main stream's own pages; when they alone exceed
 the target the working set shrinks, by at most half per pass, unless
 IPC is short, in which case the sequential share rises instead, or IPC
-is high, in which case dTLB waits. A shrink that cost misses beyond
-what the run length explains is undone and not tried again.
+is high, in which case visits per access fall and dilute the events.
+A shrink that cost misses beyond what the run length explains, with
+misses above their absolute floor, is undone and not tried again. Ops
+move at most fourfold per pass, since the miss proxy counts fewer
+misses once compute gives the prefetcher time and a large step lands
+far from where the model said; ops stop at 80k and visits at 10k per
+access, some 200k instructions, so an access never outlasts the busy
+part of a period.
 
 Ratios settle within a 20 s window, the fit window, which `--window`
 can change; they are read over the whole window, so the length buys
