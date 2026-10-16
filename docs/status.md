@@ -63,7 +63,7 @@ In rough order of value.
 
 ## Conventions
 
-`CLAUDE.md` has the build, test and commit rules. The design doc is
+`AGENTS.md` has the build, test and commit rules. The design doc is
 the contract: a change in what an observable means or how a knob
 moves it lands in `docs/design.md` in the same commit as the code.
 Experiment outputs that are kept go under `docs/experiments/<name>/`;
