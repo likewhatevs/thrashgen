@@ -148,7 +148,7 @@ PRNG, not from loaded data, so misses overlap.
 | `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 0.25 to 4: a fraction mixes the two nearest of 1, 2 and 4, and below one a share of the iterations runs a long-latency square-root chain; `ops` iterations, kept alive with an empty `asm!` barrier |
 | `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer, 1/1024 to 64; below one it is the share of accesses that visit at all, so a profile with one miss per hundred thousand instructions needs no hundred thousand ops of compute per access; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
 | `seq` | dTLB rate down and IPC up at equal MPKI | share of visits that continue where the worker's last one ended, inside the worker's own slice of the working set, never crossing a page within a visit; a walk changes page once per 64 lines and lets the prefetcher stream |
-| `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value loaded before it, and whose lines are scattered over the page with each waiting for the line before, so no miss can issue until the previous one completes and the prefetcher has no run to follow |
+| `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value loaded before it, and whose further lines each land in a page of their own, each waiting for the line before, so no miss can issue until the previous one completes; lines scattered within one page would be fetched together by the region prefetcher |
 | `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
 | `wfrac` | write share | fraction of main-stream lines stored to |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
@@ -222,9 +222,10 @@ chain carries more of the instructions at the same misses per
 instruction; dependent visits last. At one op with MPKI short, run
 length follows the shortfall undamped. IPC short: longer runs, more
 chains, then a sequential walk that lets the prefetcher stream. Past
-4096 ops per access the stream is pure dilution and run length halves
-each pass, down to one visit per 1024 accesses, since every miss
-dropped saves a thousand instructions of compute; the sparse and code
+4096 ops per access, with misses not short, the stream is pure
+dilution and run length halves each pass, down to one visit per 1024
+accesses, since every miss dropped saves a thousand instructions of
+compute; the sparse and code
 visits may then grow to a quarter of the instructions per access. dTLB
 events beyond what the sparse stream can account for, at one per
 visit, come from the main stream's own pages; when they alone exceed

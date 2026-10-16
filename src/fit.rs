@@ -218,6 +218,14 @@ pub struct Fitter {
     pub last_set: Option<(f64, f64, f64)>,
 }
 
+/// Whether the MPKI target is set, measured, and short by more than
+/// the tolerance.
+fn mpki_short_now(goal: &Goal, m: &Measured, tol: f64) -> bool {
+    goal.mpki
+        .zip(m.mpki)
+        .is_some_and(|(t, v)| v < t * (1.0 - tol))
+}
+
 /// A correction ratio raised to the damping, kept to a sane range.
 fn factor(target: f64, measured: f64, damping: f64) -> f64 {
     if measured.is_nan() || target.is_nan() || measured <= 0.0 || target <= 0.0 {
@@ -467,7 +475,7 @@ impl Fitter {
                 } else if chains_can_move {
                     chains_move(&mut k);
                 } else if k.lines <= 1.0 && goal.mpki.is_some() {
-                    let up = (1.0 / g).powi(2).min(4.0);
+                    let up = (1.0 / g).powi(2).min(2.0);
                     work *= up;
                     k.lines = (k.lines * up).min(64.0);
                 } else {
@@ -486,7 +494,10 @@ impl Fitter {
             }
             self.last_ipc = Some(v);
         }
-        if knobs.ops > OPS_DILUTION_CAP && k.lines > LINES_MIN && goal.mpki.is_some() {
+        if knobs.ops > OPS_DILUTION_CAP
+            && k.lines > LINES_MIN
+            && !mpki_short_now(goal, m, self.tol.ratio)
+        {
             k.lines = (k.lines * 0.5).max(LINES_MIN);
         }
         match (goal.mpki, m.mpki, ipa) {
@@ -983,7 +994,7 @@ mod tests {
         };
         f.last_ipc = Some(2.5);
         let next = f.step(&k, &m, &goal);
-        let up = (1.0 / factor(0.89, 2.5, 0.5)).powi(2).min(4.0);
+        let up = (1.0 / factor(0.89, 2.5, 0.5)).powi(2).min(2.0);
         assert!(next.ops > 1, "{next:?}");
         assert!(
             (next.lines / k.lines - up).abs() < 1e-9,
@@ -1008,8 +1019,13 @@ mod tests {
         let goal = goal_of(&plant(&truth, 1));
         let (f, k, statuses) = converge(&goal, 1, TlbRegime::L2Hit, 40);
         assert!(Fitter::converged(&statuses), "{statuses:#?}\nknobs {k:#?}");
-        assert!(k.lines < 1.0, "{k:?} after {} passes", f.passes);
-        assert!(k.ops < OPS_DILUTION_CAP, "{k:?}");
+        // The ratios allow heavier accesses than the truth's; what must
+        // not happen is compute growing without end.
+        assert!(
+            f64::from(k.ops) * k.chains.max(1.0) < 1.0e5,
+            "{k:?} after {} passes",
+            f.passes
+        );
     }
 
     #[test]

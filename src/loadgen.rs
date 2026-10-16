@@ -49,11 +49,10 @@ pub struct Knobs {
     /// each worker walks its own slice of the working set.
     #[serde(default)]
     pub seq: f64,
-    /// Share of the random visits whose page, and each line within,
-    /// is computed from the value loaded just before it, so no miss
-    /// can issue until the previous one completes, 0 to 1. The lines
-    /// of such a visit are scattered over the page rather than run
-    /// together, or the prefetcher would fetch them regardless.
+    /// Share of the random visits whose page is computed from the
+    /// value loaded just before it, and whose further lines each land
+    /// in a page of their own, each waiting for the line before, so no
+    /// miss can issue until the previous one completes, 0 to 1.
     #[serde(default)]
     pub dep: f64,
     /// Fraction of the main buffer, from its start, that the main and
@@ -623,21 +622,20 @@ impl Worker {
                 )
             };
             let stores = p.stores[extra];
-            // A dependent visit scatters its lines over the page, six
-            // bits of a draw each, so the prefetcher has no run to follow.
-            let mut scatter = if dependent { rng.next() } else { 0 };
             for i in 0..lines {
-                let mut at = page * PAGE + (line0 + i) * LINE;
-                if dependent {
-                    at = page * PAGE + (scatter as usize & (PAGE_LINES - 1)) * LINE;
-                    scatter = scatter.rotate_right(6);
-                    if i > 0 {
-                        // Each line waits for the one before: the term is
-                        // zero, but neither the compiler nor the core can
-                        // know that until the load returns.
-                        at += (std::hint::black_box(chase) >> 63 >> 1) as usize;
-                    }
-                }
+                let at = if dependent && i > 0 {
+                    // Each further line of a dependent visit lands in a page
+                    // of its own and waits for the line before: the term is
+                    // zero, but neither the compiler nor the core can know
+                    // that until the load returns. Scattered over one page
+                    // instead, the region prefetcher fetched the lot.
+                    let d = rng.next();
+                    scale32((d >> 32) as u32, p.pages) * PAGE
+                        + scale32(d as u32, PAGE_LINES) * LINE
+                        + (std::hint::black_box(chase) >> 63 >> 1) as usize
+                } else {
+                    page * PAGE + (line0 + i) * LINE
+                };
                 let q = main.wrapping_add(at);
                 // SAFETY: inside the main buffer.
                 unsafe {
@@ -1170,7 +1168,7 @@ mod tests {
     }
 
     #[test]
-    fn dependent_visits_scatter_their_lines_within_one_page() {
+    fn dependent_visits_spread_their_lines_over_pages() {
         let b = small_buffers();
         let knobs = Knobs {
             lines: 4.0,
@@ -1192,11 +1190,9 @@ mod tests {
         let lines = changed(&before, &b);
         let pages: std::collections::BTreeSet<usize> =
             lines.iter().map(|l| l / PAGE_LINES).collect();
-        assert!(
-            pages.len() <= 200 && pages.len() > 150,
-            "{} pages",
-            pages.len()
-        );
+        // Up to 800 lines over 1024 pages: far more pages than the 200
+        // visits, and next to no runs of adjacent lines.
+        assert!(pages.len() > 450, "{} pages", pages.len());
         assert!(
             lines.len() > 600 && lines.len() <= 800,
             "{} lines",
@@ -1206,7 +1202,7 @@ mod tests {
             .windows(2)
             .filter(|w| w[1] == w[0] + 1 && w[1] / PAGE_LINES == w[0] / PAGE_LINES)
             .count();
-        assert!(runs < lines.len() / 4, "{runs} adjacent pairs: not a run");
+        assert!(runs < lines.len() / 8, "{runs} adjacent pairs: not a run");
     }
 
     #[test]
