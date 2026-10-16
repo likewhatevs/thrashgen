@@ -38,7 +38,7 @@ generator.
 | key | unit | role | recorded from | self-measured by |
 | --- | --- | --- | --- | --- |
 | `cpu_limit_cores` | cores | hint, thread count | cgroup `cpu.max` quota / period; absent when `max` | the cgroup `run` is in, if any |
-| `memory_limit_bytes` | bytes | hint, not enforced | cgroup `memory.max`; absent when `max` | same |
+| `memory_limit_bytes` | bytes | hint, not enforced; `run` notes when the memory targets exceed it | cgroup `memory.max`; absent when `max` | same |
 | `cpu_usage_cores` | cores | target | cgroup `cpu.stat` `usage_usec`; process `/proc/<pid>/stat` utime+stime over all threads; host `/proc/stat` non-idle | `getrusage(RUSAGE_SELF)` utime+stime, or the cgroup file when alone in one |
 | `cpu_usage_cv_1s` | none | target | 1 Hz samples of the above, pooled over windows (section 3) | same |
 | `instructions_per_sec` | 1/s | consistency | perf `instructions` | perf, own threads |

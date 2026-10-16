@@ -49,11 +49,7 @@ In rough order of value.
 3. **Bandwidth experiment under resctrl.** Mount resctrl, give the
    recorder and the replay a monitoring group, and compare measured
    bandwidth with the model the unprivileged replay uses.
-4. **`memory_limit_bytes`.** Accepted, aggregated and carried as a
-   hint, read by nothing, as the specification's "not enforced"
-   allows. A warning when the memory targets exceed it would cost a
-   few lines in `src/run.rs`.
-5. **TaoBench** in the experiment set once DCPerf is installed; the
+4. **TaoBench** in the experiment set once DCPerf is installed; the
    harness takes any command.
 
 ## Conventions

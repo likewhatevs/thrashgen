@@ -219,6 +219,24 @@ pub fn measured_from(
     }
 }
 
+/// A note when the memory targets exceed the memory limit the profile
+/// carries. The limit is a hint, so the run goes ahead; the cgroup it
+/// runs in decides what happens.
+pub fn memory_limit_note(t: &Targets) -> Option<String> {
+    let limit = t.get("memory_limit_bytes").filter(|l| *l > 0.0)?;
+    let total = t.get("memory_current_bytes").unwrap_or_else(|| {
+        ["anon_bytes", "pagecache_bytes", "shmem_bytes"]
+            .iter()
+            .filter_map(|k| t.get(k))
+            .sum()
+    });
+    (total > limit).then(|| {
+        format!(
+            "memory targets total {total:.0} bytes, above the profile's {limit:.0}-byte memory limit; the limit is not enforced here"
+        )
+    })
+}
+
 /// CPUs this process may run on, ascending.
 pub fn affinity_cpus() -> Result<Vec<u32>> {
     let set = sched_getaffinity(Pid::from_raw(0)).context("sched_getaffinity")?;
@@ -280,6 +298,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let topo = Topology::read(&sysfs).context("read CPU topology")?;
     let affinity = affinity_cpus()?;
     let mut notes: Vec<String> = Vec::new();
+    notes.extend(memory_limit_note(targets));
 
     let threads = settings
         .threads
@@ -783,6 +802,36 @@ mod tests {
             0,
             "no negative kernel memory"
         );
+    }
+
+    #[test]
+    fn memory_limit_is_noted_not_enforced() {
+        let mut t = Targets::new();
+        assert_eq!(memory_limit_note(&t), None);
+        t.set("memory_limit_bytes", 1.0e9).unwrap();
+        assert_eq!(memory_limit_note(&t), None, "nothing asked for");
+        t.set("anon_bytes", 6.0e8).unwrap();
+        t.set("shmem_bytes", 3.0e8).unwrap();
+        assert_eq!(
+            memory_limit_note(&t),
+            None,
+            "components sum below the limit"
+        );
+        t.set("pagecache_bytes", 2.0e8).unwrap();
+        let note = memory_limit_note(&t).unwrap();
+        assert!(
+            note.contains("1100000000 bytes") && note.contains("1000000000-byte"),
+            "{note}"
+        );
+        t.set("memory_current_bytes", 9.0e8).unwrap();
+        assert_eq!(
+            memory_limit_note(&t),
+            None,
+            "the total, when given, is what counts"
+        );
+        t.set("memory_limit_bytes", 0.0).unwrap();
+        t.set("memory_current_bytes", 9.0e9).unwrap();
+        assert_eq!(memory_limit_note(&t), None, "a zero limit means none");
     }
 
     #[test]
