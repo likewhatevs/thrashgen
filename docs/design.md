@@ -206,18 +206,25 @@ second boundaries, where the workers redraw their factor. Worker
 threads are the CPU limit when given, else the busy cores with headroom
 of one plus the CV, so the clipped per-second factor keeps its mean.
 
-The stream knobs sit at the ends of the IPC ladder. When IPC is high,
-the sequential share is given back first, then run length, then
-chains; with compute at its floor and run length at one or held by
-MPKI, random visits are made dependent. When IPC is short, dependent
-visits are given back first, then run length and chains rise; with
-both at their tops the stream walks sequentially. dTLB events beyond
-what the sparse stream can account for, at one per visit, come from
-the main stream's own pages; when they alone exceed the target the
-working set shrinks, unless IPC is short, or shrinking has already cost
-misses, in which case the sequential share rises instead. A shrunken
-set that stops missing with compute at its floor grows back and is not
-shrunk again.
+The IPC ladder gives the shares back first: the sequential walk when
+IPC is high, dependent visits when it is short; a share under a tenth
+goes back whole and the ladder continues in the same pass. The order
+then depends on the regime. Memory-bound, at one miss per thousand
+instructions or more, with IPC high: random visits are made dependent
+once compute is down to one chain, at one op, or has stopped moving
+IPC; then chains fall, then run length. Compute-bound with IPC high:
+shorter runs, fewer chains, dependent visits last. IPC short: longer
+runs, more chains, then a sequential walk that lets the prefetcher
+stream. Past 4096 ops per access the stream is pure dilution and run
+length halves each pass towards one line, since every miss dropped
+saves a thousand instructions of compute; the sparse and code visits
+may then grow to a quarter of the instructions per access. dTLB
+events beyond what the sparse stream can account for, at one per
+visit, come from the main stream's own pages; when they alone exceed
+the target the working set shrinks, unless IPC is short, in which case
+the sequential share rises instead, or IPC is high, in which case dTLB
+waits. A shrink that cost misses beyond what the run length explains
+is undone and not tried again.
 
 Ratios settle within a 30 s window, the fit window, which `--window`
 can change. Busy cores and burstiness do not: with independent

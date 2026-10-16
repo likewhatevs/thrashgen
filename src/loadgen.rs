@@ -568,12 +568,16 @@ impl Worker {
             }
             let duty = (k.duty * factor).min(1.0);
             let busy_until = start + period.mul_f64(duty);
+            // Clock checks are amortized over a batch of cheap accesses;
+            // an access heavy with compute gets its own, or one batch
+            // would overrun the busy part of the period.
+            let batch = if k.ops >= 256 { 1 } else { BATCH };
             let mut accesses = 0u64;
             while Instant::now() < busy_until {
-                for _ in 0..BATCH {
+                for _ in 0..batch {
                     self.access(&k, &mut rng, &mut state, &mut carry);
                 }
-                accesses += u64::from(BATCH);
+                accesses += u64::from(batch);
             }
             let busy = start.elapsed();
             self.stats.accesses.fetch_add(accesses, Ordering::Relaxed);
@@ -1015,6 +1019,30 @@ mod tests {
             c.dep.abs() < 1e-9,
             "10000 dependent visits consumed the carry"
         );
+    }
+
+    #[test]
+    fn heavy_accesses_still_honour_the_duty_cycle() {
+        let b = small_buffers();
+        let knobs = Knobs {
+            duty: 0.3,
+            ops: 200_000,
+            chains: 1.0,
+            lines: 1.0,
+            sparse_pages: 1,
+            code_pages: 1,
+            ..Knobs::default()
+        };
+        let g = Generator::start(Arc::clone(&b), knobs, 1, None, 1).unwrap();
+        std::thread::sleep(Duration::from_millis(700));
+        let s = &g.stats()[0];
+        let busy_frac = s.busy_ns.load(Ordering::Relaxed) as f64
+            / (s.periods.load(Ordering::Relaxed) as f64 * 10e6);
+        assert!(
+            (0.2..=0.5).contains(&busy_frac),
+            "busy fraction {busy_frac} at duty 0.3 with heavy accesses"
+        );
+        g.stop();
     }
 
     #[test]

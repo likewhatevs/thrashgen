@@ -175,6 +175,16 @@ const VISITS_RANGE: (f64, f64) = (1.0e-4, 64.0);
 const WSET_MIN_PAGES: f64 = 64.0;
 /// Seeds for the multiplicative shares, which cannot grow from zero.
 const SHARE_SEED: f64 = 0.02;
+/// A share below this is given back whole, and the ladder moves on in
+/// the same pass instead of spending passes on a knob that no longer
+/// matters.
+const SHARE_SMALL: f64 = 0.1;
+/// Compute iterations per access past which the stream is pure
+/// dilution: run length then falls to one line, since every miss it
+/// drops saves a thousand instructions of compute.
+pub const OPS_DILUTION_CAP: u32 = 4096;
+/// MPKI from which the stall on misses, not compute, sets IPC.
+const MEMORY_BOUND_MPKI: f64 = 1.0;
 
 /// The fitter: damped multiplicative updates, one pass per window.
 #[derive(Clone, Debug, PartialEq)]
@@ -197,6 +207,9 @@ pub struct Fitter {
     /// Shrinking the working set cost misses once, so the dTLB rule
     /// uses the sequential share from then on.
     pub wset_blocked: bool,
+    /// Last pass's working set, run length and misses per access, to
+    /// tell a shrink that cost misses from one that did not.
+    pub last_set: Option<(f64, f64, f64)>,
 }
 
 /// A correction ratio raised to the damping, kept to a sane range.
@@ -219,6 +232,7 @@ impl Fitter {
             last_work_ipa: None,
             last_ipc: None,
             wset_blocked: false,
+            last_set: None,
         }
     }
 
@@ -404,34 +418,61 @@ impl Fitter {
                 .zip(m.mpki)
                 .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
             let lines_locked = g < 1.0 && knobs.ops <= 1 && mpki_short;
-            let compute_floor = knobs.ops <= 1 && k.chains <= SLOWEST_CHAINS;
+            let memory_bound = m.mpki.is_some_and(|x| x >= MEMORY_BOUND_MPKI);
+            // The shares are given back first: a sequential walk when IPC
+            // is high, dependent misses when it is short. A small share
+            // goes back whole and the ladder continues this pass.
+            let mut handled = false;
             if g < 1.0 && k.seq > 0.0 {
-                // A sequential walk is IPC for free; it is the first thing
-                // given back when IPC is high.
-                k.seq = (k.seq * g).clamp(0.0, 1.0);
-                if k.seq < SHARE_SEED {
-                    k.seq = 0.0;
-                }
+                handled = k.seq >= SHARE_SMALL;
+                k.seq = if handled { k.seq * g } else { 0.0 };
             } else if g > 1.0 && k.dep > 0.0 {
-                // Dependent misses are the first thing given back when IPC
-                // is short.
-                k.dep = (k.dep / g).clamp(0.0, 1.0);
-                if k.dep < SHARE_SEED {
-                    k.dep = 0.0;
+                handled = k.dep >= SHARE_SMALL;
+                k.dep = if handled { (k.dep / g).min(1.0) } else { 0.0 };
+            }
+            let lines_can_move = if g > 1.0 {
+                k.lines < 64.0
+            } else {
+                k.lines > 1.0 && !lines_locked
+            };
+            let dep_up = |k: &mut Knobs| k.dep = (k.dep.max(SHARE_SEED) / g).clamp(0.0, 1.0);
+            let chains_move = |k: &mut Knobs| k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
+            let lines_move = |k: &mut Knobs| k.lines = (k.lines * g).clamp(1.0, 64.0);
+            if !handled && g < 1.0 && memory_bound {
+                // Stalls set IPC here: serialize the misses once compute is
+                // down to a chain or has stopped helping, else cut it.
+                if k.dep < 1.0 && (k.chains <= 1.0 || stalled || knobs.ops <= 1) {
+                    dep_up(&mut k);
+                } else if chains_can_move {
+                    chains_move(&mut k);
+                } else if lines_can_move {
+                    lines_move(&mut k);
                 }
-            } else if g < 1.0 && compute_floor && (k.lines <= 1.0 || lines_locked) {
-                // Nothing left to slow compute down: serialize the misses.
-                k.dep = (k.dep.max(SHARE_SEED) / g).clamp(0.0, 1.0);
-            } else if (exhausted || stalled) && chains_can_move {
-                k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
-            } else if g > 1.0 && exhausted && k.seq < 1.0 {
-                // Run length and chains at their tops and IPC still short:
-                // walk sequentially and let the prefetcher stream.
-                k.seq = (k.seq.max(SHARE_SEED) * g).clamp(0.0, 1.0);
-            } else if !lines_locked {
-                k.lines = (k.lines * g).clamp(1.0, 64.0);
+            } else if !handled && g < 1.0 {
+                // Compute sets IPC: shorter runs, then fewer chains, and
+                // dependent misses as the last resort.
+                if lines_can_move && !stalled {
+                    lines_move(&mut k);
+                } else if chains_can_move {
+                    chains_move(&mut k);
+                } else {
+                    dep_up(&mut k);
+                }
+            } else if !handled {
+                // IPC short: longer runs, more chains, then a sequential
+                // walk that lets the prefetcher stream.
+                if lines_can_move && !(stalled && !exhausted) {
+                    lines_move(&mut k);
+                } else if chains_can_move {
+                    chains_move(&mut k);
+                } else if k.seq < 1.0 {
+                    k.seq = (k.seq.max(SHARE_SEED) * g).clamp(0.0, 1.0);
+                }
             }
             self.last_ipc = Some(v);
+        }
+        if knobs.ops > OPS_DILUTION_CAP && k.lines > 1.0 && goal.mpki.is_some() {
+            k.lines = (k.lines * 0.5).max(1.0);
         }
         match (goal.mpki, m.mpki, ipa) {
             (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 => {
@@ -477,6 +518,9 @@ impl Fitter {
                 k.ntlines = (now + d * (need_lines - now)).clamp(0.0, NTLINES_MAX);
             }
         }
+        // Visits per access may grow with the access itself: a visit is a
+        // few instructions, so a quarter of them is the ceiling.
+        let visits_max = VISITS_RANGE.1.max(ipa_next.unwrap_or(0.0) / 4.0);
         let rate_rule = |target: Option<f64>, measured: Option<f64>, visits: f64| -> f64 {
             let (Some(t), Some(v)) = (target, measured) else {
                 return visits;
@@ -489,25 +533,28 @@ impl Fitter {
                     // Full compensation for the change in instructions per
                     // access, which the model predicts, then a damped
                     // correction of the measured error.
-                    (visits * (next / ipa) * factor(t, v, d)).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
+                    (visits * (next / ipa) * factor(t, v, d)).clamp(VISITS_RANGE.0, visits_max)
                 }
-                _ if visits > 0.0 => {
-                    (visits * factor(t, v, d)).clamp(VISITS_RANGE.0, VISITS_RANGE.1)
-                }
+                _ if visits > 0.0 => (visits * factor(t, v, d)).clamp(VISITS_RANGE.0, visits_max),
                 _ => VISITS_RANGE.0 * 100.0,
             }
         };
         k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits);
         k.codevisits = rate_rule(goal.itlb_pki, m.itlb_pki, k.codevisits);
 
-        // A shrunken working set that stopped missing, with no dilution
-        // left to cut, gives misses priority: grow it back and leave dTLB
-        // to the sequential share.
-        if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
-            if v < t * (1.0 - self.tol.ratio) && k.wset < 1.0 && knobs.ops <= 1 {
-                k.wset = (k.wset * factor(t, v, d)).min(1.0);
+        // A shrink of the working set that cost misses, beyond what the
+        // run length explains, is undone and not tried again: misses
+        // have priority, and dTLB falls to the sequential share.
+        let mpa_now = m.mpki.zip(ipa).map(|(v, ipa)| v / 1000.0 * ipa);
+        if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa)) = (self.last_set, mpa_now) {
+            if knobs.wset < wset_prev && mpa < 0.6 * mpa_prev * (knobs.lines / lines_prev.max(1.0))
+            {
+                k.wset = wset_prev;
                 self.wset_blocked = true;
             }
+        }
+        if let Some(mpa) = mpa_now {
+            self.last_set = Some((knobs.wset, knobs.lines, mpa));
         }
         // The main stream's own pages cause dTLB events the sparse stream
         // cannot take back. When they alone exceed the target, touch
@@ -524,9 +571,14 @@ impl Fitter {
                     .ipc
                     .zip(m.ipc)
                     .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
+                let ipc_high = goal
+                    .ipc
+                    .zip(m.ipc)
+                    .is_some_and(|(t, v)| v > t * (1.0 + self.tol.ratio));
                 if k.wset > wset_min && !self.wset_blocked && !ipc_short {
                     k.wset = (k.wset * f).clamp(wset_min, 1.0);
-                } else {
+                } else if !ipc_high {
+                    // A walk would raise IPC further; IPC has priority.
                     k.seq = (k.seq.max(SHARE_SEED) / f).clamp(0.0, 1.0);
                 }
             }
@@ -771,31 +823,130 @@ mod tests {
     }
 
     #[test]
-    fn a_set_that_stops_missing_grows_back_and_blocks_itself() {
+    fn a_shrink_that_costs_misses_is_undone_and_blocked() {
         let mut f = Fitter::new(4, LIMITS);
         let goal = Goal {
             mpki: Some(10.0),
             dtlb_pki: Some(0.0),
             ..Goal::default()
         };
-        let k = Knobs {
-            wset: 0.01,
-            ops: 1,
-            ..Knobs::default()
-        };
-        let m = Measured {
-            mpki: Some(1.0),
+        let measured = |mpki: f64| Measured {
+            mpki: Some(mpki),
             dtlb_pki: Some(2.0),
             accesses_per_s: 1.0e6,
             instructions_per_s: Some(1.0e8),
             ..Measured::default()
         };
+        // Pass one at the full set: dTLB excess shrinks it.
+        let k0 = Knobs {
+            ops: 1,
+            ..Knobs::default()
+        };
+        let k1 = f.step(&k0, &measured(10.0), &goal);
+        assert!(k1.wset < 1.0 && !f.wset_blocked, "{k1:?}");
+        // Misses fell by far more than the unchanged run length explains.
+        let k2 = f.step(&k1, &measured(1.0), &goal);
+        assert_eq!(k2.wset, 1.0, "undone");
+        assert!(f.wset_blocked);
+        assert!(k2.seq > 0.0, "dTLB excess goes to the sequential share now");
+        // A shrink that keeps its misses stands.
+        let mut g = Fitter::new(4, LIMITS);
+        let k1 = g.step(&k0, &measured(10.0), &goal);
+        let k2 = g.step(&k1, &measured(9.5), &goal);
+        assert!(k2.wset < k1.wset && !g.wset_blocked, "{k2:?}");
+    }
+
+    #[test]
+    fn high_ipc_moves_on_from_a_small_share_and_serializes_when_memory_bound() {
+        // Compute-bound, IPC high, a leftover sequential share: it goes
+        // back whole and the chains still move in the same pass.
+        let mut f = Fitter::new(8, LIMITS);
+        let goal = Goal {
+            ipc: Some(3.7),
+            mpki: Some(0.002),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 80_000,
+            chains: 4.0,
+            lines: 9.0,
+            seq: 0.03,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(4.45),
+            mpki: Some(0.003),
+            accesses_per_s: 1.0e4,
+            instructions_per_s: Some(1.7e11),
+            ..Measured::default()
+        };
         let next = f.step(&k, &m, &goal);
-        assert!(next.wset > k.wset && f.wset_blocked, "{next:?}");
-        assert!(next.seq > 0.0, "dTLB excess goes to the sequential share");
-        let again = f.step(&next, &m, &goal);
-        assert!(again.wset > next.wset);
-        assert!(again.seq > next.seq);
+        assert_eq!(next.seq, 0.0);
+        assert!(next.lines < k.lines || next.chains < k.chains, "{next:?}");
+        assert!(
+            next.lines <= 0.5 * k.lines,
+            "pure dilution halves the run length: {next:?}"
+        );
+        // Memory-bound, IPC high, compute already down to a chain:
+        // dependent misses, not more passes on chains.
+        let mut f = Fitter::new(4, LIMITS);
+        let goal = Goal {
+            ipc: Some(0.7),
+            mpki: Some(6.2),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 150,
+            chains: 0.85,
+            lines: 5.9,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(1.0),
+            mpki: Some(6.4),
+            accesses_per_s: 1.0e6,
+            instructions_per_s: Some(1.6e10),
+            ..Measured::default()
+        };
+        let next = f.step(&k, &m, &goal);
+        assert!(next.dep > 0.0, "{next:?}");
+        // IPC high and dTLB in excess with the set blocked: no walk.
+        let mut f = Fitter::new(4, LIMITS);
+        f.wset_blocked = true;
+        let goal = Goal {
+            ipc: Some(0.22),
+            dtlb_pki: Some(0.003),
+            ..Goal::default()
+        };
+        let m = Measured {
+            ipc: Some(1.0),
+            dtlb_pki: Some(0.3),
+            accesses_per_s: 1.0e6,
+            instructions_per_s: Some(1.6e10),
+            ..Measured::default()
+        };
+        let next = f.step(&Knobs::default(), &m, &goal);
+        assert_eq!(next.seq, 0.0, "{next:?}");
+    }
+
+    #[test]
+    fn dilution_regime_reaches_a_high_tlb_rate() {
+        // fio-like: almost no misses, a high dTLB rate. The run length
+        // falls to one and the visits grow past the fixed ceiling.
+        let truth = Knobs {
+            ops: 100_000,
+            chains: 1.0,
+            lines: 1.0,
+            tlbvisits: 2000.0,
+            sparse_pages: 2048,
+            code_pages: 16384,
+            ..Knobs::default()
+        };
+        let goal = goal_of(&plant(&truth, 1));
+        let (f, k, statuses) = converge(&goal, 1, TlbRegime::L2Hit, 40);
+        assert!(Fitter::converged(&statuses), "{statuses:#?}\nknobs {k:#?}");
+        assert_eq!(k.lines, 1.0, "{k:?} after {} passes", f.passes);
+        assert!(k.tlbvisits > 64.0);
     }
 
     #[test]
