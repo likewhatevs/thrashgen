@@ -34,14 +34,10 @@ Not verified anywhere:
 
 In rough order of value.
 
-1. **A sequential or working-set mode for the main stream.** The
-   stream draws random pages from the whole main buffer, so a
-   sequential, TLB-friendly workload such as stress-ng's store stream
-   cannot be matched on IPC, MPKI and dTLB at once, and a
-   cache-resident workload is matched by diluting rates with compute
-   rather than by shrinking the footprint touched. `docs/design.md`
-   section 5.1 describes it; the stream lives in `src/loadgen.rs` and
-   the rules that would drive the knob in `src/fit.rs`.
+1. **The stream knobs on hardware.** `seq`, `dep` and `wset` exist
+   and converge on the simulated machine; whether they close
+   stress-ng's IPC, MPKI and dTLB gaps on real hardware is what the
+   next run of the set decides.
 2. **Kernel-mode experiments.** Run the set with `CAP_PERFMON` or
    `perf_event_paranoid` at 1 so both recordings count all modes, and
    see how much of fio's gap closes. `experiments/run.sh` uses

@@ -142,6 +142,8 @@ pub struct Limits {
     pub sparse_capacity: usize,
     /// Code pages available.
     pub code_capacity: usize,
+    /// Pages in the main buffer, for the working-set floor.
+    pub main_pages: usize,
 }
 
 const OPS_RANGE: (f64, f64) = (1.0, 1.0e6);
@@ -168,6 +170,11 @@ pub fn absolute_tolerance(key: &str) -> f64 {
 }
 const NTLINES_MAX: f64 = 512.0;
 const VISITS_RANGE: (f64, f64) = (1.0e-4, 64.0);
+/// Smallest working set, in pages, so a shrunken set still spans
+/// enough lines to miss in.
+const WSET_MIN_PAGES: f64 = 64.0;
+/// Seeds for the multiplicative shares, which cannot grow from zero.
+const SHARE_SEED: f64 = 0.02;
 
 /// The fitter: damped multiplicative updates, one pass per window.
 #[derive(Clone, Debug, PartialEq)]
@@ -187,6 +194,9 @@ pub struct Fitter {
     pub last_work_ipa: Option<(f64, f64)>,
     /// Last pass's IPC, to notice when line length stops moving it.
     pub last_ipc: Option<f64>,
+    /// Shrinking the working set cost misses once, so the dTLB rule
+    /// uses the sequential share from then on.
+    pub wset_blocked: bool,
 }
 
 /// A correction ratio raised to the damping, kept to a sane range.
@@ -208,6 +218,7 @@ impl Fitter {
             passes: 0,
             last_work_ipa: None,
             last_ipc: None,
+            wset_blocked: false,
         }
     }
 
@@ -246,6 +257,9 @@ impl Fitter {
             ops: 64,
             chains,
             lines: 8.0,
+            seq: 0.0,
+            dep: 0.0,
+            wset: 1.0,
             wfrac: 0.25,
             ntlines: 0.0,
             tlbvisits: if goal.dtlb_pki.is_some_and(|v| v > 0.0) {
@@ -389,9 +403,32 @@ impl Fitter {
                 .mpki
                 .zip(m.mpki)
                 .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
-            if (exhausted || stalled) && chains_can_move {
+            let lines_locked = g < 1.0 && knobs.ops <= 1 && mpki_short;
+            let compute_floor = knobs.ops <= 1 && k.chains <= SLOWEST_CHAINS;
+            if g < 1.0 && k.seq > 0.0 {
+                // A sequential walk is IPC for free; it is the first thing
+                // given back when IPC is high.
+                k.seq = (k.seq * g).clamp(0.0, 1.0);
+                if k.seq < SHARE_SEED {
+                    k.seq = 0.0;
+                }
+            } else if g > 1.0 && k.dep > 0.0 {
+                // Dependent misses are the first thing given back when IPC
+                // is short.
+                k.dep = (k.dep / g).clamp(0.0, 1.0);
+                if k.dep < SHARE_SEED {
+                    k.dep = 0.0;
+                }
+            } else if g < 1.0 && compute_floor && (k.lines <= 1.0 || lines_locked) {
+                // Nothing left to slow compute down: serialize the misses.
+                k.dep = (k.dep.max(SHARE_SEED) / g).clamp(0.0, 1.0);
+            } else if (exhausted || stalled) && chains_can_move {
                 k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
-            } else if !(g < 1.0 && knobs.ops <= 1 && mpki_short) {
+            } else if g > 1.0 && exhausted && k.seq < 1.0 {
+                // Run length and chains at their tops and IPC still short:
+                // walk sequentially and let the prefetcher stream.
+                k.seq = (k.seq.max(SHARE_SEED) * g).clamp(0.0, 1.0);
+            } else if !lines_locked {
                 k.lines = (k.lines * g).clamp(1.0, 64.0);
             }
             self.last_ipc = Some(v);
@@ -462,6 +499,38 @@ impl Fitter {
         };
         k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits);
         k.codevisits = rate_rule(goal.itlb_pki, m.itlb_pki, k.codevisits);
+
+        // A shrunken working set that stopped missing, with no dilution
+        // left to cut, gives misses priority: grow it back and leave dTLB
+        // to the sequential share.
+        if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
+            if v < t * (1.0 - self.tol.ratio) && k.wset < 1.0 && knobs.ops <= 1 {
+                k.wset = (k.wset * factor(t, v, d)).min(1.0);
+                self.wset_blocked = true;
+            }
+        }
+        // The main stream's own pages cause dTLB events the sparse stream
+        // cannot take back. When they alone exceed the target, touch
+        // fewer pages, or walk them in order when the set cannot shrink
+        // or IPC is short and would gain from streaming.
+        if let (Some(t), Some(v), Some(ipa)) = (goal.dtlb_pki, m.dtlb_pki, ipa) {
+            let sparse_at_most = 1000.0 * knobs.tlbvisits / ipa;
+            let excess = v - sparse_at_most;
+            let abs_tol = absolute_tolerance("dtlb_pki");
+            if excess > t * (1.0 + self.tol.ratio) + abs_tol {
+                let f = factor(t.max(0.5 * abs_tol), excess, d);
+                let wset_min = (WSET_MIN_PAGES / self.limits.main_pages.max(1) as f64).min(1.0);
+                let ipc_short = goal
+                    .ipc
+                    .zip(m.ipc)
+                    .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
+                if k.wset > wset_min && !self.wset_blocked && !ipc_short {
+                    k.wset = (k.wset * f).clamp(wset_min, 1.0);
+                } else {
+                    k.seq = (k.seq.max(SHARE_SEED) / f).clamp(0.0, 1.0);
+                }
+            }
+        }
         k.sparse_pages = k.sparse_pages.clamp(1, self.limits.sparse_capacity.max(1));
         k.code_pages = k.code_pages.clamp(1, self.limits.code_capacity.max(1));
         k
@@ -477,6 +546,7 @@ mod tests {
     const LIMITS: Limits = Limits {
         sparse_capacity: 16384,
         code_capacity: 16384,
+        main_pages: 262_144,
     };
 
     /// A stand-in machine: monotone in every knob the way the real one
@@ -498,8 +568,17 @@ mod tests {
             + 2.0 * k.tlbvisits
             + 3.0 * k.codevisits
             + 12.0;
-        let misses = 0.95 * lines + 0.6;
-        let stall = misses * 250.0 / (1.0 + 0.3 * lines);
+        // The set: a 1 GiB buffer; misses need more than 32 MiB of it,
+        // first-level TLB events more than 144 MiB (hugepage reach).
+        let pages = k.wset * LIMITS.main_pages as f64;
+        let miss_rate = if pages > 8192.0 { 1.0 } else { 0.02 };
+        let tlb_rate = if pages > 36_864.0 { 1.0 } else { 0.05 };
+        let misses = (0.95 * lines + 0.6) * miss_rate;
+        // Overlapped misses cost a fraction of their latency; dependent
+        // ones the whole of it; a sequential walk is mostly prefetched.
+        let overlap = (0.3 + 0.7 * k.dep) * (1.0 - 0.6 * k.seq);
+        let stall = misses * 250.0 * overlap / (1.0 + 0.3 * lines);
+        let main_tlb = ((1.0 - k.seq) + k.seq * lines / 64.0) * tlb_rate;
         let cycles = ops * 4.0 / chains_eff + stall + 10.0;
         let duty = k.duty;
         let aps = threads as f64 * duty * 3.0e9 / cycles;
@@ -517,7 +596,7 @@ mod tests {
             ipc: Some(instr / cycles),
             mpki: Some(1000.0 * misses / instr),
             dram: Some((misses * 64.0 + nt * 64.0 + k.wfrac * lines * 32.0) * aps),
-            dtlb_pki: Some(1000.0 * k.tlbvisits * hit / instr),
+            dtlb_pki: Some(1000.0 * (k.tlbvisits * hit + main_tlb) / instr),
             itlb_pki: Some(1000.0 * k.codevisits * walk / instr),
             accesses_per_s: aps,
             cv_samples: 300,
@@ -625,6 +704,98 @@ mod tests {
             assert!(f.passes <= 30, "{name}: {} passes", f.passes);
             assert_eq!(statuses.len(), 7);
         }
+    }
+
+    #[test]
+    fn stream_shapes_are_found_through_the_main_stream_knobs() {
+        // Each truth needs one of the stream knobs: serialized misses for
+        // a latency-bound target, a sequential walk for a streaming one,
+        // a small set for random access over hugepages with no TLB events.
+        type Shape = fn(&Knobs) -> bool;
+        let cases: [(&str, Knobs, Shape); 3] = [
+            (
+                "latency bound",
+                Knobs {
+                    duty: 1.0,
+                    ops: 1,
+                    chains: 0.25,
+                    lines: 2.0,
+                    dep: 0.7,
+                    tlbvisits: 0.0,
+                    sparse_pages: 2048,
+                    code_pages: 16384,
+                    ..Knobs::default()
+                },
+                |k: &Knobs| k.dep > 0.3,
+            ),
+            (
+                "streaming",
+                Knobs {
+                    duty: 1.0,
+                    ops: 300,
+                    chains: 4.0,
+                    lines: 64.0,
+                    seq: 1.0,
+                    tlbvisits: 0.0,
+                    sparse_pages: 2048,
+                    code_pages: 16384,
+                    ..Knobs::default()
+                },
+                |k: &Knobs| k.seq > 0.5,
+            ),
+            (
+                "hugepage random",
+                Knobs {
+                    duty: 1.0,
+                    ops: 20,
+                    chains: 1.0,
+                    lines: 2.0,
+                    wset: 0.1,
+                    tlbvisits: 0.0,
+                    sparse_pages: 2048,
+                    code_pages: 16384,
+                    ..Knobs::default()
+                },
+                |k: &Knobs| k.wset < 0.15 && k.wset > 0.03,
+            ),
+        ];
+        for (name, truth, shape) in cases {
+            let goal = goal_of(&plant(&truth, 4));
+            let (f, k, statuses) = converge(&goal, 4, TlbRegime::L2Hit, 40);
+            assert!(
+                Fitter::converged(&statuses),
+                "{name}: {statuses:#?}\nknobs {k:#?}"
+            );
+            assert!(shape(&k), "{name}: knobs {k:#?} after {} passes", f.passes);
+        }
+    }
+
+    #[test]
+    fn a_set_that_stops_missing_grows_back_and_blocks_itself() {
+        let mut f = Fitter::new(4, LIMITS);
+        let goal = Goal {
+            mpki: Some(10.0),
+            dtlb_pki: Some(0.0),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            wset: 0.01,
+            ops: 1,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            mpki: Some(1.0),
+            dtlb_pki: Some(2.0),
+            accesses_per_s: 1.0e6,
+            instructions_per_s: Some(1.0e8),
+            ..Measured::default()
+        };
+        let next = f.step(&k, &m, &goal);
+        assert!(next.wset > k.wset && f.wset_blocked, "{next:?}");
+        assert!(next.seq > 0.0, "dTLB excess goes to the sequential share");
+        let again = f.step(&next, &m, &goal);
+        assert!(again.wset > next.wset);
+        assert!(again.seq > next.seq);
     }
 
     #[test]
@@ -762,6 +933,7 @@ mod tests {
             Limits {
                 sparse_capacity: 1000,
                 code_capacity: 50,
+                main_pages: 256,
             },
         );
         let k = f.initial_knobs(

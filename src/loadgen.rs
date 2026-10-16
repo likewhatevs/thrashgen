@@ -43,6 +43,20 @@ pub struct Knobs {
     /// Consecutive lines touched per main-stream visit, 1 to 64; a
     /// fraction alternates between the two nearest counts.
     pub lines: f64,
+    /// Share of main-stream visits that continue where the worker's
+    /// last one ended instead of jumping to a random page, 0 to 1;
+    /// each worker walks its own slice of the working set.
+    #[serde(default)]
+    pub seq: f64,
+    /// Share of the random visits whose page is computed from the
+    /// value the previous visit loaded, so the miss cannot issue until
+    /// that load completes, 0 to 1.
+    #[serde(default)]
+    pub dep: f64,
+    /// Fraction of the main buffer, from its start, that the main and
+    /// non-temporal streams touch, above 0 and at most 1.
+    #[serde(default = "one")]
+    pub wset: f64,
     /// Fraction of main-stream lines that are stored to, 0 to 1.
     pub wfrac: f64,
     /// Lines written with non-temporal stores per access; may be below one.
@@ -59,6 +73,10 @@ pub struct Knobs {
     pub period_ms: u64,
 }
 
+fn one() -> f64 {
+    1.0
+}
+
 impl Default for Knobs {
     fn default() -> Self {
         Knobs {
@@ -67,6 +85,9 @@ impl Default for Knobs {
             ops: 64,
             chains: 2.0,
             lines: 4.0,
+            seq: 0.0,
+            dep: 0.0,
+            wset: 1.0,
             wfrac: 0.25,
             ntlines: 0.0,
             tlbvisits: 0.0,
@@ -95,6 +116,14 @@ impl Knobs {
         };
         unit(self.duty, "duty")?;
         unit(self.wfrac, "wfrac")?;
+        unit(self.seq, "seq")?;
+        unit(self.dep, "dep")?;
+        if !(self.wset > 0.0 && self.wset <= 1.0) {
+            return Err(KnobError(format!(
+                "wset must be above 0 and at most 1, got {}",
+                self.wset
+            )));
+        }
         if !(self.cv >= 0.0 && self.cv.is_finite()) {
             return Err(KnobError(format!(
                 "cv must be finite and non-negative, got {}",
@@ -402,61 +431,112 @@ struct Worker {
     stats: Arc<WorkerStats>,
     seed: u64,
     index: usize,
+    threads: usize,
 }
 
+/// Fractional knobs carried from one access to the next, so a rate
+/// below one per access is honoured over many accesses.
+#[derive(Debug, Default)]
+struct Carry {
+    lines: f64,
+    nt: f64,
+    tlb: f64,
+    code: f64,
+    seq: f64,
+    dep: f64,
+    /// Line index of the sequential walk within the worker's slice.
+    cursor: usize,
+    /// The value the last main-stream line loaded, for dependent visits.
+    chase: u64,
+}
+
+/// Lines per page.
+const PAGE_LINES: usize = PAGE / LINE;
+
 impl Worker {
+    /// Pages of the working set and this worker's slice of it, as
+    /// (pages, slice start, slice length), from the main buffer and
+    /// `wset`. Slices are equal, one per worker, never beyond the set.
+    fn geometry(&self, wset: f64) -> (usize, usize, usize) {
+        let main_pages = self.buffers.main.len() / PAGE;
+        let pages = ((main_pages as f64 * wset) as usize).clamp(1, main_pages);
+        let slice = (pages / self.threads.max(1)).max(1);
+        let start = (self.index % pages.div_ceil(slice)) * slice;
+        (pages, start, slice.min(pages - start))
+    }
+
     /// One access: the streams, then compute.
     #[inline(always)]
-    fn access(
-        &self,
-        k: &Knobs,
-        rng: &mut Xoshiro256PlusPlus,
-        state: &mut [u64; 4],
-        acc: &mut [f64; 4],
-    ) {
+    fn access(&self, k: &Knobs, rng: &mut Xoshiro256PlusPlus, state: &mut [u64; 4], c: &mut Carry) {
         let main = self.buffers.main.as_ptr();
-        let main_pages = self.buffers.main.len() / PAGE;
-        acc[2] += k.lines.fract();
+        let (pages, slice_start, slice_pages) = self.geometry(k.wset);
+        c.lines += k.lines.fract();
         let mut lines = k.lines as usize;
-        if acc[2] >= 1.0 {
-            acc[2] -= 1.0;
+        if c.lines >= 1.0 {
+            c.lines -= 1.0;
             lines += 1;
         }
-        let page = rng.random_range(0..main_pages);
-        let line0 = rng.random_range(0..=(PAGE / LINE - lines));
+        c.seq += k.seq;
+        let (page, line0) = if c.seq >= 1.0 {
+            // Walk the slice line by line, never across a page within
+            // one visit, wrapping at the slice end.
+            c.seq -= 1.0;
+            if c.cursor % PAGE_LINES + lines > PAGE_LINES {
+                c.cursor = (c.cursor / PAGE_LINES + 1) * PAGE_LINES;
+            }
+            if c.cursor >= slice_pages * PAGE_LINES {
+                c.cursor = 0;
+            }
+            let at = (slice_start + c.cursor / PAGE_LINES, c.cursor % PAGE_LINES);
+            c.cursor += lines;
+            at
+        } else {
+            c.dep += k.dep;
+            let draw = rng.random::<u64>();
+            let page = if c.dep >= 1.0 {
+                // The XOR makes the address depend on the previous load
+                // without changing its distribution.
+                c.dep -= 1.0;
+                (draw ^ c.chase) as usize % pages
+            } else {
+                draw as usize % pages
+            };
+            (page, rng.random_range(0..=(PAGE_LINES - lines)))
+        };
         let stores = (k.wfrac * lines as f64).round() as usize;
         for i in 0..lines {
             let p = main.wrapping_add(page * PAGE + (line0 + i) * LINE);
             // SAFETY: inside the main buffer.
             unsafe {
                 let v = std::ptr::read_volatile(p.cast::<u64>());
+                c.chase = v;
                 state[0] ^= v;
                 if i < stores {
                     std::ptr::write_volatile(p.cast::<u64>(), v.wrapping_add(1));
                 }
             }
         }
-        acc[3] += k.ntlines;
-        while acc[3] >= 1.0 {
-            let page = rng.random_range(0..main_pages);
-            let line = rng.random_range(0..PAGE / LINE);
+        c.nt += k.ntlines;
+        while c.nt >= 1.0 {
+            let page = rng.random_range(0..pages);
+            let line = rng.random_range(0..PAGE_LINES);
             nt_store_line(main.wrapping_add(page * PAGE + line * LINE), state[1]);
-            acc[3] -= 1.0;
+            c.nt -= 1.0;
         }
         let sparse = self.buffers.sparse.as_ptr();
-        acc[0] += k.tlbvisits;
-        while acc[0] >= 1.0 {
+        c.tlb += k.tlbvisits;
+        while c.tlb >= 1.0 {
             let page = rng.random_range(0..k.sparse_pages);
-            let p = sparse.wrapping_add(page * PAGE + (page % (PAGE / LINE)) * LINE);
+            let p = sparse.wrapping_add(page * PAGE + (page % PAGE_LINES) * LINE);
             // SAFETY: inside the sparse buffer.
             state[2] ^= unsafe { std::ptr::read_volatile(p.cast::<u64>()) };
-            acc[0] -= 1.0;
+            c.tlb -= 1.0;
         }
-        acc[1] += k.codevisits;
-        while acc[1] >= 1.0 {
+        c.code += k.codevisits;
+        while c.code >= 1.0 {
             let page = rng.random_range(0..k.code_pages);
             state[3] = self.buffers.code.call(page, state[3]);
-            acc[1] -= 1.0;
+            c.code -= 1.0;
         }
         compute_mixed(k.ops, k.chains, state);
     }
@@ -474,7 +554,7 @@ impl Worker {
         let mut rng =
             Xoshiro256PlusPlus::seed_from_u64(self.seed.wrapping_add(self.index as u64 + 1));
         let mut state = [self.seed | 1, 2, 3, 4];
-        let mut acc = [0.0f64; 4];
+        let mut carry = Carry::default();
         let mut last_second = u64::MAX;
         let mut factor = 1.0;
         while !self.stop.load(Ordering::Relaxed) {
@@ -491,7 +571,7 @@ impl Worker {
             let mut accesses = 0u64;
             while Instant::now() < busy_until {
                 for _ in 0..BATCH {
-                    self.access(&k, &mut rng, &mut state, &mut acc);
+                    self.access(&k, &mut rng, &mut state, &mut carry);
                 }
                 accesses += u64::from(BATCH);
             }
@@ -551,6 +631,7 @@ impl Generator {
                 stats: Arc::clone(&st),
                 seed,
                 index,
+                threads,
             };
             handles.push(
                 std::thread::Builder::new()
@@ -673,6 +754,11 @@ mod tests {
         }
         .validate(&b)
         .unwrap();
+        assert!(bad(|k| k.seq = 1.1).0.contains("seq"));
+        assert!(bad(|k| k.dep = -0.5).0.contains("dep"));
+        assert!(bad(|k| k.wset = 0.0).0.contains("wset"));
+        assert!(bad(|k| k.wset = 1.5).0.contains("wset"));
+        assert!(bad(|k| k.wset = f64::NAN).0.contains("wset"));
         assert!(bad(|k| k.lines = 0.0).0.contains("lines"));
         assert!(bad(|k| k.lines = 65.0).0.contains("lines"));
         assert!(bad(|k| k.lines = f64::NAN).0.contains("lines"));
@@ -804,6 +890,131 @@ mod tests {
             .is_err()
         );
         g.stop();
+    }
+
+    /// A worker on `b` with no thread running, for driving `access`
+    /// by hand.
+    fn bench_worker(b: &Arc<Buffers>, index: usize, threads: usize, knobs: &Knobs) -> Worker {
+        Worker {
+            buffers: Arc::clone(b),
+            knobs: Arc::new(RwLock::new(knobs.clone())),
+            stop: Arc::new(AtomicBool::new(false)),
+            stats: Arc::new(WorkerStats::default()),
+            seed: 1,
+            index,
+            threads,
+        }
+    }
+
+    /// First word of every line of the main buffer.
+    fn line_words(b: &Buffers) -> Vec<u64> {
+        (0..b.main().len() / LINE)
+            .map(|i| {
+                // SAFETY: inside the main buffer, 8-byte aligned.
+                unsafe { std::ptr::read_volatile(b.main().as_ptr().add(i * LINE).cast::<u64>()) }
+            })
+            .collect()
+    }
+
+    /// Lines whose first word differs between two snapshots: the ones
+    /// stored to in between.
+    fn changed(before: &[u64], b: &Buffers) -> Vec<usize> {
+        before
+            .iter()
+            .zip(line_words(b))
+            .enumerate()
+            .filter(|(_, (x, y))| **x != *y)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    #[test]
+    fn sequential_visits_walk_the_workers_slice_without_crossing_pages() {
+        // 1024 pages; wset 0.5 keeps 512; 4 workers get 128 each; worker 1
+        // starts at page 128.
+        let b = small_buffers();
+        let knobs = Knobs {
+            seq: 1.0,
+            lines: 3.0,
+            wfrac: 1.0,
+            wset: 0.5,
+            ops: 1,
+            ..Knobs::default()
+        };
+        let w = bench_worker(&b, 1, 4, &knobs);
+        assert_eq!(w.geometry(0.5), (512, 128, 128));
+        assert_eq!(w.geometry(1.0), (1024, 256, 256));
+        assert_eq!(bench_worker(&b, 3, 4, &knobs).geometry(0.001), (1, 0, 1));
+        assert_eq!(
+            bench_worker(&b, 5, 8, &knobs).geometry(3.0 / 1024.0),
+            (3, 2, 1),
+            "more workers than pages share pages"
+        );
+        let before = line_words(&b);
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
+        let mut state = [1u64, 2, 3, 4];
+        let mut c = Carry::default();
+        for _ in 0..22 {
+            w.access(&knobs, &mut rng, &mut state, &mut c);
+        }
+        // 21 visits of 3 lines fill lines 0..63 of page 128; the 22nd would
+        // straddle, so it moved to page 129.
+        let lines = changed(&before, &b);
+        assert_eq!(lines.len(), 66);
+        assert_eq!(lines[0], 128 * PAGE_LINES);
+        assert!(!lines.contains(&(128 * PAGE_LINES + 63)), "line 63 skipped");
+        assert_eq!(lines[63], 129 * PAGE_LINES);
+        assert_eq!(c.cursor, PAGE_LINES + 3);
+        // The walk wraps at the slice end: 128 pages of 21 visits each.
+        for _ in 22..(128 * 21 + 1) {
+            w.access(&knobs, &mut rng, &mut state, &mut c);
+        }
+        assert_eq!(c.cursor, 3, "back at the slice start");
+        let lines = changed(&before, &b);
+        assert!(
+            lines
+                .iter()
+                .all(|l| (128 * PAGE_LINES..256 * PAGE_LINES).contains(l))
+        );
+        assert_eq!(lines.len(), 128 * 63);
+    }
+
+    #[test]
+    fn random_visits_stay_in_the_working_set_and_dependent_ones_follow_the_load() {
+        let b = small_buffers();
+        let knobs = Knobs {
+            lines: 1.0,
+            wfrac: 1.0,
+            wset: 0.25,
+            dep: 0.5,
+            ops: 1,
+            ..Knobs::default()
+        };
+        let w = bench_worker(&b, 0, 1, &knobs);
+        let before = line_words(&b);
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
+        let mut state = [1u64, 2, 3, 4];
+        let mut c = Carry::default();
+        for _ in 0..20_000 {
+            w.access(&knobs, &mut rng, &mut state, &mut c);
+        }
+        let lines = changed(&before, &b);
+        assert!(lines.len() > 10_000, "{}", lines.len());
+        assert!(
+            lines.iter().all(|l| *l < 256 * PAGE_LINES),
+            "nothing beyond a quarter of the buffer"
+        );
+        assert!(
+            lines.iter().any(|l| *l > 200 * PAGE_LINES),
+            "spread over the set"
+        );
+        // Every other visit was dependent: its page came from the draw
+        // XOR the value loaded before, which the stores had made non-zero.
+        assert!(c.chase != 0, "the last load saw a stored value");
+        assert!(
+            c.dep.abs() < 1e-9,
+            "10000 dependent visits consumed the carry"
+        );
     }
 
     #[test]

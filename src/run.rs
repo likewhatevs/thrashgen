@@ -441,6 +441,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let limits = Limits {
         sparse_capacity: buffers.sparse_capacity(),
         code_capacity: buffers.code_capacity(),
+        main_pages: buffers.main().len() / PAGE,
     };
     let mut fitter = Fitter::new(threads, limits);
     let regime = if vendor == Some(Vendor::Amd) {

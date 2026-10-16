@@ -147,6 +147,9 @@ PRNG, not from loaded data, so misses overlap.
 | `cv` | burstiness | per-second factor from a lognormal with mean 1 and CV `cv` (σ² = ln(1 + cv²), μ = −σ²/2); seeded from the wall-clock second so all threads move together |
 | `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 0.25 to 4: a fraction mixes the two nearest of 1, 2 and 4, and below one a share of the iterations runs a long-latency division chain; `ops` iterations, kept alive with an empty `asm!` barrier |
 | `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
+| `seq` | dTLB rate down and IPC up at equal MPKI | share of visits that continue where the worker's last one ended, inside the worker's own slice of the working set, never crossing a page within a visit; a walk changes page once per 64 lines and lets the prefetcher stream |
+| `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value the previous visit loaded, so the next miss cannot issue until the last one completes |
+| `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
 | `wfrac` | write share | fraction of main-stream lines stored to |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
 | `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks) |
@@ -160,16 +163,17 @@ shmem is a `memfd`; kernel memory is empty files as in section 2.
 
 ### 5.1 Known limits
 
-The main stream always draws its pages from the whole main buffer, so
-a target with almost no misses or TLB events, a cache-resident
-workload, is met by raising compute per access until the rates are
-diluted, not by shrinking the footprint the stream touches. The
-numbers match; the mechanism differs. A working-set knob, the number
-of main-buffer pages the stream draws from, is the natural next step
-and would let the fitter shrink the footprint instead. The dTLB rate
-has a floor from the main stream's own page spread for the same
-reason, about a tenth of an event per kilo-instruction on Zen 4 with a
-1 MiB buffer.
+The three stream knobs reach the corners the random stream alone could
+not: serialized misses for a latency-bound target (`dep`), a prefetched
+walk for a bandwidth-bound one (`seq`), and a small hugepage-backed set
+for random access without TLB events (`wset`). What stays out of reach:
+many misses with almost no dTLB events over 4 KiB pages, which only a
+sequential walk produces, so IPC then follows the prefetcher; IPC
+below what fully serialized misses give at the target's MPKI; and a
+set below 64 pages. A cache-resident target, with almost no misses, is
+still met by diluting the rates with compute rather than by a set that
+fits the cache, since the miss rate at the cache edge is too steep for
+a fitter to stand on.
 
 ## 6. Fitting
 
@@ -201,6 +205,19 @@ value below the knob; the one-second busy-cores ticks sit on wall-clock
 second boundaries, where the workers redraw their factor. Worker
 threads are the CPU limit when given, else the busy cores with headroom
 of one plus the CV, so the clipped per-second factor keeps its mean.
+
+The stream knobs sit at the ends of the IPC ladder. When IPC is high,
+the sequential share is given back first, then run length, then
+chains; with compute at its floor and run length at one or held by
+MPKI, random visits are made dependent. When IPC is short, dependent
+visits are given back first, then run length and chains rise; with
+both at their tops the stream walks sequentially. dTLB events beyond
+what the sparse stream can account for, at one per visit, come from
+the main stream's own pages; when they alone exceed the target the
+working set shrinks, unless IPC is short, or shrinking has already cost
+misses, in which case the sequential share rises instead. A shrunken
+set that stops missing with compute at its floor grows back and is not
+shrunk again.
 
 Ratios settle within a 30 s window, the fit window, which `--window`
 can change. Busy cores and burstiness do not: with independent
