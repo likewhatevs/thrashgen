@@ -563,6 +563,9 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut converged = false;
     let mut streak = 0u32;
     let mut out_of_tolerance = 0u32;
+    // The closest pass so far, to hold when the passes run out: the last
+    // one is as likely to be a swing as a settling.
+    let mut best: Option<(f64, Knobs, u32)> = None;
     let window_len = Duration::from_secs_f64(window_s);
     let deadline = settings
         .duration_s
@@ -674,6 +677,10 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     out_of_tolerance += 1;
                     0
                 };
+                let distance = fitter.distance(&statuses);
+                if best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
+                    best = Some((distance, knobs.clone(), fitter.passes));
+                }
                 converged = streak >= CONVERGED_WINDOWS;
                 if knobs.duty >= 1.0
                     && last_statuses_short_of_cores(&statuses)
@@ -722,8 +729,17 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                             knobs = next;
                         }
                     } else if !notes.iter().any(|n| n.starts_with("not within tolerance")) {
+                        // Out of passes: hold the closest pass, not the last.
+                        let held = match &best {
+                            Some((_, k, pass)) if *k != knobs => {
+                                generator.set_knobs(k.clone(), &buffers)?;
+                                knobs = k.clone();
+                                format!("; holding the knobs of pass {pass}, the closest")
+                            }
+                            _ => "; holding".to_string(),
+                        };
                         notes.push(format!(
-                            "not within tolerance after {} passes; holding",
+                            "not within tolerance after {} passes{held}",
                             fitter.passes
                         ));
                     }

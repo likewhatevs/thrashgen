@@ -321,7 +321,33 @@ impl Fitter {
         (duty_for(knob).unwrap_or(1.0), knob)
     }
 
-    /// A first guess from the goal alone.
+    /// How far the distance between two windows' statuses is from
+    /// tolerance: the largest relative error over the measured targets,
+    /// each divided by its tolerance, so one is the edge of tolerance.
+    /// The pass with the smallest distance is the one worth holding.
+    pub fn distance(&self, statuses: &[Status]) -> f64 {
+        statuses
+            .iter()
+            .filter_map(|s| {
+                let measured = s.measured?;
+                let tol = match s.key {
+                    "cpu_usage_cores" => self.tol.cores,
+                    "cpu_usage_cv_1s" => self.tol.cv,
+                    _ => self.tol.ratio,
+                };
+                let abs = absolute_tolerance(s.key);
+                if (measured - s.target).abs() <= abs {
+                    return Some(0.0);
+                }
+                s.error.map(|e| e.abs() / tol)
+            })
+            .fold(0.0, f64::max)
+    }
+
+    /// A first guess from the goal alone: compute from the MPKI target
+    /// where it asks for far more than the default, since at eight lines
+    /// a visit the instructions per access the misses need are known to
+    /// a factor.
     pub fn initial_knobs(&self, goal: &Goal, regime: TlbRegime) -> Knobs {
         let cores = goal.cores.unwrap_or(self.threads as f64);
         let (duty, cv) = Self::duty_cv_knobs(cores / self.threads as f64, goal.cv.unwrap_or(0.0));
@@ -332,6 +358,19 @@ impl Fitter {
             Some(_) => 4.0,
             None => 2.0,
         };
+        // Eight lines miss about eight times per access over some 270
+        // instructions of stream and bookkeeping, and an op is about two
+        // and a half more. The estimate replaces the default only where
+        // it asks for far more compute, the cache-resident side, where
+        // growing ops from the default fourfold a pass cost the most
+        // passes; elsewhere the model-based rule is quicker than a guess.
+        let ops = match goal.mpki {
+            Some(t) if t > 0.0 => {
+                let estimate = ((8.2e3 / t - 270.0) / 2.5).clamp(1.0, 4096.0).round() as u32;
+                if estimate > 1024 { estimate } else { 64 }
+            }
+            _ => 64,
+        };
         let sparse_pages = match regime {
             TlbRegime::L2Hit => 2048,
             TlbRegime::Walk => 16384,
@@ -341,7 +380,7 @@ impl Fitter {
         Knobs {
             duty,
             cv,
-            ops: 64,
+            ops,
             chains,
             lines: 8.0,
             seq: 0.0,
@@ -1408,6 +1447,76 @@ mod tests {
             assert!((m - mean).abs() < 0.01, "the mean is met: {m} for {mean}");
             assert!(c < cv && c > 0.0, "the CV falls short: {c} for {cv}");
         }
+    }
+
+    #[test]
+    fn the_first_guess_reads_the_shape_and_distance_ranks_passes() {
+        let f = Fitter::new(4, LIMITS);
+        let hot = f.initial_knobs(
+            &Goal {
+                ipc: Some(0.22),
+                mpki: Some(20.0),
+                ..Goal::default()
+            },
+            TlbRegime::L2Hit,
+        );
+        assert!(
+            hot.ops == 64 && hot.dep == 0.0 && hot.chains == 0.5,
+            "{hot:?}"
+        );
+        let cold = f.initial_knobs(
+            &Goal {
+                ipc: Some(3.7),
+                mpki: Some(0.002),
+                ..Goal::default()
+            },
+            TlbRegime::L2Hit,
+        );
+        assert!(cold.ops == 4096 && cold.dep == 0.0, "{cold:?}");
+        assert_eq!(f.initial_knobs(&Goal::default(), TlbRegime::L2Hit).ops, 64);
+        let goal = Goal {
+            ipc: Some(1.0),
+            mpki: Some(10.0),
+            cores: Some(2.0),
+            ..Goal::default()
+        };
+        let near = f.statuses(
+            &Measured {
+                ipc: Some(1.03),
+                mpki: Some(10.2),
+                cores: Some(2.0),
+                ..Measured::default()
+            },
+            &goal,
+        );
+        let far = f.statuses(
+            &Measured {
+                ipc: Some(1.3),
+                mpki: Some(10.0),
+                cores: Some(2.0),
+                ..Measured::default()
+            },
+            &goal,
+        );
+        assert!(f.distance(&near) < 1.0 && f.distance(&near) > 0.0);
+        assert!(
+            (f.distance(&far) - 6.0).abs() < 1e-9,
+            "30% over a 5% tolerance"
+        );
+        let floor = f.statuses(
+            &Measured {
+                ipc: Some(1.0),
+                mpki: Some(10.0),
+                cores: Some(2.03),
+                ..Measured::default()
+            },
+            &goal,
+        );
+        assert_eq!(
+            f.distance(&floor),
+            0.0,
+            "within the absolute floor counts as met"
+        );
     }
 
     #[test]

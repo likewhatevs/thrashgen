@@ -270,8 +270,14 @@ and 300 s, while the ratios are fitted every fit window. Convergence is declared
 within tolerance; the generator then holds and keeps reporting, and
 moves again only after two consecutive windows out of tolerance, so a
 single noisy window, often the one in which a recorder attaches, does
-not undo the fit; with `--adaptive` it keeps adjusting. After the pass limit it holds
-regardless and says so.
+not undo the fit; with `--adaptive` it keeps adjusting. A fit that
+runs out of passes holds the closest pass it saw, by the largest
+relative error over its tolerance, rather than the last, which is as
+likely to be a swing as a settling, and says so. The first guess takes
+compute from the MPKI target where that asks for far more than the
+default, since at eight lines a visit the instructions the misses need
+are known to a factor, and growing it from the default a pass at a
+time cost the cache-resident profiles most of their passes.
 
 Targets without a verified or proxy measurement take their knobs from
 the calibration file for this CPU model, or the built-in defaults, and
