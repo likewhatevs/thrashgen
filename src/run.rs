@@ -19,7 +19,7 @@ use crate::cpu;
 use crate::events::{Sysfs, Vendor, table_for};
 use crate::fit::{Fitter, Goal, Limits, Measured, Status, TlbRegime};
 use crate::footprint::{AnonBuffer, CacheFile, KernelFiles, ShmemBuffer, is_tmpfs};
-use crate::loadgen::{Buffers, Generator, Knobs, PAGE, SparseSet};
+use crate::loadgen::{Buffers, CacheRead, Generator, Knobs, PAGE, SparseSet};
 use crate::measure::{self, Scope};
 use crate::perf;
 use crate::plan::{Access, ScopeInfo, plan};
@@ -166,24 +166,78 @@ pub fn predicted_cores_cv(
     (Some(cores), cv)
 }
 
-/// Two consecutive windows at the same knobs are one longer window:
-/// their ratios are averaged for the fitter, so a single noisy window,
-/// a neighbour's burst or a page-cache refill, moves nothing on its
-/// own. Busy cores and burstiness come from the rolling window already.
-pub fn blend(now: &Measured, prev: &Measured) -> Measured {
-    let avg = |a: Option<f64>, b: Option<f64>| match (a, b) {
-        (Some(x), Some(y)) => Some(0.5 * (x + y)),
-        (x, _) => x,
+/// How long the pooled windows must be, in instructions at the run's
+/// mean rate: 0.4 s, and two seconds more per unit of the burstiness
+/// target, since a bursty duty cycle's ratios differ from one second
+/// to the next, a quiet second's few instructions carrying the misses
+/// of a cold cache and the kernel's wakeups, and a recorder's interval
+/// averages several of them.
+pub fn pool_seconds(goal_cv: Option<f64>) -> f64 {
+    0.4 + 2.0 * goal_cv.unwrap_or(0.0).clamp(0.0, 2.0)
+}
+/// Windows kept for pooling at most.
+pub const POOL_WINDOWS_MAX: usize = 60;
+
+/// How many of the newest windows at the same knobs, each with its
+/// instruction rate and length, are pooled: at least two, then as many
+/// as it takes to hold `seconds` of instructions at the run's mean
+/// rate.
+pub fn pool_count(windows: &[(f64, f64)], mean_rate: f64, seconds: f64) -> usize {
+    let budget = seconds * mean_rate;
+    let mut held = 0.0;
+    for (n, (rate, length)) in windows.iter().rev().enumerate() {
+        held += rate * length;
+        if n + 1 >= 2 && held >= budget {
+            return n + 1;
+        }
+    }
+    windows.len()
+}
+
+/// Consecutive windows at the same knobs pooled as one longer window:
+/// the rates per instruction weighted by the instructions of each, IPC
+/// as the instructions over the cycles they took, and the per-second
+/// rates averaged, so a single noisy window, a neighbour's burst, a
+/// page-cache refill or a quiet second of a bursty duty cycle, moves
+/// nothing on its own. Busy cores and burstiness come from the rolling
+/// window already and are the newest window's.
+pub fn pool(windows: &[Measured]) -> Measured {
+    let newest = windows.last().expect("a window to pool").clone();
+    if windows.len() == 1 {
+        return newest;
+    }
+    let weight = |w: &Measured| w.instructions_per_s.unwrap_or(w.accesses_per_s).max(0.0);
+    let weighted = |pick: fn(&Measured) -> Option<f64>| {
+        let (sum, total) = windows
+            .iter()
+            .filter_map(|w| pick(w).map(|v| (v, weight(w))))
+            .fold((0.0, 0.0), |(s, t), (v, wt)| (s + v * wt, t + wt));
+        (total > 0.0).then(|| sum / total)
+    };
+    let mean = |pick: fn(&Measured) -> Option<f64>| {
+        let vals: Vec<f64> = windows.iter().filter_map(pick).collect();
+        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    };
+    let ipc = {
+        let (instr, cycles) = windows
+            .iter()
+            .filter_map(|w| {
+                w.ipc
+                    .filter(|i| *i > 0.0)
+                    .map(|i| (weight(w), weight(w) / i))
+            })
+            .fold((0.0, 0.0), |(a, b), (i, c)| (a + i, b + c));
+        (cycles > 0.0).then_some(instr / cycles)
     };
     Measured {
-        ipc: avg(now.ipc, prev.ipc),
-        mpki: avg(now.mpki, prev.mpki),
-        dram: avg(now.dram, prev.dram),
-        dtlb_pki: avg(now.dtlb_pki, prev.dtlb_pki),
-        itlb_pki: avg(now.itlb_pki, prev.itlb_pki),
-        instructions_per_s: avg(now.instructions_per_s, prev.instructions_per_s),
-        accesses_per_s: 0.5 * (now.accesses_per_s + prev.accesses_per_s),
-        ..now.clone()
+        ipc,
+        mpki: weighted(|w| w.mpki),
+        dtlb_pki: weighted(|w| w.dtlb_pki),
+        itlb_pki: weighted(|w| w.itlb_pki),
+        dram: mean(|w| w.dram),
+        instructions_per_s: mean(|w| w.instructions_per_s),
+        accesses_per_s: mean(|w| Some(w.accesses_per_s)).unwrap_or(0.0),
+        ..newest
     }
 }
 
@@ -446,6 +500,11 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             settings.huge,
             sparse,
             code_capacity,
+            cache
+                .as_ref()
+                .map(|c| CacheRead::new(c.file()))
+                .transpose()
+                .context("open the page-cache file for reads")?,
         )
         .context("allocate the main, sparse and code buffers")?,
     );
@@ -559,11 +618,15 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         .max(1),
         code_capacity: buffers.code_capacity(),
         main_pages: buffers.main().len() / PAGE,
+        kreads_available: buffers.has_cache(),
     };
     let mut fitter = Fitter::new(threads, limits);
     fitter.proxy_misses = provenance
         .get("l3_misses_per_sec")
         .is_some_and(|p| p.method == Method::Proxy);
+    fitter.kernel_counted = provenance
+        .get("l3_misses_per_sec")
+        .is_some_and(|p| p.mode == Mode::All);
     let mut knobs = settings
         .knobs
         .clone()
@@ -610,7 +673,14 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut windows: Vec<WindowRow> = Vec::new();
     let mut last_statuses: Vec<Status> = Vec::new();
     let mut last_sample: Option<Sample> = None;
-    let mut prev_window: Option<(Knobs, Measured)> = None;
+    // The raw windows at the current knobs, newest last, with their
+    // length, pooled for the fitter; and the run's mean instruction
+    // rate, which says how many of them a pool needs.
+    let pool_s = pool_seconds(goal.cv);
+    let mut recent: std::collections::VecDeque<(Knobs, Measured, f64)> =
+        std::collections::VecDeque::with_capacity(POOL_WINDOWS_MAX);
+    let mut rate_sum = 0.0;
+    let mut rate_n = 0usize;
     let mut converged = false;
     let mut ever_converged = false;
     let mut streak = 0u32;
@@ -685,13 +755,33 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 if cores_pred.is_some() {
                     m.cores = cores_pred;
                 }
-                let raw = m.clone();
-                if let Some((k, p)) = &prev_window {
-                    if *k == knobs {
-                        m = blend(&m, p);
-                    }
+                if recent.front().is_some_and(|(k, _, _)| *k != knobs) {
+                    recent.clear();
                 }
-                prev_window = Some((knobs.clone(), raw));
+                recent.push_back((knobs.clone(), m.clone(), seconds));
+                while recent.len() > POOL_WINDOWS_MAX {
+                    recent.pop_front();
+                }
+                if let Some(rate) = m.instructions_per_s {
+                    rate_sum += rate;
+                    rate_n += 1;
+                }
+                let mean_rate = if rate_n > 0 {
+                    rate_sum / rate_n as f64
+                } else {
+                    0.0
+                };
+                let lengths: Vec<(f64, f64)> = recent
+                    .iter()
+                    .map(|(_, w, secs)| (w.instructions_per_s.unwrap_or(0.0), *secs))
+                    .collect();
+                let n = pool_count(&lengths, mean_rate, pool_s);
+                let raws: Vec<Measured> = recent
+                    .iter()
+                    .skip(recent.len() - n)
+                    .map(|(_, w, _)| w.clone())
+                    .collect();
+                m = pool(&raws);
                 let statuses = fitter.statuses(&m, &goal);
                 writeln!(
                     progress,
@@ -1083,7 +1173,7 @@ mod tests {
     }
 
     #[test]
-    fn two_windows_at_one_setting_blend() {
+    fn windows_at_one_setting_pool_by_instructions() {
         let a = Measured {
             ipc: Some(1.0),
             mpki: Some(4.0),
@@ -1108,23 +1198,47 @@ mod tests {
             cv: Some(0.9),
             cv_samples: 39,
         };
-        let m = blend(&a, &b);
-        assert_eq!((m.ipc, m.mpki, m.dram), (Some(1.5), Some(3.0), Some(3.0e9)));
+        assert_eq!(pool(std::slice::from_ref(&a)), a, "one window is itself");
+        let m = pool(&[a.clone(), b.clone()]);
+        // Three times the instructions in b: MPKI 4 and 2 pool to 2.5;
+        // IPC 1 and 2 over their cycles, 1e9 and 1.5e9, to 1.6.
+        assert!((m.mpki.unwrap() - 2.5).abs() < 1e-9, "{m:?}");
+        assert!((m.ipc.unwrap() - 1.6).abs() < 1e-9, "{m:?}");
+        assert_eq!(m.dram, Some(3.0e9));
         assert_eq!(
             m.dtlb_pki,
             Some(2.0),
-            "a side without a value keeps the other"
+            "a side without a value leaves the other"
         );
-        assert_eq!(m.itlb_pki, None, "nothing now, nothing");
+        assert_eq!(m.itlb_pki, Some(0.5));
         assert_eq!(
             (m.accesses_per_s, m.instructions_per_s),
             (200.0, Some(2.0e9))
         );
         assert_eq!(
             (m.cores, m.cv, m.cv_samples),
-            (Some(2.0), Some(0.1), 40),
-            "rolling-window fields are the window's own"
+            (Some(9.0), Some(0.9), 39),
+            "rolling-window fields are the newest window's"
         );
+        // Busy windows at the mean rate: four hold 0.4 s of it. Quiet
+        // ones, a tenth of the rate, take the busy ones before them.
+        let busy = (1.0e9, 0.1);
+        let quiet = (1.0e8, 0.1);
+        assert_eq!(pool_count(&[busy; 6], 1.0e9, 0.4), 4);
+        assert_eq!(
+            pool_count(&[busy, busy, quiet, quiet, quiet], 1.0e9, 0.4),
+            5
+        );
+        assert_eq!(pool_count(&[busy; 1], 1.0e9, 0.4), 1, "all there is");
+        assert_eq!(pool_count(&[quiet; 3], 1.0e9, 0.4), 3);
+        assert_eq!(
+            pool_count(&[busy; 6], 0.0, 0.4),
+            2,
+            "no rate known yet: two"
+        );
+        assert!((pool_seconds(None) - 0.4).abs() < 1e-12);
+        assert!((pool_seconds(Some(1.0)) - 2.4).abs() < 1e-12);
+        assert!((pool_seconds(Some(5.0)) - 4.4).abs() < 1e-12, "clamped");
     }
 
     #[test]

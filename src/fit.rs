@@ -147,6 +147,8 @@ pub struct Limits {
     pub code_capacity: usize,
     /// Pages in the main buffer, for the working-set floor.
     pub main_pages: usize,
+    /// Whether there is a page-cache file for page-cache reads.
+    pub kreads_available: bool,
 }
 
 /// Ops per access. The top, with the visit ceiling, keeps an access
@@ -208,6 +210,12 @@ const LINES_MIN: f64 = 1.0 / 1024.0;
 /// The most of the random visits that turn dependent, or back, in one
 /// pass.
 const DEP_STEP: f64 = 0.2;
+/// Page-cache reads per access at most: 256 KiB of copying per access.
+const KREADS_MAX: f64 = 64.0;
+/// What a page-cache read moves from DRAM: the page, which a file
+/// larger than the L3 seldom has cached, as bytes and as lines missed.
+const KREAD_BYTES: f64 = 4096.0;
+const KREAD_LINES: f64 = 64.0;
 
 /// The fitter: damped multiplicative updates, one pass per window.
 #[derive(Clone, Debug, PartialEq)]
@@ -237,6 +245,9 @@ pub struct Fitter {
     /// Last pass's working set, run length and misses per access, to
     /// tell a shrink that cost misses from one that did not.
     pub last_set: Option<(f64, f64, f64)>,
+    /// The miss and instruction counts cover kernel mode, so what the
+    /// kernel does for a page-cache read is in them.
+    pub kernel_counted: bool,
 }
 
 /// Whether the MPKI target is set, measured, and short by more than
@@ -269,6 +280,7 @@ impl Fitter {
             wset_blocked: false,
             proxy_misses: false,
             last_set: None,
+            kernel_counted: false,
         }
     }
 
@@ -416,6 +428,7 @@ impl Fitter {
                 0.0
             },
             code_pages: self.limits.code_capacity.max(1),
+            kreads: 0.0,
             period_ms: 10,
         }
     }
@@ -569,10 +582,18 @@ impl Fitter {
             }
             _ => 1.0,
         };
-        if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa)) = (self.last_set, mpa_now) {
+        if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa), Some(ipa)) =
+            (self.last_set, mpa_now, ipa)
+        {
+            let explained = mpa_prev * (knobs.lines / lines_prev.max(LINES_MIN));
+            // Compute can buy misses per instruction back by shedding its
+            // own instructions, so a loss up to its share of them is
+            // recoverable; at one op per access none is.
+            let compute_share = (work_now * slope / ipa).clamp(0.0, 1.0);
             if knobs.wset < wset_prev
                 && !mpki_met
-                && mpa < 0.75 * mpa_prev * (knobs.lines / lines_prev.max(LINES_MIN))
+                && mpa < 0.75 * explained
+                && compute_share < 1.0 - mpa / explained
             {
                 self.wset_blocked = true;
                 k.wset = wset_prev;
@@ -699,8 +720,21 @@ impl Fitter {
         // is mostly noise; chasing it swung ops between one and tens of
         // thousands.
         let mpki_within = mpki_met || within("l3_mpki");
+        // Page-cache reads give misses back before compute dilutes them,
+        // since they were the last lever taken: by the model, the misses
+        // over per access over the lines a page holds, damped.
+        let mut mpki_handled = false;
+        if let (Some(t), Some(v), Some(ipa)) = (goal.mpki, m.mpki, ipa) {
+            if k.kreads > 0.0 && !mpki_within && v > t {
+                let over = (v - t) / 1000.0 * ipa;
+                k.kreads = (k.kreads - d * over / KREAD_LINES).max(0.0);
+                mpki_handled = true;
+            }
+        }
         match (goal.mpki, m.mpki, ipa) {
-            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 && !mpki_within => {
+            (Some(t), Some(v), Some(ipa))
+                if t > 0.0 && v > 0.0 && !mpki_within && !mpki_handled =>
+            {
                 // Misses per access follow the run length the IPC rule just
                 // chose; at that length, the instructions per access the
                 // target needs are known, and the work that gives them.
@@ -710,7 +744,7 @@ impl Fitter {
                 let want_ipa = misses_per_access * 1000.0 / t;
                 work += d * (want_ipa - ipa) / slope;
             }
-            (Some(t), Some(v), None) if !mpki_within => work *= factor(v, t, d),
+            (Some(t), Some(v), None) if !mpki_within && !mpki_handled => work *= factor(v, t, d),
             _ => {}
         }
         let work = work.clamp(work_now / OPS_STEP_MAX, work_now * OPS_STEP_MAX);
@@ -745,6 +779,22 @@ impl Fitter {
                 // Undamped: misses follow run length about linearly, and
                 // passes are few.
                 k.lines = (k.lines * factor(t, v, 1.0)).clamp(LINES_MIN, 64.0);
+                // The main stream at its range and misses still short,
+                // with the kernel's in the count: page-cache reads, each
+                // a page the kernel copies out of the page cache, which is
+                // where a page-cache reader's kernel-mode misses come
+                // from. By the model, the misses short per access over the
+                // lines a page holds, damped: a read is sixty-four misses,
+                // and a whole one per access swung MPKI by thirty.
+                if let (true, true, true, Some(ipa)) = (
+                    self.kernel_counted,
+                    self.limits.kreads_available,
+                    knobs.lines >= 64.0,
+                    ipa,
+                ) {
+                    let short = (t - v) / 1000.0 * ipa;
+                    k.kreads = (k.kreads + d * short / KREAD_LINES).clamp(0.0, KREADS_MAX);
+                }
             }
         }
 
@@ -780,6 +830,14 @@ impl Fitter {
                     k.wfrac = (k.wfrac * factor(t, v, d)).min(1.0);
                 } else if v > t * (1.0 + self.tol.ratio) && k.ntlines <= 0.0 && k.wfrac > 0.0 {
                     k.wfrac = (k.wfrac * factor(t, v, d)).max(0.0);
+                } else if v < t * (1.0 - self.tol.ratio)
+                    && (!nt_fits || k.ntlines >= NTLINES_MAX)
+                    && self.limits.kreads_available
+                {
+                    // Non-temporal lines cannot carry it: page-cache reads,
+                    // a page from DRAM each, by the shortfall, damped.
+                    let need = (t - v) / (KREAD_BYTES * aps_next);
+                    k.kreads = (k.kreads + d * need).clamp(0.0, KREADS_MAX);
                 } else if v < t * (1.0 - self.tol.ratio) && !nt_fits {
                     // Bandwidth waits: the lever left would take IPC with it.
                 } else {
@@ -876,6 +934,7 @@ mod tests {
         sparse_floor: 128,
         code_capacity: 16384,
         main_pages: 262_144,
+        kreads_available: true,
     };
 
     /// A stand-in machine: monotone in every knob the way the real one
@@ -896,6 +955,7 @@ mod tests {
             + 4.0 * nt
             + 2.0 * k.tlbvisits
             + 3.0 * k.codevisits
+            + 2500.0 * k.kreads
             + 12.0;
         // The set: a 1 GiB buffer; misses need more than 32 MiB of it,
         // first-level TLB events more than 144 MiB (hugepage reach).
@@ -911,7 +971,9 @@ mod tests {
         // prefetcher hides more of a longer run; dependent visits pay the
         // whole latency per line; a sequential walk is mostly prefetched.
         let overlap = (1.0 - k.dep) * 0.3 / (1.0 + 0.3 * lines) + k.dep;
-        let stall = misses * 250.0 * overlap * (1.0 - 0.6 * k.seq);
+        // A page-cache read is a kernel copy of 64 lines, streamed.
+        let kread_misses = 58.0 * k.kreads;
+        let stall = misses * 250.0 * overlap * (1.0 - 0.6 * k.seq) + kread_misses * 20.0;
         let main_tlb = ((1.0 - k.seq) + k.seq * lines / 64.0) * tlb_rate * lines.min(1.0);
         let cycles = ops * 4.0 / chains_eff + stall + 10.0;
         let duty = k.duty;
@@ -928,8 +990,10 @@ mod tests {
             cores: Some(threads as f64 * duty * 1.02),
             cv: Some(k.cv * if duty > 0.9 { 0.7 } else { 1.0 }),
             ipc: Some(instr / cycles),
-            mpki: Some(1000.0 * misses / instr),
-            dram: Some((misses * 64.0 + nt * 64.0 + k.wfrac * lines * 32.0) * aps),
+            mpki: Some(1000.0 * (misses + kread_misses) / instr),
+            dram: Some(
+                (misses * 64.0 + nt * 64.0 + k.wfrac * lines * 32.0 + k.kreads * 4096.0) * aps,
+            ),
             dtlb_pki: Some(1000.0 * (k.tlbvisits * hit + main_tlb) / instr),
             itlb_pki: Some(1000.0 * k.codevisits * walk / instr),
             accesses_per_s: aps,
@@ -1158,6 +1222,89 @@ mod tests {
             next.seq > 0.0,
             "with counted misses the walk is allowed: {next:?}"
         );
+    }
+
+    #[test]
+    fn page_cache_reads_fill_the_misses_the_kernel_counts() {
+        let goal = Goal {
+            ipc: Some(1.4),
+            mpki: Some(2.4),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 1,
+            lines: 64.0,
+            chains: 1.0,
+            ..Knobs::default()
+        };
+        // 2000 instructions per access, one miss per thousand short.
+        let short = Measured {
+            ipc: Some(1.4),
+            mpki: Some(1.4),
+            accesses_per_s: 1.0e4,
+            instructions_per_s: Some(2.0e7),
+            ..Measured::default()
+        };
+        let mut f = Fitter::new(1, LIMITS);
+        f.kernel_counted = true;
+        let next = f.step(&k, &short, &goal);
+        let want = 0.5 * (1.0 / 1000.0 * 2000.0) / KREAD_LINES;
+        assert!((next.kreads - want).abs() < 1e-9, "{next:?}");
+        assert_eq!(next.ops, 1, "compute is at its floor already");
+        // Misses over: the reads give back first, compute stays.
+        let over = Measured {
+            mpki: Some(4.0),
+            ..short.clone()
+        };
+        let had = Knobs {
+            kreads: 0.05,
+            ..k.clone()
+        };
+        let next = f.step(&had, &over, &goal);
+        assert!(next.kreads < 0.05 && next.kreads > 0.0, "{next:?}");
+        assert_eq!(next.ops, 1, "{next:?}");
+        // Without the kernel in the count the reads are invisible and
+        // not used.
+        let mut user_only = Fitter::new(1, LIMITS);
+        let next = user_only.step(&k, &short, &goal);
+        assert_eq!(next.kreads, 0.0, "{next:?}");
+    }
+
+    #[test]
+    fn bandwidth_takes_page_cache_reads_where_non_temporal_lines_cannot() {
+        let goal = Goal {
+            ipc: Some(0.3),
+            mpki: Some(5.0),
+            dram: Some(8.0e8),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 4,
+            lines: 8.0,
+            wfrac: 1.0,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(0.3),
+            mpki: Some(5.0),
+            dram: Some(1.0e7),
+            accesses_per_s: 1.0e5,
+            instructions_per_s: Some(1.0e8),
+            ..Measured::default()
+        };
+        let mut f = Fitter::new(1, LIMITS);
+        let next = f.step(&k, &m, &goal);
+        assert_eq!(next.ntlines, 0.0, "an IPC of 0.3 cannot carry them");
+        assert!(next.kreads > 0.0, "{next:?}");
+        let mut without = Fitter::new(
+            1,
+            Limits {
+                kreads_available: false,
+                ..LIMITS
+            },
+        );
+        let next = without.step(&k, &m, &goal);
+        assert_eq!((next.kreads, next.ntlines), (0.0, 0.0), "{next:?}");
     }
 
     #[test]
@@ -1623,6 +1770,7 @@ mod tests {
                 sparse_floor: 128,
                 code_capacity: 50,
                 main_pages: 256,
+                kreads_available: false,
             },
         );
         let k = f.initial_knobs(

@@ -2,6 +2,8 @@
 //! a duty-cycled period. `docs/design.md` section 5 maps each knob to
 //! the observable it moves.
 
+use std::fs::File;
+use std::os::fd::OwnedFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
@@ -71,6 +73,10 @@ pub struct Knobs {
     pub codevisits: f64,
     /// Executable pages the code stream picks from; at most the capacity.
     pub code_pages: usize,
+    /// Page-cache reads per access: `pread` of one page of the page-cache
+    /// file, at a random page, so the kernel copies it; may be below one.
+    #[serde(default)]
+    pub kreads: f64,
     /// Period length.
     pub period_ms: u64,
 }
@@ -96,6 +102,7 @@ impl Default for Knobs {
             sparse_pages: 1,
             codevisits: 0.0,
             code_pages: 1,
+            kreads: 0.0,
             period_ms: 10,
         }
     }
@@ -159,9 +166,15 @@ impl Knobs {
                 self.code_pages
             )));
         }
+        if self.kreads > 0.0 && !buffers.has_cache() {
+            return Err(KnobError(
+                "kreads needs a page-cache file to read".to_string(),
+            ));
+        }
         for (name, v) in [
             ("codevisits", self.codevisits),
             ("tlbvisits", self.tlbvisits),
+            ("kreads", self.kreads),
             ("ntlines", self.ntlines),
         ] {
             if !(v >= 0.0 && v.is_finite()) {
@@ -342,6 +355,32 @@ pub struct Buffers {
     main: AnonBuffer,
     sparse: SparseSet,
     code: CodePages,
+    cache: Option<CacheRead>,
+}
+
+/// The page-cache file as the kernel reads it for the page-cache
+/// reads: its descriptor and its length in pages.
+#[derive(Debug)]
+pub struct CacheRead {
+    fd: OwnedFd,
+    pages: usize,
+}
+
+impl CacheRead {
+    /// A reader of `file`, which must be the page-cache file.
+    pub fn new(file: &File) -> std::io::Result<CacheRead> {
+        let pages = (file.metadata()?.len() / PAGE as u64) as usize;
+        if pages == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "the page-cache file holds no whole page",
+            ));
+        }
+        Ok(CacheRead {
+            fd: file.try_clone()?.into(),
+            pages,
+        })
+    }
 }
 
 impl Buffers {
@@ -358,6 +397,7 @@ impl Buffers {
             huge,
             SparseSet::Anon(AnonBuffer::new(sparse_pages.max(1) * PAGE, false)?),
             code_pages,
+            None,
         )
     }
 
@@ -367,12 +407,19 @@ impl Buffers {
         huge: bool,
         sparse: SparseSet,
         code_pages: usize,
+        cache: Option<CacheRead>,
     ) -> std::io::Result<Buffers> {
         Ok(Buffers {
             main: AnonBuffer::new(main_bytes.max(PAGE), huge)?,
             sparse,
             code: CodePages::new(code_pages.max(1))?,
+            cache,
         })
+    }
+
+    /// Whether page-cache reads have a file to read.
+    pub fn has_cache(&self) -> bool {
+        self.cache.is_some()
     }
 
     /// The main buffer.
@@ -405,6 +452,8 @@ pub struct WorkerStats {
     pub periods: AtomicU64,
     /// Nanoseconds spent in the busy part of periods.
     pub busy_ns: AtomicU64,
+    /// Page-cache reads completed.
+    pub kreads: AtomicU64,
     /// Thread id, once known.
     pub tid: AtomicU64,
 }
@@ -646,8 +695,9 @@ struct Worker {
     threads: usize,
 }
 
-/// Fractional knobs carried from one access to the next, so a rate
-/// below one per access is honoured over many accesses.
+/// What a worker carries from one access to the next: the fractions
+/// of rates below one per access, so they are honoured over many
+/// accesses, the walks' positions, and the page buffer.
 #[derive(Debug, Default)]
 struct Carry {
     lines: f64,
@@ -660,6 +710,10 @@ struct Carry {
     cursor: usize,
     /// Page the sparse walk is at.
     sparse_at: usize,
+    kread: f64,
+    /// Where the kernel copies a page-cache page to; a page, once a
+    /// read has happened.
+    pagebuf: Vec<u8>,
 }
 
 /// Lines per page.
@@ -796,6 +850,24 @@ impl Worker {
             let page = scale32((rng.next() >> 32) as u32, k.code_pages);
             state[3] = self.buffers.code.call(page, state[3]);
             c.code -= 1.0;
+        }
+        if let Some(cache) = &self.buffers.cache {
+            c.kread += k.kreads;
+            if c.kread >= 1.0 && c.pagebuf.is_empty() {
+                c.pagebuf = vec![0; PAGE];
+            }
+            while c.kread >= 1.0 {
+                let page = scale32((rng.next() >> 32) as u32, cache.pages);
+                // The kernel copies the page out of the page cache into the
+                // worker's buffer; a byte of it is folded in.
+                if let Ok(n) =
+                    nix::sys::uio::pread(&cache.fd, &mut c.pagebuf[..], (page * PAGE) as i64)
+                {
+                    state[3] ^= u64::from(c.pagebuf[n.saturating_sub(1)]);
+                    self.stats.kreads.fetch_add(1, Ordering::Relaxed);
+                }
+                c.kread -= 1.0;
+            }
         }
         p.compute.run(state);
         chase
@@ -1433,7 +1505,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = crate::footprint::CacheFile::create(dir.path(), 64 * PAGE as u64).unwrap();
         let map = cache.map(64 * PAGE).unwrap();
-        let b = Arc::new(Buffers::with_sparse(1 << 20, false, SparseSet::File(map), 1).unwrap());
+        let b =
+            Arc::new(Buffers::with_sparse(1 << 20, false, SparseSet::File(map), 1, None).unwrap());
         assert!(b.sparse_on_file());
         assert_eq!(b.sparse_capacity(), 64);
         let knobs = Knobs {
@@ -1451,6 +1524,57 @@ mod tests {
             "visits over the file's pages ran: {accesses}"
         );
         g.stop();
+    }
+
+    #[test]
+    fn page_cache_reads_go_through_the_kernel() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = crate::footprint::CacheFile::create(dir.path(), 64 * PAGE as u64).unwrap();
+        cache.settle().unwrap();
+        let reader = CacheRead::new(cache.file()).unwrap();
+        assert_eq!(reader.pages, 64);
+        let b = Arc::new(
+            Buffers::with_sparse(
+                1 << 20,
+                false,
+                SparseSet::Anon(AnonBuffer::new(PAGE, false).unwrap()),
+                1,
+                Some(reader),
+            )
+            .unwrap(),
+        );
+        assert!(b.has_cache());
+        let knobs = Knobs {
+            duty: 0.5,
+            kreads: 2.5,
+            sparse_pages: 1,
+            code_pages: 1,
+            ..Knobs::default()
+        };
+        knobs.validate(&b).unwrap();
+        let g = Generator::start(Arc::clone(&b), knobs, 1, None, 1).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let s = &g.stats()[0];
+        let (accesses, kreads) = (
+            s.accesses.load(Ordering::Relaxed),
+            s.kreads.load(Ordering::Relaxed),
+        );
+        g.stop();
+        assert!(accesses > 20, "{accesses}");
+        let per_access = kreads as f64 / accesses as f64;
+        assert!(
+            (2.3..=2.7).contains(&per_access),
+            "{kreads} reads over {accesses} accesses"
+        );
+        let without = small_buffers();
+        assert!(!without.has_cache());
+        let bad = Knobs {
+            kreads: 1.0,
+            sparse_pages: 1,
+            code_pages: 1,
+            ..Knobs::default()
+        };
+        assert!(bad.validate(&without).unwrap_err().0.contains("kreads"));
     }
 
     #[test]

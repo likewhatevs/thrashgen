@@ -153,6 +153,7 @@ PRNG, not from loaded data, so misses overlap.
 | `wfrac` | write share, so DRAM bandwidth at equal misses | fraction of main-stream lines stored to; a dirtied line is written back |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
 | `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks), walked in a fixed cycle with a stride coprime to the count, so that every visit to a set past the TLB's reach misses, where a random draw hits whenever it repeats a page still cached (128 random pages over a 72-entry L1 dTLB missed 44 percent of the time), and no next-page prefetcher follows the order; the set is anonymous memory, capped at an eighth of the anonymous target, or a read-only mapping of the page-cache file when that cap cannot hold it and the file can, so a small process with a large page cache gets its TLB rate from pages that count as page cache |
+| `kreads` | kernel-mode misses and instructions, DRAM bandwidth | `pread` of one page of the page-cache file per read, at a random page, into a buffer of the worker's own, so the kernel copies it out of the page cache: what a page-cache reader's kernel time is made of; may be below one per access |
 | `codevisits`, code page count | iTLB rate | calls through a function pointer into one-instruction stubs placed one per executable page at varying offsets; `codevisits` may be below one per access |
 | `huge` | main-stream page walks | `MADV_HUGEPAGE` on the main buffer; the report shows what THP actually backed. Without it the buffer is advised `MADV_NOHUGEPAGE`, since a THP policy of `always` would otherwise back it with hugepages anyway |
 
@@ -189,7 +190,7 @@ non-temporal lines for bandwidth, only while IPC and MPKI are within
 twice their tolerance, since both change them, and non-temporal lines
 only for an IPC target of 0.6 or more, since each line is eight stores
 retiring at high IPC and 64 of them per access quadrupled IPC and
-divided MPKI by ten on Zen 4, where the write share moved neither; tlbvisits; codevisits; repeat until
+divided MPKI by ten on Zen 4, where the write share moved neither, and page-cache reads, a page from DRAM each, where non-temporal lines cannot carry the bandwidth or are at their cap; tlbvisits; codevisits; repeat until
 every verified target is within tolerance or the pass limit is hit.
 
 Busy cores and burstiness start from the clipped model: the duty and
@@ -240,7 +241,10 @@ both at their floors and a visit on only a share of accesses, the
 whole access scales up, compute and visit share together, so the slow
 chain carries more of the instructions at the same misses per
 instruction; dependent visits last. At one op with MPKI short, run
-length follows the shortfall undamped. IPC short: longer runs, when the
+length follows the shortfall undamped, and with the run at its range,
+page-cache reads, when the profile's counts cover kernel mode, since
+the kernel's copy is where a page-cache reader's misses are; they are
+the first lever given back when misses run high. IPC short: longer runs, when the
 stream has a run and not a visit share, since a run of one on every
 access would undo the dilution the share is; more
 chains, then a sequential walk that lets the prefetcher stream; under
@@ -270,8 +274,9 @@ otherwise, the sequential share rises when IPC is not high, or visits
 per access fall and dilute the events when it is; otherwise dTLB
 waits.
 A shrink that cost a quarter of the misses beyond what the run length
-explains, with misses above their absolute floor, is undone and not
-tried again, and the window it spoiled moves nothing else, since the
+explains, with misses above their absolute floor and more of them than
+compute could buy back by shedding its share of the instructions, is
+undone and not tried again, and the window it spoiled moves nothing else, since the
 other rules would chase the misses it took away. A target within
 tolerance moves none of its knobs, and a window with every judged
 target within moves nothing: every rule nudges, a nudge from inside
@@ -296,9 +301,16 @@ period; measured at fixed knobs on Zen 4, IPC and MPKI vary 0.3 to
 one percent, far inside the tolerance, so a 100 ms window costs nothing
 measurable and thirty-six passes fit the budget; `--window` changes
 it. The page-cache file is written by a thread while the first windows
-run, so a gigabyte of it does not hold the workers back. Two consecutive windows at the same knobs are
-averaged for the fitter, so a single noisy window, a neighbour's burst
-or a page-cache refill, moves nothing on its own. Busy cores and
+run, so a gigabyte of it does not hold the workers back. Consecutive
+windows at the same knobs are pooled for the fitter, the newest two
+at least and then as many as hold the instructions of 0.4 s at the
+run's mean rate, plus two seconds per unit of the burstiness target:
+the rates per instruction weighted by each window's instructions and
+IPC as the instructions over the cycles, as a recorder's interval
+would count them, so a single noisy window, a neighbour's burst, a
+page-cache refill or a quiet second of a bursty duty cycle, whose few
+instructions carry the misses of a cold cache and the kernel's
+wakeups, moves nothing on its own. Busy cores and
 burstiness are judged on a rolling window of forty one-second
 samples, two factor blocks, from the third sample on, as above; until
 then they are not judged at all, so an early reading of them neither
