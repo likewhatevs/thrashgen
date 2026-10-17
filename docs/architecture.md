@@ -115,8 +115,9 @@ sample, each second against what the knobs intended for it.
 
 ## 4. The fitter's pass
 
-One pass is one call of `Fitter::step`. The rules run in a fixed order
-and each is quiet while its observable is within tolerance.
+One pass is one call of `Fitter::step`, which runs the rules below in
+this order, one method each, over a `Pass` that carries what they
+share; each rule is quiet while its observable is within tolerance.
 
 ```mermaid
 flowchart TD
@@ -128,8 +129,8 @@ flowchart TD
     D --> E[dilution: past 4096 ops, halve the run length]
     E --> F[page-cache reads back if misses run high]
     F --> G[ops: model-based, from misses per access and the measured slope]
-    G --> H[at one op, misses short: run length up, then page-cache reads if the kernel counts]
-    H --> I[sparse set halves once compute and dilution are spent]
+    G --> H[sparse set halves once compute and dilution are spent]
+    H --> I[at one op, misses short: run length up, then page-cache reads if the kernel counts]
     I --> J[bandwidth: write share, non-temporal lines, page-cache reads]
     J --> K[visit rates: compensate the change in instructions per access, correct the error]
     K --> L[dTLB excess from the main stream: working set, then walk, then dilution]
