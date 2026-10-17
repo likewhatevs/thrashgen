@@ -71,59 +71,98 @@ and records only the server.
 
 ## Results
 
-Run on the Zen 4 host described in `docs/design.md`, unprivileged:
-counters in user mode only, L3 misses through the DRAM-fill proxy,
-bandwidth modelled and so absent from both recordings. Two minutes
-recorded, seven minutes replayed, the replay recorded over its last
-167 s. Plots and data are under `docs/experiments/`; `summary.svg`
-puts every ratio on one chart.
+Run on the Zen 4 host described in `docs/design.md` on 2026-10-16,
+all four modes from one commit, with the thirty-second fit: each
+replay fitted for 45 s and the knobs it ended on then ran for 150 s
+with no counters of their own, recorded over the last 135 s. "Within"
+counts the fields within tolerance out of the fields the recorder
+measured; "fit" is the pass and second at which the fit converged, or
+"held" when it ran out of its fifteen passes and held what it had.
+Plots and data are under `docs/experiments/<mode>/`.
 
-| benchmark | within tolerance | busy cores | memory | IPC | L3 MPKI | what missed |
-| --- | --- | --- | --- | --- | --- | --- |
-| schbench | 10 of 10 | -0.2% | anon +0.2% | +1.8% | 0.0048 vs 0.0049 | nothing |
-| sysbench | 10 of 10 | -0.2% | anon +0.5 MB on 1.6 MB | -3.6% | both near zero | nothing |
-| stress-ng | 7 of 10 | -0.1% | anon 1.075 GB exact | 0.58 vs 0.22 | 13.9 vs 17.6 | IPC, MPKI, dTLB rate |
-| fio | 5 of 10 | -5.2% | page cache 1.00 GB vs 1.03 GB | 1.31 vs 0.68 | 0.14 vs 0.24 | burstiness, IPC, MPKI, both TLB rates |
+### `user`: unprivileged, as in a container
 
-The two compute-bound benchmarks replay within tolerance on every
-field. The two memory-bound ones replay their busy cores and memory
-exactly and miss on the counter ratios, for reasons the design doc's
-limits predict:
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 10 of 10 | 13 passes, 28 s | nothing |
+| sysbench | 10 of 10 | 8 passes, 18 s | nothing |
+| taobench | 8 of 10 | held | IPC 0.67 vs 0.75, MPKI 5.3 vs 5.6 |
+| stress-ng | 8 of 10 | held | MPKI 13.6 vs 20.7, dTLB 0.031 vs 0.0035 |
+| fio | 8 of 10 | held | burstiness 0.68 vs 0.87, dTLB 5.1 vs 8.7 |
 
-- **stress-ng** streams sequentially through 1 GiB with hugepages, so
-  it misses the L3 at every line but almost never the TLB, and its IPC
-  is that of a store stream. The generator's main stream is random: at
-  one op per access and two lines per visit it reaches 14 MPKI, and at
-  that point its IPC floor is 0.58 against 0.22, while its random pages
-  cost one L2 TLB hit per visit against stress-ng's near zero. A
-  sequential stream mode would close all three.
-- **fio** spends most of its time in the kernel; the user-mode view the
-  recorder gets without `CAP_PERFMON` is a thin slice of syscall
-  wrappers with a high TLB rate per instruction. The replay reproduces
-  the page cache and the busy cores, and its burstiness sat within a
-  few percent of the target in its own windows from the eighth pass
-  on, but the recorder saw a lower CV over 167 s than over the
-  benchmark's full two minutes, and the user-mode ratios of a
-  kernel-bound process are not something a user-mode generator can
-  match.
+### `kernel`: both recordings count kernel mode
 
-The fitter converged in six passes on schbench; on the other three it
-ran out of its twelve passes while still closing, with sysbench's IPC
-within tolerance from pass ten.
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 10 of 10 | 3 passes, 8 s | nothing |
+| sysbench | 10 of 10 | 8 passes, 18 s | nothing |
+| taobench | 9 of 10 | held | MPKI 3.6 vs 3.9 |
+| stress-ng | 8 of 10 | held | MPKI 21.5 vs 20.3, dTLB 0.36 vs 0.012 |
+| fio | 5 of 10 | held | burstiness, IPC 1.54 vs 1.41, MPKI 1.1 vs 2.2, dTLB 14 vs 6.1, iTLB |
+
+### `resctrl`: DRAM bandwidth measured on both sides
+
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 11 of 11 | 13 passes, 28 s | nothing; bandwidth 118 MB/s vs 104 |
+| sysbench | 11 of 11 | 13 passes, 28 s | nothing; bandwidth within its floor |
+| taobench | 9 of 11 | held | IPC 0.87 vs 0.68, bandwidth 11.1 vs 9.6 GB/s |
+| stress-ng | 7 of 11 | held | IPC 0.24 vs 0.22, MPKI 13 vs 21, dTLB, bandwidth 10 vs 70 GB/s |
+| fio | 6 of 10 | held | busy cores 0.38 vs 0.27, IPC 1.17 vs 0.83, burstiness, iTLB; the replay's bandwidth had no reading |
+
+### `noisy`: three profiles at once, each in its own scope
+
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 10 of 10 | 5 passes, 12 s | nothing |
+| taobench | 9 of 10 | held | IPC 0.68 vs 0.75 |
+| stress-ng | 8 of 10 | held | MPKI 22.2 vs 20.7, dTLB 0.12 vs 0.0035 |
 
 ## Reading the results
 
 The comparison is between two recordings taken the same way, so it
-measures the replay against the recorder, not against the replay's own
-report. Expect:
+measures the replay against the recorder, not against the replay's
+own report. What the four modes say:
 
-- busy cores, memory composition and the counter ratios within the
-  tolerances in `docs/design.md`, when the replay converged;
-- kernel-mode work absent from the replay: the recorder runs without
-  `CAP_PERFMON` here, so both recordings count user mode only, and the
-  fio experiment's instructions are mostly kernel-side to begin with;
-- DRAM bandwidth modelled, not measured, for the same reason, and
-  absent from the recordings.
+- **The compute-bound profiles converge inside the budget in every
+  mode**, in 8 to 28 seconds, with two neighbours or without, and
+  their busy cores, memory and ratios land within tolerance.
+- **TaoBench converges in some runs and holds a few percent off in
+  others.** Two earlier runs on the same fitter reached 10 of 10 in
+  14 passes; at the fifteenth pass of these runs its IPC sat 3 to 10
+  percent off. The budget is the trade: a profile this far from the
+  first guess needs most of the fifteen passes, and a window or two
+  of noise at the end decides. A calibration from an earlier run
+  (`--calibration`) starts it where it ended and takes the question
+  away.
+- **stress-ng's IPC is now within tolerance in every mode**, which
+  the dependent visits bought; its MPKI varies from 7 percent high to
+  a third low between runs, since the run length that gives it is
+  still moving at the fifteenth pass, and its dTLB rate cannot be
+  met: a random stream over a hugepage set small enough for the
+  first-level TLB keeps missing the L3 only above the cache's size,
+  and this host's window between the two is where the set already
+  sits. Its 70 GB/s is a streaming store's bandwidth; random 64-byte
+  lines reach 10 to 18 GB/s here.
+- **fio is the user-mode view of a kernel-bound process.** In user
+  mode its busy cores, IPC and MPKI are now within tolerance; its
+  dTLB rate is short because the sparse page set is capped at an
+  eighth of a 3.4 MB anonymous footprint, about a hundred pages, which
+  the first-level TLB mostly holds; its burstiness is short because an
+  access of half a million instructions has a coarse duty cycle. In
+  kernel mode the profile acquires the kernel's own misses and TLB
+  events, which a user-mode generator does not produce.
+- **Measured bandwidth** agrees with the model for the compute-bound
+  profiles. For the memory-bound ones the bandwidth rule's levers,
+  the write share and non-temporal lines, move IPC as well, and with
+  the budget spent on them taobench's IPC drifted 28 percent high; the
+  rule now moves only while IPC and MPKI are near their targets, and
+  stays an open item in `docs/status.md`.
+- **Neighbours cost little**: with three replays sharing the caches
+  and the memory bus, the compute-bound one converged in 12 seconds,
+  taobench held within 9 percent on IPC and 2 on MPKI, and stress-ng
+  within 7 percent on MPKI, each instance measuring only its own
+  scope.
 
 What the plots cannot show is anything outside the observables: the
 replay has no syscalls, no I/O and no wakeups, however close the
