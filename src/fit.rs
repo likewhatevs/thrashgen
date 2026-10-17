@@ -161,8 +161,11 @@ const NT_IPC_FLOOR: f64 = 0.6;
 /// fewer of them once compute gives the prefetcher time, so a large
 /// step lands far from where the model said.
 const OPS_STEP_MAX: f64 = 4.0;
-/// One-second samples a window needs before its burstiness is trusted.
-pub const MIN_CV_SAMPLES: usize = 30;
+/// One-second samples before busy cores and burstiness are judged.
+/// Each is compared with the factor the generator intended for that
+/// second, so three suffice where thirty did when the long-run mean
+/// had to be measured.
+pub const MIN_CV_SAMPLES: usize = 3;
 
 /// Absolute tolerance per field: a target near zero is met when the
 /// measurement is near zero too, whatever the ratio says. Memory gets
@@ -312,7 +315,7 @@ impl Fitter {
             }
             Some(0.5 * (lo + hi))
         };
-        let (mut lo, mut hi) = (0.0, 3.0);
+        let (mut lo, mut hi) = (0.0, 6.0);
         for _ in 0..24 {
             let mid = 0.5 * (lo + hi);
             match duty_for(mid) {
@@ -514,9 +517,8 @@ impl Fitter {
             };
 
         // Busy cores and burstiness start from the clipped model and are
-        // corrected from measurement only once the rolling window holds
-        // enough one-second samples to mean anything; the ratios below
-        // settle in seconds, these take the better part of a minute.
+        // corrected from the long-run values the measured seconds
+        // predict, once there are a few of them.
         if m.cv_samples >= MIN_CV_SAMPLES {
             if let (Some(t), Some(v), false) = (goal.cores, m.cores, within("cpu_usage_cores")) {
                 k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);

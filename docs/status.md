@@ -62,16 +62,10 @@ In rough order of value.
    then trade the sequential share and the run length back and forth
    until the passes run out. A joint rule for the two at one op per
    access, or accepting the IPC the walk gives, would settle it.
-4. **Busy cores and burstiness take thirty seconds.** They are judged
-   only once the rolling window holds thirty one-second samples, since
-   the per-second CV has no shorter estimate; the ratios converge in
-   about a second and the generator runs the clipped-lognormal model's
-   duty and CV until then. A harness fit of ten seconds never judges
-   them; the hold recording is where they show.
-5. **Warm starts.** `--calibration` carries knobs for targets the host
+4. **Warm starts.** `--calibration` carries knobs for targets the host
    cannot measure. A cache keyed by CPU model and profile hash would
    start a repeat fit at the knobs it ended on last time; not started.
-6. **The first dTLB measurement.** Run and recorder once disagreed on
+5. **The first dTLB measurement.** Run and recorder once disagreed on
    a replay's dTLB rate by fifty times while both shared the PMU; the
    harness now records a counter-free run, which removed it, but the
    mechanism, time-multiplexing against a 10 ms duty cycle, was not

@@ -80,10 +80,7 @@ counts the fields within tolerance out of the fields the recorder
 measured; "fit" is the number of passes, windows that moved a knob,
 and the second of the last one, or "held" when the fit ran out of its
 thirty-six passes without converging and held the closest pass it
-saw. Busy cores and burstiness are judged only once thirty one-second
-samples are in, so a ten-second fit never judges them; the hold
-recording shows what the clipped-lognormal model gave. Plots and data
-are under `docs/experiments/<mode>/`.
+saw. Plots and data are under `docs/experiments/<mode>/`.
 
 ### `user`: unprivileged, as in a container
 

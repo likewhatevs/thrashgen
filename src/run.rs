@@ -127,6 +127,40 @@ pub fn window_seconds(requested: Option<f64>) -> f64 {
     requested.map(|r| r.max(0.05)).unwrap_or(0.1)
 }
 
+/// Long-run busy cores and burstiness predicted from the seconds
+/// measured so far. Each second's busy cores are compared with what the
+/// knobs intended for it, so the mean's efficiency and the burstiness
+/// ratio are known from a few seconds where a long-run average would
+/// take as many seconds as the CV squared over the tolerance squared;
+/// applied to the clipped model's mean and CV they give the values a
+/// long recording would see. With no intended variation the measured
+/// jitter is the burstiness.
+pub fn predicted_cores_cv(
+    measured: &[f64],
+    intended: &[f64],
+    knobs: &Knobs,
+    threads: usize,
+) -> (Option<f64>, Option<f64>) {
+    if measured.is_empty() {
+        return (None, None);
+    }
+    let (model_mean, model_cv) = crate::loadgen::clipped_duty_stats(knobs.duty, knobs.cv);
+    let sum_int: f64 = intended.iter().sum();
+    let efficiency = if sum_int > 0.0 {
+        measured.iter().sum::<f64>() / sum_int
+    } else {
+        1.0
+    };
+    let cores = efficiency * threads as f64 * model_mean;
+    let one =
+        |xs: &[f64]| pooled_cv(std::slice::from_ref(&xs.to_vec()), xs.len()).map(|(cv, _)| cv);
+    let cv = match (one(measured), one(intended)) {
+        (Some(m), Some(i)) if i > 1e-9 => Some(model_cv * m / i),
+        (m, _) => m,
+    };
+    (Some(cores), cv)
+}
+
 /// Two consecutive windows at the same knobs are one longer window:
 /// their ratios are averaged for the fitter, so a single noisy window,
 /// a neighbour's burst or a page-cache refill, moves nothing on its
@@ -148,14 +182,10 @@ pub fn blend(now: &Measured, prev: &Measured) -> Measured {
     }
 }
 
-/// Rolling window for busy cores and burstiness: the tolerance needs
-/// `(cv / tol)^2` seconds of 1 Hz samples, between 30 s and 300 s.
-pub fn long_window_seconds(goal_cv: Option<f64>, tol: f64) -> f64 {
-    goal_cv
-        .map(|cv| (cv / tol).powi(2))
-        .unwrap_or(0.0)
-        .clamp(30.0, 300.0)
-}
+/// Rolling window of one-second samples behind busy cores and
+/// burstiness: two factor blocks, so the ratio sees every quantile
+/// twice and a neighbour's arrival is in within a minute.
+pub const CORES_WINDOW_SECONDS: usize = 2 * crate::loadgen::FACTOR_BLOCK as usize;
 
 /// Whether the sparse stream should run on the page-cache file: the
 /// anonymous target cannot spare the pages the configured sparse set
@@ -540,12 +570,13 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let fitting = settings.knobs.is_none() && !goal.is_empty();
     let window_s = window_seconds(settings.window_s);
     let refit_windows = ((REFIT_SECONDS / window_s).ceil() as u32).max(CONVERGED_WINDOWS);
-    let long_n = long_window_seconds(goal.cv, fitter.tol.cv).round() as usize;
-    let mut rolling: std::collections::VecDeque<f64> =
-        std::collections::VecDeque::with_capacity(long_n);
+    // Measured busy cores per second beside what the knobs intended for
+    // that second, the duty times its factor.
+    let mut rolling: std::collections::VecDeque<(f64, f64)> =
+        std::collections::VecDeque::with_capacity(CORES_WINDOW_SECONDS);
     writeln!(
         progress,
-        "run: {threads} threads, window {window_s:.0} s, busy-cores window {long_n} s, main buffer {} MiB{}",
+        "run: {threads} threads, window {window_s:.1} s, busy-cores window {CORES_WINDOW_SECONDS} s, main buffer {} MiB{}",
         mem_plan.main_bytes >> 20,
         if fitting { "" } else { ", fixed knobs" }
     )?;
@@ -612,8 +643,14 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         if now >= next_cpu || stop {
             let c = sampler.cpu_tick(unix_now()).context("busy-cores sample")?;
             window.cpu_series.push(c.cores);
-            rolling.push_back(c.cores);
-            while rolling.len() > long_n {
+            // The tick follows a second boundary, so the sample is the
+            // second just ended, whose factor the workers drew from it.
+            let ended = (c.t as u64).saturating_sub(1);
+            let intended = threads as f64
+                * (knobs.duty * crate::loadgen::duty_factor(settings.seed, ended, knobs.cv))
+                    .min(1.0);
+            rolling.push_back((c.cores, intended));
+            while rolling.len() > CORES_WINDOW_SECONDS {
                 rolling.pop_front();
             }
             next_cpu =
@@ -625,22 +662,23 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 let sample = sampler.interval_tick(unix_now()).context("window sample")?;
                 let accesses = accesses_total(&generator);
                 let aps = (accesses - window.accesses_at_start) as f64 / seconds.max(1e-9);
-                // Busy cores and burstiness come from the rolling window,
-                // which is long enough for the target's tolerance.
-                let long: Vec<f64> = rolling.iter().copied().collect();
-                let cv =
-                    pooled_cv(std::slice::from_ref(&long), long.len().max(1)).map(|(cv, _)| cv);
-                let cores_long =
-                    (!long.is_empty()).then(|| long.iter().sum::<f64>() / long.len() as f64);
+                // Busy cores and burstiness: the seconds measured so far
+                // against what the knobs intended for them give the
+                // efficiency of the mean and the ratio of the burstiness,
+                // which need no long-run average; applied to the clipped
+                // model they predict the long-run values, and those are
+                // judged.
+                let (long, intended): (Vec<f64>, Vec<f64>) = rolling.iter().copied().unzip();
+                let (cores_pred, cv_pred) = predicted_cores_cv(&long, &intended, &knobs, threads);
                 let dram = sample
                     .values
                     .get("dram_bytes_per_sec")
                     .copied()
                     .or_else(|| dram_model(&sample, &knobs, aps));
-                let mut m = measured_from(&sample, cv, aps, dram);
+                let mut m = measured_from(&sample, cv_pred, aps, dram);
                 m.cv_samples = long.len();
-                if cores_long.is_some() {
-                    m.cores = cores_long;
+                if cores_pred.is_some() {
+                    m.cores = cores_pred;
                 }
                 let raw = m.clone();
                 if let Some((k, p)) = &prev_window {
@@ -878,10 +916,38 @@ mod tests {
         assert!(close(window_seconds(None), 0.1));
         assert!(close(window_seconds(Some(2.0)), 2.0));
         assert!(close(window_seconds(Some(0.0)), 0.05));
-        assert!(close(long_window_seconds(None, 0.05), 30.0));
-        assert!(close(long_window_seconds(Some(0.3), 0.05), 36.0));
-        assert!(close(long_window_seconds(Some(0.73), 0.05), 213.16));
-        assert!(close(long_window_seconds(Some(5.0), 0.05), 300.0));
+        assert_eq!(CORES_WINDOW_SECONDS, 40);
+    }
+
+    #[test]
+    fn predicted_cores_and_cv_come_from_the_intended_seconds() {
+        let k = Knobs {
+            duty: 0.5,
+            cv: 0.6,
+            ..Knobs::default()
+        };
+        let (mean, cv) = crate::loadgen::clipped_duty_stats(0.5, 0.6);
+        // Three seconds at 90 percent of what they intended: the mean
+        // is corrected, the burstiness ratio is one.
+        let intended = [0.8, 1.2, 1.0];
+        let measured: Vec<f64> = intended.iter().map(|x| 0.9 * x).collect();
+        let (c, v) = predicted_cores_cv(&measured, &intended, &k, 4);
+        assert!((c.unwrap() - 0.9 * 4.0 * mean).abs() < 1e-9);
+        assert!((v.unwrap() - cv).abs() < 1e-9);
+        // Twice the intended spread doubles the predicted CV.
+        let wider = [0.6, 1.4, 1.0];
+        let (_, v) = predicted_cores_cv(&wider, &intended, &k, 4);
+        assert!((v.unwrap() - 2.0 * cv).abs() < 1e-9);
+        // No intended variation: the measured jitter is the burstiness.
+        let flat = Knobs {
+            duty: 0.5,
+            cv: 0.0,
+            ..Knobs::default()
+        };
+        let (c, v) = predicted_cores_cv(&[2.0, 2.0, 2.2], &[2.0, 2.0, 2.0], &flat, 4);
+        assert!((c.unwrap() - 6.2 / 6.0 * 4.0 * 0.5).abs() < 1e-9);
+        assert!(v.unwrap() > 0.0 && v.unwrap() < 0.1);
+        assert_eq!(predicted_cores_cv(&[], &[], &flat, 4), (None, None));
     }
 
     #[test]

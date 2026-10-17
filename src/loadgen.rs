@@ -11,7 +11,7 @@ use nix::sched::{CpuSet, sched_setaffinity};
 use nix::sys::mman::{ProtFlags, mprotect};
 use nix::unistd::Pid;
 use rand::SeedableRng;
-use rand_distr::{Distribution, LogNormal};
+use rand::seq::SliceRandom;
 use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -177,37 +177,55 @@ impl Knobs {
     }
 }
 
-/// Per-second duty factor: lognormal with mean 1 and the given CV,
-/// seeded from the run seed and the wall-clock second so every
-/// thread draws the same value. A CV of zero is exactly 1.
+/// Seconds in a block of per-second factors. Within a block the
+/// factors are the block's midpoint quantiles of the lognormal, in an
+/// order seeded from the block, so every block has exactly the set's
+/// mean and CV and a recording a few blocks long reads them off,
+/// where independent draws needed `(cv / tolerance)²` seconds to.
+pub const FACTOR_BLOCK: u64 = 20;
+
+/// The `i`th of a block's factors: the lognormal with mean 1 and CV
+/// `cv` at probability (i + ½) / block.
+pub fn factor_quantile(cv: f64, i: u64) -> f64 {
+    let sigma2 = (1.0 + cv * cv).ln();
+    let p = (i as f64 + 0.5) / FACTOR_BLOCK as f64;
+    let z = std::f64::consts::SQRT_2 * puruspe::inverf(2.0 * p - 1.0);
+    (-0.5 * sigma2 + sigma2.sqrt() * z).exp()
+}
+
+/// Per-second duty factor: the block's quantile at this second's slot
+/// of a permutation seeded from the run seed and the block, so every
+/// thread uses the same value and every block the whole set. A CV of
+/// zero is exactly 1.
 pub fn duty_factor(seed: u64, second: u64, cv: f64) -> f64 {
     if cv <= 0.0 {
         return 1.0;
     }
-    let dist = LogNormal::from_mean_cv(1.0, cv).expect("finite cv");
+    let block = second / FACTOR_BLOCK;
+    let slot = (second % FACTOR_BLOCK) as usize;
+    let mut order: [u8; FACTOR_BLOCK as usize] = std::array::from_fn(|i| i as u8);
     let mut rng =
-        Xoshiro256PlusPlus::seed_from_u64(seed ^ second.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    dist.sample(&mut rng)
+        Xoshiro256PlusPlus::seed_from_u64(seed ^ block.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    order.shuffle(&mut rng);
+    factor_quantile(cv, u64::from(order[slot]))
 }
 
 /// Mean and coefficient of variation of the busy fraction a worker
-/// actually runs at `duty` and `cv`: the per-second factor clipped at
-/// full duty, so the mean falls short of `duty` and the CV of the
-/// knob once the clip bites. Sampled from the same distribution the
-/// workers draw from, with a fixed seed, so the fitter can set both
-/// knobs from the model instead of measuring them for minutes.
+/// actually runs at `duty` and `cv` over a block: the per-second
+/// factors clipped at full duty, so the mean falls short of `duty`
+/// and the CV of the knob once the clip bites. Exactly the set the
+/// workers run, so the fitter can set both knobs from the model and
+/// the generator knows what each second intends.
 pub fn clipped_duty_stats(duty: f64, cv: f64) -> (f64, f64) {
     if cv <= 0.0 {
         return (duty.min(1.0), 0.0);
     }
-    const N: u64 = 4096;
-    let dist = LogNormal::from_mean_cv(1.0, cv).expect("finite cv");
-    let mut rng = Xoshiro256PlusPlus::seed_from_u64(0x5EED);
-    let xs: Vec<f64> = (0..N)
-        .map(|_| (duty * dist.sample(&mut rng)).min(1.0))
+    let xs: Vec<f64> = (0..FACTOR_BLOCK)
+        .map(|i| (duty * factor_quantile(cv, i)).min(1.0))
         .collect();
-    let mean = xs.iter().sum::<f64>() / N as f64;
-    let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / N as f64;
+    let n = FACTOR_BLOCK as f64;
+    let mean = xs.iter().sum::<f64>() / n;
+    let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
     (mean, if mean > 0.0 { var.sqrt() / mean } else { 0.0 })
 }
 
@@ -948,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn duty_factor_has_mean_one_and_the_requested_cv() {
+    fn duty_factor_runs_every_block_through_the_quantile_set() {
         assert_eq!(duty_factor(1, 2, 0.0), 1.0);
         assert_eq!(
             duty_factor(7, 99, 0.5),
@@ -956,19 +974,42 @@ mod tests {
             "deterministic"
         );
         assert_ne!(duty_factor(7, 99, 0.5), duty_factor(7, 100, 0.5));
-        assert_ne!(duty_factor(7, 99, 0.5), duty_factor(8, 99, 0.5));
+        let block = |seed: u64, b: u64, cv: f64| -> Vec<f64> {
+            (0..FACTOR_BLOCK)
+                .map(|slot| duty_factor(seed, b * FACTOR_BLOCK + slot, cv))
+                .collect()
+        };
+        let sorted = |mut v: Vec<f64>| {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v
+        };
+        let mut last_cv = 0.0;
         for cv in [0.1, 0.3, 0.73, 1.5] {
-            let n = 200_000u64;
-            let xs: Vec<f64> = (0..n).map(|s| duty_factor(42, s, cv)).collect();
-            let mean = xs.iter().sum::<f64>() / n as f64;
-            let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
-            let got_cv = var.sqrt() / mean;
-            assert!((mean - 1.0).abs() < 0.02, "cv {cv}: mean {mean}");
+            let set: Vec<f64> = (0..FACTOR_BLOCK).map(|i| factor_quantile(cv, i)).collect();
+            assert!(set.iter().all(|x| *x > 0.0));
+            for b in [0u64, 1, 5_000_000] {
+                assert_eq!(
+                    sorted(block(42, b, cv)),
+                    sorted(set.clone()),
+                    "block {b} cv {cv}"
+                );
+            }
+            assert_ne!(block(42, 0, cv), block(42, 1, cv), "blocks differ in order");
+            assert_ne!(block(42, 0, cv), block(43, 0, cv), "seeds differ in order");
+            // The model is the clipped set itself.
+            let (mean, got_cv) = clipped_duty_stats(0.5, cv);
+            let n = FACTOR_BLOCK as f64;
+            let clipped: Vec<f64> = set.iter().map(|x| (0.5 * x).min(1.0)).collect();
+            let m = clipped.iter().sum::<f64>() / n;
+            let v = clipped.iter().map(|x| (x - m).powi(2)).sum::<f64>() / n;
+            assert!((mean - m).abs() < 1e-12 && (got_cv - v.sqrt() / m).abs() < 1e-12);
+            let raw = set.iter().sum::<f64>() / n;
+            assert!((raw - 1.0).abs() < 0.15, "cv {cv}: set mean {raw}");
             assert!(
-                (got_cv - cv).abs() < 0.05 * cv.max(0.3),
-                "cv {cv}: got {got_cv}"
+                got_cv > last_cv,
+                "cv {cv}: set CV {got_cv} rises with the knob"
             );
-            assert!(xs.iter().all(|x| *x > 0.0));
+            last_cv = got_cv;
         }
     }
 
