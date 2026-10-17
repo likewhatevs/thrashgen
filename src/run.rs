@@ -89,7 +89,7 @@ impl Default for Settings {
             pin: Pin::Auto,
             seed: 1,
             adaptive: false,
-            max_passes: 40,
+            max_passes: 36,
             threads: None,
             main_bytes: None,
             sparse_capacity: 16384,
@@ -116,11 +116,11 @@ pub const MIN_MAIN_BYTES: u64 = 1 << 20;
 /// period and the ratios are read over the whole window; measured at
 /// fixed knobs on Zen 4, IPC and MPKI vary 0.3 to 0.5 percent from one
 /// 100 ms window to the next and the TLB rates about one percent, far
-/// inside the five percent tolerance, so 200 ms costs nothing
-/// measurable and forty passes fit in eight seconds. An explicit
-/// request overrides.
+/// inside the five percent tolerance, so 100 ms costs nothing
+/// measurable and thirty-six passes fit in under four seconds. An
+/// explicit request overrides.
 pub fn window_seconds(requested: Option<f64>) -> f64 {
-    requested.map(|r| r.max(0.05)).unwrap_or(0.2)
+    requested.map(|r| r.max(0.05)).unwrap_or(0.1)
 }
 
 /// Two consecutive windows at the same knobs are one longer window:
@@ -565,6 +565,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut last_sample: Option<Sample> = None;
     let mut prev_window: Option<(Knobs, Measured)> = None;
     let mut converged = false;
+    let mut ever_converged = false;
     let mut streak = 0u32;
     let mut out_of_tolerance = 0u32;
     // The closest pass so far, to hold when the passes run out: the last
@@ -686,6 +687,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     best = Some((distance, knobs.clone(), fitter.passes));
                 }
                 converged = streak >= CONVERGED_WINDOWS;
+                ever_converged |= converged;
                 if knobs.duty >= 1.0
                     && last_statuses_short_of_cores(&statuses)
                     && !notes.iter().any(|n| n.starts_with("busy cores"))
@@ -721,10 +723,13 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     }
                 }
                 last_sample = Some(sample);
-                // After convergence a single window out of tolerance is
-                // noise, often the recorder attaching; the fit moves again
-                // only when two in a row are out.
-                let refit = streak == 0 && (!converged || out_of_tolerance >= CONVERGED_WINDOWS);
+                // Once the fit has converged, a single window out of
+                // tolerance is noise, a neighbour's burst or the recorder
+                // attaching; the fit moves again only when two in a row
+                // are out. The memory of having converged must not be the
+                // current streak, which the noisy window has just reset.
+                let refit =
+                    streak == 0 && (!ever_converged || out_of_tolerance >= CONVERGED_WINDOWS);
                 if fitting && !stop && (settings.adaptive || refit) {
                     if fitter.passes < settings.max_passes {
                         let next = fitter.step(&knobs, &m, &goal);
@@ -842,7 +847,7 @@ mod tests {
     #[test]
     fn window_lengths() {
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        assert!(close(window_seconds(None), 0.2));
+        assert!(close(window_seconds(None), 0.1));
         assert!(close(window_seconds(Some(2.0)), 2.0));
         assert!(close(window_seconds(Some(0.0)), 0.05));
         assert!(close(long_window_seconds(None, 0.05), 30.0));

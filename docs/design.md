@@ -257,12 +257,14 @@ far from where the model said; ops stop at 80k and visits at 10k per
 access, some 200k instructions, so an access never outlasts the busy
 part of a period.
 
-The fit has a budget of about ten seconds. Ratios are read over the
+The fit has a budget of under four seconds. Ratios are read over the
 whole fit window and the workers take new knobs within a 10 ms
 period; measured at fixed knobs on Zen 4, IPC and MPKI vary 0.3 to
 0.5 percent from one 100 ms window to the next and the TLB rates about
-one percent, far inside the tolerance, so a 200 ms window costs nothing
-measurable and forty passes fit the budget; `--window` changes it. Two consecutive windows at the same knobs are
+one percent, far inside the tolerance, so a 100 ms window costs nothing
+measurable and thirty-six passes fit the budget; `--window` changes
+it. The page-cache file is written by a thread while the first windows
+run, so a gigabyte of it does not hold the workers back. Two consecutive windows at the same knobs are
 averaged for the fitter, so a single noisy window, a neighbour's burst
 or a page-cache refill, moves nothing on its own. Busy cores and burstiness do not: with independent
 per-second jitter a window's mean has standard error
@@ -271,8 +273,8 @@ are therefore judged on a rolling window of that length, between 30 s
 and 300 s, while the ratios are fitted every fit window. Convergence is declared after two consecutive windows
 within tolerance; the generator then holds and keeps reporting, and
 moves again only after two consecutive windows out of tolerance, so a
-single noisy window, often the one in which a recorder attaches, does
-not undo the fit; with `--adaptive` it keeps adjusting. A fit that
+single noisy window, a neighbour's burst or the one in which a
+recorder attaches, does not undo the fit; with `--adaptive` it keeps adjusting. A fit that
 runs out of passes holds the closest pass it saw, by the largest
 relative error over its tolerance, rather than the last, which is as
 likely to be a swing as a settling, and says so. The first guess takes

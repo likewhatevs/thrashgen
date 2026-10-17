@@ -161,12 +161,16 @@ impl Drop for AnonBuffer {
 }
 
 /// A file written to a disk-backed directory so its pages sit in the
-/// page cache. Removed on drop.
+/// page cache. Its length is set at once and its bytes are written by
+/// a thread, so a gigabyte of page cache does not hold the workers
+/// back; readers that need the bytes in place wait for it. Removed on
+/// drop.
 #[derive(Debug)]
 pub struct CacheFile {
     file: File,
     path: PathBuf,
     len: u64,
+    writer: Option<std::thread::JoinHandle<io::Result<()>>>,
 }
 
 impl CacheFile {
@@ -177,20 +181,41 @@ impl CacheFile {
             std::process::id(),
             nix::unistd::gettid()
         ));
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
             .open(&path)?;
-        let chunk = vec![0x5au8; 1 << 20];
-        let mut written = 0u64;
-        while written < len {
-            let n = (len - written).min(chunk.len() as u64) as usize;
-            file.write_all(&chunk[..n])?;
-            written += n as u64;
+        file.set_len(len)?;
+        let mut sink = file.try_clone()?;
+        let writer = std::thread::Builder::new()
+            .name("cache-writer".into())
+            .spawn(move || {
+                let chunk = vec![0x5au8; 1 << 20];
+                let mut written = 0u64;
+                while written < len {
+                    let n = (len - written).min(chunk.len() as u64) as usize;
+                    sink.write_all(&chunk[..n])?;
+                    written += n as u64;
+                }
+                sink.flush()
+            })?;
+        Ok(CacheFile {
+            file,
+            path,
+            len,
+            writer: Some(writer),
+        })
+    }
+
+    /// Wait for the bytes to be in place.
+    pub fn settle(&mut self) -> io::Result<()> {
+        match self.writer.take() {
+            Some(w) => w
+                .join()
+                .map_err(|_| io::Error::other("cache writer panicked"))?,
+            None => Ok(()),
         }
-        file.flush()?;
-        Ok(CacheFile { file, path, len })
     }
 
     /// Length in bytes.
@@ -215,6 +240,7 @@ impl CacheFile {
 
     /// Read the whole file to pull evicted pages back in.
     pub fn reread(&mut self) -> io::Result<()> {
+        self.settle()?;
         self.file.seek(SeekFrom::Start(0))?;
         let mut buf = vec![0u8; 1 << 20];
         loop {
@@ -229,6 +255,7 @@ impl CacheFile {
 
 impl Drop for CacheFile {
     fn drop(&mut self) {
+        let _ = self.settle();
         let _ = std::fs::remove_file(&self.path);
     }
 }
@@ -466,6 +493,9 @@ mod tests {
     fn cache_file_is_resident_rereadable_and_removed() {
         let dir = std::env::temp_dir();
         let mut f = CacheFile::create(&dir, 4 << 20).unwrap();
+        // The bytes are written by a thread; residency is a property of
+        // the written file.
+        f.settle().unwrap();
         assert_eq!(f.len(), 4 << 20);
         assert!(!f.is_empty());
         let path = f.path.clone();

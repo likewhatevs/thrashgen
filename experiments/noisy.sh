@@ -11,7 +11,7 @@ src=${SRC_DIR:-$root/experiments/out/user}
 out=${OUT_DIR:-$root/experiments/out/noisy}
 scratch=${SCRATCH_DIR:-/var/tmp}
 interval=${INTERVAL:-5}
-fit_secs=${FIT_SECS:-15} hold_secs=${HOLD_SECS:-150}
+fit_secs=${FIT_SECS:-10} hold_secs=${HOLD_SECS:-150}
 names=("$@")
 
 user_svc=user.slice/user-$(id -u).slice/user@$(id -u).service
