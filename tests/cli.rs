@@ -86,6 +86,7 @@ fn record_requires_exactly_one_target() {
 }
 
 #[test]
+#[serial_test::serial]
 fn run_fits_busy_cores_and_memory_in_its_own_process() {
     let dir = tempfile::tempdir().unwrap();
     let report_path = dir.path().join("report.json");
@@ -249,6 +250,7 @@ fn compare_profile_against_recording_and_itself() {
 }
 
 #[test]
+#[serial_test::serial]
 fn calibrate_then_run_from_the_calibration() {
     let dir = tempfile::tempdir().unwrap();
     let cal = dir.path().join("cal.json");
@@ -415,7 +417,17 @@ fn aggregate_reports_bad_input() {
 
 #[cfg(feature = "hw-tests")]
 #[test]
+#[serial_test::serial]
 fn run_fits_counter_targets_on_real_hardware() {
+    // An unoptimized access costs some fifteen times the instructions of
+    // an optimized one, and no knob reaches eight misses per thousand of
+    // them; the fit is a property of the release build, as the
+    // experiments run it.
+    if cfg!(debug_assertions) {
+        panic!(
+            "the hardware fit test needs the optimized binary: cargo test --release --features hw-tests"
+        );
+    }
     let dir = tempfile::tempdir().unwrap();
     let report_path = dir.path().join("report.json");
     Command::cargo_bin("thrashgen")

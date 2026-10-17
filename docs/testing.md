@@ -17,7 +17,9 @@ assumptions. They cover:
 - the fitter, driven against a simulated machine whose response to each
   knob is a known function, so convergence and damping are checked
   without hardware;
-- the CLI surface, through `assert_cmd`.
+- the CLI surface, through `assert_cmd`; the tests that generate load
+  run one at a time (`serial_test`), since two fits on one machine
+  would measure each other.
 
 Coverage is measured with `cargo llvm-cov`; the unit, CLI and plot
 tests together cover 96% of lines and 94% of regions as of the
@@ -25,12 +27,15 @@ experiment results in `docs/experiments.md`. Hardware-only code paths
 are excluded from that number by the `hw-tests` feature gate, not by
 `#[ignore]`, so no test is silently skipped.
 
-## Hardware tests: `cargo test --features hw-tests`
+## Hardware tests: `cargo test --release --features hw-tests`
 
 Run on a machine with performance counters but need no privilege: they
 count the test's own threads at the default `perf_event_paranoid`.
 They fail, not skip, when the PMU is missing, so a passing run proves
-the counters were real.
+the counters were real. The fit test needs the optimized binary, as
+the experiments run it: an unoptimized access costs some fifteen times
+the instructions, and no knob reaches the miss rate it asks for; under
+the debug profile it fails and says so.
 
 ## Root tests: build as the user, run the binary as root
 
