@@ -9,8 +9,12 @@
 #            user, so bandwidth is measured, not modelled
 #   noisy    three profiles from a finished user-mode set replayed at
 #            once, each in its own scope, as several containers would
-# The kernel and resctrl modes use sudo for those settings and restore
-# them on exit.
+#   perfmon  a copy of the binary carrying the CAP_PERFMON file
+#            capability, so both sides count kernel mode, the recorder
+#            attaches per cgroup, and L3 misses come from the L3 PMU
+#            instead of the DRAM-fill proxy
+# The kernel, resctrl and perfmon modes use sudo for those settings and
+# restore them on exit.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 mode=${MODE:-user}
@@ -43,7 +47,18 @@ case $mode in
     # shellcheck disable=SC2064
     trap "sudo rmdir ${groups[*]}; [ $mounted_by_us = 1 ] && sudo umount /sys/fs/resctrl" EXIT
     ;;
-  *) echo "MODE must be user, kernel or resctrl" >&2; exit 2 ;;
+  perfmon)
+    # File capabilities are ignored on nosuid mounts, which /tmp is on
+    # most hosts; the copy lives next to the build.
+    cap_bin=$root/target/perfmon/thrashgen
+    mkdir -p "$(dirname "$cap_bin")"
+    cp "$root/target/release/thrashgen" "$cap_bin"
+    sudo setcap cap_perfmon+ep "$cap_bin"
+    export THRASHGEN=$cap_bin
+    # shellcheck disable=SC2064
+    trap "rm -f $cap_bin" EXIT
+    ;;
+  *) echo "MODE must be user, kernel, resctrl, noisy or perfmon" >&2; exit 2 ;;
 esac
 
 fio_dir=${SCRATCH_DIR:-/var/tmp}/thrashgen-fio

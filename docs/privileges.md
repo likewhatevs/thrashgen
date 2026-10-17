@@ -15,9 +15,13 @@ source at v7.1 (`kernel/events/core.c`, `include/linux/perf_event.h`,
 | root | mounting resctrl and creating groups |
 | Yama `ptrace_scope` at most 1 | holding a recorded command at its exec with `PTRACE_TRACEME` so counters attach before it runs; otherwise the command starts first and the note says so |
 
-Inside a container the default seccomp profile of podman and docker
-returns an error for `perf_event_open` unless the container holds
-`CAP_PERFMON`, `CAP_SYS_ADMIN` or `CAP_BPF`. `--cap-add=PERFMON` on a
+`CAP_PERFMON` can be given to the binary alone as a file capability,
+`setcap cap_perfmon+ep thrashgen`, which an unprivileged user then
+exercises without root; the kernel ignores file capabilities on
+`nosuid` mounts, which `/tmp` usually is, so the binary must sit
+elsewhere. Inside a container the default seccomp profile of podman and
+docker returns an error for `perf_event_open` unless the container
+holds `CAP_PERFMON`, `CAP_SYS_ADMIN` or `CAP_BPF`. `--cap-add=PERFMON` on a
 rootful container gives everything in the `CAP_PERFMON` rows. In a
 rootless container the capability is not effective in the initial user
 namespace, so the tool is back to the first row.
