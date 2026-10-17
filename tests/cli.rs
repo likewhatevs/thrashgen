@@ -169,14 +169,15 @@ fn run_starts_from_its_cached_fit() {
     let dir = tempfile::tempdir().unwrap();
     let run = |extra: &[&str]| {
         let mut cmd = Command::cargo_bin("thrashgen").unwrap();
-        // Busy cores are judged from the third second; six leave room
-        // for a loaded host to settle twice.
+        // Busy cores are judged from the third second, and the IPC of a
+        // compute-only target climbs a damped step a window; six seconds
+        // of 200 ms windows leave room for a loaded host.
         cmd.args(["run", "--set", "cpu_usage_cores=0.5", "--set", "ipc=1.2"])
             .args([
                 "--duration",
                 "6",
                 "--window",
-                "0.5",
+                "0.2",
                 "--pin",
                 "no",
                 "--threads",

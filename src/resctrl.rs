@@ -406,14 +406,25 @@ mod root_tests {
         }
         let before = sum(before);
         std::thread::sleep(std::time::Duration::from_millis(100));
+        // In the default assignment mode the hardware reallocates the
+        // counters and a reading comes back Unavailable now and then, so
+        // the traffic is written and read a few times before the test
+        // gives up on the group.
         let mut buf = vec![0u8; 512 << 20];
-        for round in 0..3u8 {
+        let mut after = before;
+        for round in 0..5u8 {
             for (i, b) in buf.iter_mut().enumerate().step_by(64) {
                 *b = (i as u8).wrapping_add(round);
             }
+            std::hint::black_box(&buf);
+            after = sum(g.total_bytes().unwrap());
+            if after.saturating_sub(before) > 256 << 20 {
+                break;
+            }
         }
-        std::hint::black_box(&buf);
-        let after = sum(g.total_bytes().unwrap());
-        assert!(after - before > 256 << 20, "{before} -> {after}");
+        assert!(
+            after.saturating_sub(before) > 256 << 20,
+            "{before} -> {after}: the group never counted the 512 MiB written"
+        );
     }
 }
