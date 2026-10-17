@@ -129,11 +129,12 @@ impl MonGroup {
             .map(|_| ())
     }
 
-    /// `mbm_total_bytes` summed over L3 domains. A domain reporting
-    /// `Unavailable` counts as zero: the kernel says so until the first
-    /// hardware sample after a group is made, and the totals are
-    /// cumulative from that point, so zero is the right baseline.
-    pub fn total_bytes(&self) -> io::Result<u64> {
+    /// `mbm_total_bytes` summed over L3 domains, or `None` while any
+    /// domain reports `Unavailable`, which the kernel does until the
+    /// first hardware sample after a group is made or reused. Counted
+    /// as zero, that reading made a baseline against which the next
+    /// one charged the group's whole history to one interval.
+    pub fn total_bytes(&self) -> io::Result<Option<u64>> {
         let sample = ResctrlReader::new(self.dir.clone(), false)
             .and_then(|r| r.read_all())
             .map_err(|e| io::Error::other(format!("{}: {e}", self.dir.display())))?;
@@ -147,13 +148,14 @@ impl MonGroup {
                 format!("{}: no L3 monitoring domains", self.dir.display()),
             ));
         }
-        Ok(stats
+        stats
             .values()
-            .filter_map(|s| match s.mbm_total_bytes {
+            .map(|s| match s.mbm_total_bytes {
                 Some(RmidBytes::Bytes(b)) => Some(b),
                 _ => None,
             })
-            .sum())
+            .try_fold(0u64, |acc, b| b.map(|b| acc + b))
+            .map_or(Ok(None), |sum| Ok(Some(sum)))
     }
 }
 
@@ -166,7 +168,7 @@ impl Drop for MonGroup {
 }
 
 impl BandwidthSource for MonGroup {
-    fn read_bytes(&mut self) -> io::Result<u64> {
+    fn read_bytes(&mut self) -> io::Result<Option<u64>> {
         self.total_bytes()
     }
 }
@@ -205,7 +207,11 @@ mod tests {
         );
         let rc = Resctrl::new(&root, mount);
         let g = rc.root_group();
-        assert_eq!(g.total_bytes().unwrap(), 1024);
+        assert_eq!(
+            g.total_bytes().unwrap(),
+            None,
+            "one domain unavailable: no reading yet"
+        );
         assert!(g.dir().ends_with("resctrl"));
         drop(g);
         assert!(root.path(mount).is_dir(), "the root group is never removed");
@@ -218,8 +224,18 @@ mod tests {
                 .root_group()
                 .total_bytes()
                 .unwrap(),
-            0,
-            "unavailable counts as zero"
+            None,
+            "unavailable is no reading, not zero"
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Root::at(tmp.path());
+        fake_mount(&root.path(mount), &[("00", "1000"), ("01", "24")]);
+        assert_eq!(
+            Resctrl::new(&root, mount)
+                .root_group()
+                .total_bytes()
+                .unwrap(),
+            Some(1024)
         );
         let tmp = tempfile::tempdir().unwrap();
         let root = Root::at(tmp.path());
@@ -250,13 +266,13 @@ mod tests {
             "each write replaces the fake file; the kernel appends"
         );
         g.add_self().unwrap();
-        assert_eq!(g.total_bytes().unwrap(), 12);
+        assert_eq!(g.total_bytes().unwrap(), Some(12));
         assert!(
             rc.create_mon_group("thrashgen-1").is_err(),
             "already exists"
         );
         let mut bw: Box<dyn BandwidthSource> = Box::new(g);
-        assert_eq!(bw.read_bytes().unwrap(), 12);
+        assert_eq!(bw.read_bytes().unwrap(), Some(12));
         // The kernel empties a group directory itself; the fake has to.
         for e in fs::read_dir(&dir).unwrap() {
             let p = e.unwrap().path();
@@ -389,7 +405,15 @@ mod root_tests {
             .create_mon_group(&format!("thrashgen-test-{}", std::process::id()))
             .unwrap();
         g.add_self().unwrap();
-        let before = g.total_bytes().unwrap();
+        let mut before = g.total_bytes().unwrap();
+        for _ in 0..50 {
+            if before.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            before = g.total_bytes().unwrap();
+        }
+        let before = before.expect("a reading within a second of the group's making");
         std::thread::sleep(std::time::Duration::from_millis(100));
         let mut buf = vec![0u8; 512 << 20];
         for round in 0..3u8 {
@@ -398,7 +422,7 @@ mod root_tests {
             }
         }
         std::hint::black_box(&buf);
-        let after = g.total_bytes().unwrap();
+        let after = g.total_bytes().unwrap().expect("a reading");
         assert!(after - before > 256 << 20, "{before} -> {after}");
     }
 }

@@ -108,8 +108,9 @@ impl CounterSource for LiveCounters {
 
 /// Cumulative bytes from a bandwidth monitor, such as resctrl.
 pub trait BandwidthSource {
-    /// Total bytes so far.
-    fn read_bytes(&mut self) -> io::Result<u64>;
+    /// Total bytes so far, or `None` when the monitor has no reading
+    /// yet; an interval with no reading at either end has no rate.
+    fn read_bytes(&mut self) -> io::Result<Option<u64>>;
 }
 
 /// Sum scaled readings by counter name.
@@ -193,7 +194,7 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
             None => BTreeMap::new(),
         };
         let bytes = match &mut self.bandwidth {
-            Some(b) => Some(b.read_bytes()?),
+            Some(b) => b.read_bytes()?,
             None => None,
         };
         Ok(Mark {
@@ -401,15 +402,15 @@ mod tests {
 
     struct Bytes(u64);
     impl BandwidthSource for Bytes {
-        fn read_bytes(&mut self) -> io::Result<u64> {
+        fn read_bytes(&mut self) -> io::Result<Option<u64>> {
             self.0 += 1000;
-            Ok(self.0)
+            Ok(Some(self.0))
         }
     }
 
     struct NoBw;
     impl BandwidthSource for NoBw {
-        fn read_bytes(&mut self) -> io::Result<u64> {
+        fn read_bytes(&mut self) -> io::Result<Option<u64>> {
             unreachable!()
         }
     }
@@ -691,7 +692,7 @@ mod hw_tests {
 
     struct NoBw;
     impl BandwidthSource for NoBw {
-        fn read_bytes(&mut self) -> io::Result<u64> {
+        fn read_bytes(&mut self) -> io::Result<Option<u64>> {
             unreachable!()
         }
     }
