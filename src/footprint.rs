@@ -519,9 +519,11 @@ mod tests {
         assert_eq!(s.len(), 4 << 20);
         assert!(!s.is_empty() && !s.as_ptr().is_null());
         assert!(s.resident_bytes().unwrap() >= (4 << 20) - 4096);
+        // Other tests map and unmap tmpfs-backed files meanwhile, so the
+        // process-wide figure is checked to within a megabyte.
         let during = rss().1;
         assert!(
-            during >= before + (4 << 20) - 4096,
+            during >= before + (3 << 20),
             "RssShmem {before} -> {during}"
         );
         assert!(ShmemBuffer::new(0).is_err());

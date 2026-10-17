@@ -140,6 +140,9 @@ pub struct Status {
 pub struct Limits {
     /// Sparse pages available.
     pub sparse_capacity: usize,
+    /// Fewest sparse pages the dTLB regime allows: past the L1 reach
+    /// under the L2-hit definition, past the L2 reach for walks.
+    pub sparse_floor: usize,
     /// Code pages available.
     pub code_capacity: usize,
     /// Pages in the main buffer, for the working-set floor.
@@ -199,8 +202,8 @@ pub const OPS_DILUTION_CAP: u32 = 4096;
 const MEMORY_BOUND_MPKI: f64 = 1.0;
 /// Smallest run length: one visit per 1024 accesses.
 const LINES_MIN: f64 = 1.0 / 1024.0;
-/// How much of the random visits turn dependent per pass when IPC is
-/// high in a memory-bound regime.
+/// The most of the random visits that turn dependent, or back, in one
+/// pass.
 const DEP_STEP: f64 = 0.2;
 
 /// The fitter: damped multiplicative updates, one pass per window.
@@ -214,7 +217,7 @@ pub struct Fitter {
     pub threads: usize,
     /// Knob ranges.
     pub limits: Limits,
-    /// Passes taken so far.
+    /// Passes taken so far: windows that moved a knob.
     pub passes: u32,
     /// Last pass's compute work (ops times chains) and instructions per
     /// access, for the secant slope.
@@ -321,6 +324,13 @@ impl Fitter {
         (duty_for(knob).unwrap_or(1.0), knob)
     }
 
+    /// The step for the dependent share: half the relative IPC error,
+    /// between a twentieth and a fifth, so a large error moves fast and
+    /// a small one settles instead of cycling.
+    fn dep_step(target: f64, measured: f64) -> f64 {
+        (0.5 * ((measured - target) / target).abs()).clamp(0.05, DEP_STEP)
+    }
+
     /// How far the distance between two windows' statuses is from
     /// tolerance: the largest relative error over the measured targets,
     /// each divided by its tolerance, so one is the edge of tolerance.
@@ -371,8 +381,11 @@ impl Fitter {
             }
             _ => 64,
         };
+        // Walked in a fixed cycle, a set past the TLB's reach misses on
+        // every visit, so the set is small and its refill after an idle
+        // period costs few misses.
         let sparse_pages = match regime {
-            TlbRegime::L2Hit => 2048,
+            TlbRegime::L2Hit => 256,
             TlbRegime::Walk => 16384,
         }
         .min(self.limits.sparse_capacity)
@@ -463,7 +476,23 @@ impl Fitter {
     /// measured efficiency against the instructions per access the next
     /// pass will have, so a change in ops never drags them off target.
     pub fn step(&mut self, knobs: &Knobs, m: &Measured, goal: &Goal) -> Knobs {
-        self.passes += 1;
+        // A target within tolerance moves nothing: every rule nudges, a
+        // nudge from inside the band chases noise, and each one is a pass
+        // that resets the blend of windows. Busy cores and burstiness are
+        // judged only once their rolling window is full.
+        let st = self.statuses(m, goal);
+        let judged = |s: &&Status| {
+            m.cv_samples >= MIN_CV_SAMPLES
+                || !matches!(s.key, "cpu_usage_cores" | "cpu_usage_cv_1s")
+        };
+        if st
+            .iter()
+            .filter(judged)
+            .all(|s| s.within || s.measured.is_none())
+        {
+            return knobs.clone();
+        }
+        let within = |key: &str| st.iter().any(|s| s.key == key && s.within);
         let d = self.damping;
         let mut k = knobs.clone();
         // A sequential walk is prefetched, and the L3 miss proxy does not
@@ -489,10 +518,10 @@ impl Fitter {
         // enough one-second samples to mean anything; the ratios below
         // settle in seconds, these take the better part of a minute.
         if m.cv_samples >= MIN_CV_SAMPLES {
-            if let (Some(t), Some(v)) = (goal.cores, m.cores) {
+            if let (Some(t), Some(v), false) = (goal.cores, m.cores, within("cpu_usage_cores")) {
                 k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
             }
-            if let (Some(t), Some(v)) = (goal.cv, m.cv) {
+            if let (Some(t), Some(v), false) = (goal.cv, m.cv, within("cpu_usage_cv_1s")) {
                 // The knob stays within twice the target so clipping at
                 // full duty cannot run it away.
                 if v > 0.0 && k.cv > 0.0 {
@@ -522,13 +551,30 @@ impl Fitter {
         // not tried again, and the window it spoiled moves nothing else:
         // the other rules would chase the misses it took away.
         let mpa_now = m.mpki.zip(ipa).map(|(v, ipa)| v / 1000.0 * ipa);
+        // How much of the misses followed the run length last pass,
+        // between none and all; all until a pass has changed it. Misses
+        // the main stream does not make, the sparse set's refills after
+        // an idle period, do not follow it, and predicting that they
+        // would spiralled ops down while MPKI stood still.
+        let lines_elasticity = match (self.last_set, mpa_now) {
+            (Some((_, lines_prev, mpa_prev)), Some(mpa))
+                if mpa_prev > 0.0
+                    && mpa > 0.0
+                    && (knobs.lines / lines_prev.max(LINES_MIN)).ln().abs() > 0.1 =>
+            {
+                ((mpa / mpa_prev).ln() / (knobs.lines / lines_prev.max(LINES_MIN)).ln())
+                    .clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        };
         if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa)) = (self.last_set, mpa_now) {
             if knobs.wset < wset_prev
                 && !mpki_met
-                && mpa < 0.6 * mpa_prev * (knobs.lines / lines_prev.max(1.0))
+                && mpa < 0.75 * mpa_prev * (knobs.lines / lines_prev.max(LINES_MIN))
             {
                 self.wset_blocked = true;
                 k.wset = wset_prev;
+                self.passes += 1;
                 return k;
             }
         }
@@ -540,7 +586,7 @@ impl Fitter {
         }
 
         let mut work = work_now;
-        if let (Some(t), Some(v)) = (goal.ipc, m.ipc) {
+        if let (Some(t), Some(v), false) = (goal.ipc, m.ipc, within("ipc")) {
             // Longer runs let the prefetcher stream, raising IPC at equal
             // MPKI; more chains raise the compute IPC. Run length is the
             // fine knob; chains move once it is at its range or the last
@@ -575,21 +621,25 @@ impl Fitter {
                 handled = k.seq >= SHARE_SMALL;
                 k.seq = if handled { k.seq * g } else { 0.0 };
             } else if g > 1.0 && k.dep > 0.0 {
-                // Given back at least as fast as it came, a fifth a pass,
-                // or a slow give-back eats the passes a fit has.
+                // Given back in proportion to the shortfall, between a
+                // twentieth and a fifth a pass: a fixed fifth each way made
+                // a limit cycle around a target that needed a tenth.
                 handled = k.dep >= SHARE_SMALL;
                 k.dep = if handled {
-                    (k.dep / g).min(k.dep - DEP_STEP).max(0.0)
+                    (k.dep - Self::dep_step(t, v)).max(0.0)
                 } else {
                     0.0
                 };
             }
+            // A visit share is not a run: a run of one on every access
+            // would undo the dilution the share is, so IPC short leaves
+            // it to the chains.
             let lines_can_move = if g > 1.0 {
-                k.lines < 64.0
+                (1.0..64.0).contains(&k.lines)
             } else {
                 k.lines > 1.0 && !lines_locked
             };
-            let dep_up = |k: &mut Knobs| k.dep = (k.dep + DEP_STEP).min(1.0);
+            let dep_up = |k: &mut Knobs| k.dep = (k.dep + Self::dep_step(t, v)).min(1.0);
             let chains_move = |k: &mut Knobs| k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
             let lines_move = |k: &mut Knobs| k.lines = (k.lines * g).clamp(1.0, 64.0);
             if !handled && g < 1.0 && memory_bound {
@@ -645,25 +695,47 @@ impl Fitter {
         }
         // Within the absolute floor the target is met and what remains
         // is mostly noise; chasing it swung ops between one and tens of
-        // thousands, so the ops rule stays quiet there. The relative
-        // tolerance does not quiet it: a few percent of MPKI is a few
-        // percent of bandwidth too.
+        // thousands.
+        let mpki_within = mpki_met || within("l3_mpki");
         match (goal.mpki, m.mpki, ipa) {
-            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 && !mpki_met => {
+            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 && !mpki_within => {
                 // Misses per access follow the run length the IPC rule just
                 // chose; at that length, the instructions per access the
                 // target needs are known, and the work that gives them.
-                let misses_per_access = v / 1000.0 * ipa * (k.lines / knobs.lines.max(1.0));
+                let misses_per_access = v / 1000.0
+                    * ipa
+                    * (k.lines / knobs.lines.max(LINES_MIN)).powf(lines_elasticity);
                 let want_ipa = misses_per_access * 1000.0 / t;
                 work += d * (want_ipa - ipa) / slope;
             }
-            (Some(t), Some(v), None) if !mpki_met => work *= factor(v, t, d),
+            (Some(t), Some(v), None) if !mpki_within => work *= factor(v, t, d),
             _ => {}
         }
         let work = work.clamp(work_now / OPS_STEP_MAX, work_now * OPS_STEP_MAX);
         k.ops = (work / k.chains.max(1.0))
             .clamp(OPS_RANGE.0, OPS_RANGE.1)
             .round() as u32;
+        // With compute at its ceiling, the main stream diluted to its
+        // floor and misses still high, the misses left are the sparse
+        // set's own: its lines, one per page, and their page-table
+        // entries, refetched after every idle period of the duty cycle.
+        // Half the set per pass, down to the floor the dTLB regime needs;
+        // the visit rate makes up for the hit rate. Not before the main
+        // stream is diluted away: halving both at once took the set to
+        // the floor while the main stream still made the misses, and at
+        // the floor few visits miss the L1, so the dTLB rate ran out of
+        // visits.
+        if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
+            if k.ops >= OPS_RANGE.1 as u32
+                && knobs.ops >= OPS_RANGE.1 as u32
+                && k.lines <= LINES_MIN
+                && !mpki_within
+                && v > t
+                && k.sparse_pages > self.limits.sparse_floor
+            {
+                k.sparse_pages = (k.sparse_pages / 2).max(self.limits.sparse_floor);
+            }
+        }
         if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
             // Compute cannot go below one op per access; past that, more
             // lines per access are the only way to more misses.
@@ -723,26 +795,27 @@ impl Fitter {
         let visits_max = VISITS_RANGE
             .1
             .max((ipa_next.unwrap_or(0.0) / 4.0).min(VISITS_CAP));
-        let rate_rule = |target: Option<f64>, measured: Option<f64>, visits: f64| -> f64 {
+        let rate_rule = |target: Option<f64>, measured: Option<f64>, visits: f64, met: bool| {
             let (Some(t), Some(v)) = (target, measured) else {
                 return visits;
             };
             if t <= 0.0 {
                 return 0.0;
             }
+            let correction = if met { 1.0 } else { factor(t, v, d) };
             match (ipa, ipa_next) {
                 (Some(ipa), Some(next)) if visits > 0.0 && v > 0.0 => {
                     // Full compensation for the change in instructions per
                     // access, which the model predicts, then a damped
                     // correction of the measured error.
-                    (visits * (next / ipa) * factor(t, v, d)).clamp(VISITS_RANGE.0, visits_max)
+                    (visits * (next / ipa) * correction).clamp(VISITS_RANGE.0, visits_max)
                 }
-                _ if visits > 0.0 => (visits * factor(t, v, d)).clamp(VISITS_RANGE.0, visits_max),
+                _ if visits > 0.0 => (visits * correction).clamp(VISITS_RANGE.0, visits_max),
                 _ => VISITS_RANGE.0 * 100.0,
             }
         };
-        k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits);
-        k.codevisits = rate_rule(goal.itlb_pki, m.itlb_pki, k.codevisits);
+        k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits, within("dtlb_pki"));
+        k.codevisits = rate_rule(goal.itlb_pki, m.itlb_pki, k.codevisits, within("itlb_pki"));
 
         // The main stream's own pages cause dTLB events the sparse stream
         // cannot take back. When they alone exceed the target, touch
@@ -780,6 +853,12 @@ impl Fitter {
         }
         k.sparse_pages = k.sparse_pages.clamp(1, self.limits.sparse_capacity.max(1));
         k.code_pages = k.code_pages.clamp(1, self.limits.code_capacity.max(1));
+        // A window that moved nothing, because every lever a target
+        // needs is at its range, is not a pass: an unreachable target
+        // must not spend the budget a later disturbance will need.
+        if k != *knobs {
+            self.passes += 1;
+        }
         k
     }
 }
@@ -792,6 +871,7 @@ mod tests {
 
     const LIMITS: Limits = Limits {
         sparse_capacity: 16384,
+        sparse_floor: 128,
         code_capacity: 16384,
         main_pages: 262_144,
     };
@@ -837,7 +917,7 @@ mod tests {
         let hit = if k.sparse_pages < 96 {
             0.05
         } else if k.sparse_pages <= 3072 {
-            0.95
+            0.98
         } else {
             0.1
         };
@@ -1537,7 +1617,8 @@ mod tests {
         let f = Fitter::new(
             8,
             Limits {
-                sparse_capacity: 1000,
+                sparse_capacity: 100,
+                sparse_floor: 128,
                 code_capacity: 50,
                 main_pages: 256,
             },
@@ -1553,7 +1634,7 @@ mod tests {
         );
         assert_eq!(k.duty, 0.25);
         assert_eq!(k.chains, 4.0);
-        assert_eq!(k.sparse_pages, 1000, "capped by capacity");
+        assert_eq!(k.sparse_pages, 100, "capped by capacity");
         assert_eq!(k.code_pages, 50);
         assert!(k.tlbvisits > 0.0 && k.codevisits == 0.0);
         let b = Buffers::new(1 << 20, false, 1000, 50).unwrap();
@@ -1565,7 +1646,7 @@ mod tests {
             },
             TlbRegime::L2Hit,
         );
-        assert_eq!((g.chains, g.sparse_pages, g.duty), (1.0, 1000, 1.0));
+        assert_eq!((g.chains, g.sparse_pages, g.duty), (1.0, 100, 1.0));
         assert_eq!(Goal::from_targets(&t).cores, Some(2.3));
     }
 

@@ -105,6 +105,10 @@ impl Default for Settings {
 
 /// Consecutive windows within tolerance before convergence is declared.
 pub const CONVERGED_WINDOWS: u32 = 2;
+/// How long a converged fit must be out of tolerance before it moves
+/// again. Two 100 ms windows were not enough: a hiccup of that length,
+/// a page migration or a neighbour's burst, sent ops fourfold.
+pub const REFIT_SECONDS: f64 = 1.0;
 
 /// Default main buffer when no anonymous target is given: far beyond
 /// any L3.
@@ -505,8 +509,19 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
 
     // Fitter and first knobs.
     let goal = Goal::from_targets(targets);
+    let regime = if vendor == Some(Vendor::Amd) {
+        TlbRegime::L2Hit
+    } else {
+        TlbRegime::Walk
+    };
     let limits = Limits {
         sparse_capacity: buffers.sparse_capacity(),
+        sparse_floor: match regime {
+            TlbRegime::L2Hit => 128,
+            TlbRegime::Walk => 4096,
+        }
+        .min(buffers.sparse_capacity())
+        .max(1),
         code_capacity: buffers.code_capacity(),
         main_pages: buffers.main().len() / PAGE,
     };
@@ -514,11 +529,6 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     fitter.proxy_misses = provenance
         .get("l3_misses_per_sec")
         .is_some_and(|p| p.method == Method::Proxy);
-    let regime = if vendor == Some(Vendor::Amd) {
-        TlbRegime::L2Hit
-    } else {
-        TlbRegime::Walk
-    };
     let mut knobs = settings
         .knobs
         .clone()
@@ -529,6 +539,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     }
     let fitting = settings.knobs.is_none() && !goal.is_empty();
     let window_s = window_seconds(settings.window_s);
+    let refit_windows = ((REFIT_SECONDS / window_s).ceil() as u32).max(CONVERGED_WINDOWS);
     let long_n = long_window_seconds(goal.cv, fitter.tol.cv).round() as usize;
     let mut rolling: std::collections::VecDeque<f64> =
         std::collections::VecDeque::with_capacity(long_n);
@@ -675,14 +686,28 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         })
                         .collect(),
                 });
-                streak = if Fitter::converged(&statuses) {
+                // Busy cores and burstiness are not judged until their
+                // rolling window is full: a lucky early reading of them
+                // must not pick the pass to hold, and an unlucky one must
+                // not keep a fit whose ratios are at target from
+                // converging. They join the judgement when the window
+                // fills, which is what the fitter does too.
+                let judged: Vec<Status> = statuses
+                    .iter()
+                    .filter(|s| {
+                        long.len() >= crate::fit::MIN_CV_SAMPLES
+                            || !matches!(s.key, "cpu_usage_cores" | "cpu_usage_cv_1s")
+                    })
+                    .cloned()
+                    .collect();
+                streak = if Fitter::converged(&judged) {
                     out_of_tolerance = 0;
                     streak + 1
                 } else {
                     out_of_tolerance += 1;
                     0
                 };
-                let distance = fitter.distance(&statuses);
+                let distance = fitter.distance(&judged);
                 if best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
                     best = Some((distance, knobs.clone(), fitter.passes));
                 }
@@ -723,15 +748,18 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     }
                 }
                 last_sample = Some(sample);
-                // Once the fit has converged, a single window out of
+                // Once the fit has converged, a window or a few out of
                 // tolerance is noise, a neighbour's burst or the recorder
-                // attaching; the fit moves again only when two in a row
-                // are out. The memory of having converged must not be the
-                // current streak, which the noisy window has just reset.
-                let refit =
-                    streak == 0 && (!ever_converged || out_of_tolerance >= CONVERGED_WINDOWS);
+                // attaching; the fit moves again only when a second of
+                // them in a row is out. The memory of having converged
+                // must not be the current streak, which the noisy window
+                // has just reset.
+                let refit = streak == 0 && (!ever_converged || out_of_tolerance >= refit_windows);
+                // The pass limit is for a fit that has never converged;
+                // one that has keeps following the host, since it moves
+                // only when a second of windows in a row is out.
                 if fitting && !stop && (settings.adaptive || refit) {
-                    if fitter.passes < settings.max_passes {
+                    if fitter.passes < settings.max_passes || ever_converged {
                         let next = fitter.step(&knobs, &m, &goal);
                         if next != knobs {
                             generator.set_knobs(next.clone(), &buffers)?;

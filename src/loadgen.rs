@@ -569,6 +569,32 @@ struct Pace {
     /// single one heavy with compute, which would otherwise overrun
     /// the busy part of the period.
     batch: u32,
+    /// Pages the sparse walk advances per visit.
+    sparse_stride: usize,
+}
+
+/// A stride coprime to the page count, near the golden ratio of it, so
+/// the sparse walk visits every page once per cycle in an order no
+/// next-page prefetcher follows. A cycle longer than the TLB misses on
+/// every visit, where random visits to the same pages hit whenever the
+/// draw repeats one still cached: on a 72-entry L1 dTLB, 128 random
+/// pages missed 44 percent of the time.
+fn sparse_stride(pages: usize) -> usize {
+    if pages <= 2 {
+        return 1;
+    }
+    let mut stride = ((pages as f64 * 0.618_033_988_75).round() as usize).clamp(1, pages - 1);
+    while gcd(stride, pages) != 1 {
+        stride += 1;
+    }
+    stride
+}
+
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 impl Pace {
@@ -587,6 +613,7 @@ impl Pace {
             ],
             compute: ComputeSplit::of(k.ops, k.chains),
             batch: if k.ops >= 256 { 1 } else { BATCH },
+            sparse_stride: sparse_stride(k.sparse_pages),
         }
     }
 }
@@ -613,6 +640,8 @@ struct Carry {
     dep: f64,
     /// Line index of the sequential walk within the worker's slice.
     cursor: usize,
+    /// Page the sparse walk is at.
+    sparse_at: usize,
 }
 
 /// Lines per page.
@@ -729,7 +758,16 @@ impl Worker {
         let sparse = self.buffers.sparse.as_ptr();
         c.tlb += k.tlbvisits;
         while c.tlb >= 1.0 {
-            let page = scale32((rng.next() >> 32) as u32, k.sparse_pages);
+            // The stride is below the page count, so one subtraction
+            // wraps, except just after the set shrank under the cursor.
+            let mut page = c.sparse_at + p.sparse_stride;
+            if page >= k.sparse_pages {
+                page -= k.sparse_pages;
+                if page >= k.sparse_pages {
+                    page %= k.sparse_pages;
+                }
+            }
+            c.sparse_at = page;
             let q = sparse.wrapping_add(page * PAGE + (page % PAGE_LINES) * LINE);
             // SAFETY: inside the sparse buffer.
             state[2] ^= unsafe { std::ptr::read_volatile(q.cast::<u64>()) };

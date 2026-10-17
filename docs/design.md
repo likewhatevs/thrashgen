@@ -152,7 +152,7 @@ PRNG, not from loaded data, so misses overlap.
 | `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
 | `wfrac` | write share, so DRAM bandwidth at equal misses | fraction of main-stream lines stored to; a dirtied line is written back |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
-| `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks); the set is anonymous memory, capped at an eighth of the anonymous target, or a read-only mapping of the page-cache file when that cap cannot hold it and the file can, so a small process with a large page cache gets its TLB rate from pages that count as page cache |
+| `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks), walked in a fixed cycle with a stride coprime to the count, so that every visit to a set past the TLB's reach misses, where a random draw hits whenever it repeats a page still cached (128 random pages over a 72-entry L1 dTLB missed 44 percent of the time), and no next-page prefetcher follows the order; the set is anonymous memory, capped at an eighth of the anonymous target, or a read-only mapping of the page-cache file when that cap cannot hold it and the file can, so a small process with a large page cache gets its TLB rate from pages that count as page cache |
 | `codevisits`, code page count | iTLB rate | calls through a function pointer into one-instruction stubs placed one per executable page at varying offsets; `codevisits` may be below one per access |
 | `huge` | main-stream page walks | `MADV_HUGEPAGE` on the main buffer; the report shows what THP actually backed. Without it the buffer is advised `MADV_NOHUGEPAGE`, since a THP policy of `always` would otherwise back it with hugepages anyway |
 
@@ -169,8 +169,13 @@ walk for a bandwidth-bound one (`seq`), and a small hugepage-backed set
 for random access without TLB events (`wset`). What stays out of reach:
 many misses with almost no dTLB events over 4 KiB pages, which only a
 sequential walk produces, so IPC then follows the prefetcher; IPC
-below what fully serialized misses give at the target's MPKI; and a
-set below 64 pages. A cache-resident target, with almost no misses, is
+below what fully serialized misses give at the target's MPKI; a
+set below 64 pages; and, under the L2-hit dTLB definition, fewer
+than about 1.5 L1 reloads per hundred hugepage touches, which is
+what Zen 4 showed for random visits to anything from 13 to 56
+hugepages, so a memory-bound target at low IPC, whose misses must be
+dependent and so in pages of their own, keeps a dTLB rate of a few
+hundredths per thousand instructions however small its set. A cache-resident target, with almost no misses, is
 still met by diluting the rates with compute rather than by a set that
 fits the cache, since the miss rate at the cache edge is too steep for
 a fitter to stand on.
@@ -222,7 +227,8 @@ goes back whole and the ladder continues in the same pass. The order
 then depends on the regime. Memory-bound, at one miss per thousand
 instructions or more with an IPC target below 1.5, and IPC high:
 random visits
-are made dependent, a fifth more per pass, once compute is down to one
+are made dependent, by half the relative IPC error per pass between a
+twentieth and a fifth, once compute is down to one
 chain, at one op, or has stopped moving IPC; then run length falls,
 undamped, which is less overlap while the ops rule keeps MPKI; then
 chains. Compute-bound with IPC high: shorter runs, fewer chains; with
@@ -230,7 +236,9 @@ both at their floors and a visit on only a share of accesses, the
 whole access scales up, compute and visit share together, so the slow
 chain carries more of the instructions at the same misses per
 instruction; dependent visits last. At one op with MPKI short, run
-length follows the shortfall undamped. IPC short: longer runs, more
+length follows the shortfall undamped. IPC short: longer runs, when the
+stream has a run and not a visit share, since a run of one on every
+access would undo the dilution the share is; more
 chains, then a sequential walk that lets the prefetcher stream; under
 the L3 miss proxy, which does not count prefetched lines, only with
 misses to spare, none asked for or within the absolute floor, since
@@ -239,7 +247,17 @@ the walk then costs counted misses. Past
 dilution and run length halves each pass, down to one visit per 1024
 accesses, since every miss dropped saves a thousand instructions of
 compute; the sparse and code
-visits may then grow to a quarter of the instructions per access. dTLB
+visits may then grow to a quarter of the instructions per access.
+With compute at its ceiling, the main stream diluted to its floor
+and misses still high, the sparse set halves per pass, down to 128
+pages under the L2-hit definition and 4096 under walks: its lines,
+one per page, and their page-table entries are refetched after every
+idle period of the duty cycle, and by then they are the misses left;
+the visit rate makes up for the lower miss rate of the smaller set,
+which is why the set does not shrink while the main stream still
+makes the misses. A window that moves no knob, every lever its
+targets need being at its range, is not a pass, so an unreachable
+target does not spend the budget a later disturbance needs. dTLB
 events beyond what the sparse stream can account for, at one per
 visit, come from the main stream's own pages; when they alone exceed
 the target the working set shrinks, by at most half per pass; failing
@@ -247,10 +265,20 @@ that, with misses to spare under the proxy or counted misses
 otherwise, the sequential share rises when IPC is not high, or visits
 per access fall and dilute the events when it is; otherwise dTLB
 waits.
-A shrink that cost misses beyond what the run length explains, with
-misses above their absolute floor, is undone and not tried again, and
-the window it spoiled moves nothing else, since the other rules would
-chase the misses it took away. Ops
+A shrink that cost a quarter of the misses beyond what the run length
+explains, with misses above their absolute floor, is undone and not
+tried again, and the window it spoiled moves nothing else, since the
+other rules would chase the misses it took away. A target within
+tolerance moves none of its knobs, and a window with every judged
+target within moves nothing: every rule nudges, a nudge from inside
+the band chases noise, and each one is a pass that resets the
+averaging of windows; the visit rates still follow a change in
+instructions per access, which the model predicts. Ops
+follow the misses per access the run length the IPC rule chose
+implies, by the share of the misses that followed the run length last
+pass, between none and all, since misses the main stream does not
+make, the sparse set's refills after an idle period, do not follow
+it; they
 move at most fourfold per pass, since the miss proxy counts fewer
 misses once compute gives the prefetcher time and a large step lands
 far from where the model said; ops stop at 80k and visits at 10k per
@@ -270,14 +298,20 @@ or a page-cache refill, moves nothing on its own. Busy cores and burstiness do n
 per-second jitter a window's mean has standard error
 `cv / sqrt(seconds)`, so tolerance t needs `(cv / t)²` seconds. They
 are therefore judged on a rolling window of that length, between 30 s
-and 300 s, while the ratios are fitted every fit window. Convergence is declared after two consecutive windows
-within tolerance; the generator then holds and keeps reporting, and
-moves again only after two consecutive windows out of tolerance, so a
-single noisy window, a neighbour's burst or the one in which a
-recorder attaches, does not undo the fit; with `--adaptive` it keeps adjusting. A fit that
-runs out of passes holds the closest pass it saw, by the largest
-relative error over its tolerance, rather than the last, which is as
-likely to be a swing as a settling, and says so. The first guess takes
+and 300 s, while the ratios are fitted every fit window, and until
+that window is full they are not judged at all, so an early reading of
+them neither picks the pass to hold nor keeps a fit whose ratios are
+at target from converging. Convergence is declared after two consecutive windows
+with every judged target within tolerance; the generator then holds and keeps reporting, and
+moves again only after a second of consecutive windows out of
+tolerance, at least two, so a noisy window or a few, a neighbour's
+burst, a page migration or the moment a recorder attaches, does not
+undo the fit; with `--adaptive` it keeps adjusting. A fit that
+runs out of passes without ever converging holds the closest pass it
+saw, by the largest relative error over its tolerance, rather than
+the last, which is as likely to be a swing as a settling, and says
+so; one that has converged is not limited, since it moves only after
+a second out. The first guess takes
 compute from the MPKI target where that asks for far more than the
 default, since at eight lines a visit the instructions the misses need
 are known to a factor, and growing it from the default a pass at a
