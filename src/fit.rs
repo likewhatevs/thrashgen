@@ -248,6 +248,41 @@ pub struct Fitter {
     /// The miss and instruction counts cover kernel mode, so what the
     /// kernel does for a page-cache read is in them.
     pub kernel_counted: bool,
+    /// Reversals of the run length at one op per access, where the IPC
+    /// and MPKI rules pull it against each other.
+    pub lines_track: Reversals,
+    /// The same for the sequential share.
+    pub seq_track: Reversals,
+}
+
+/// A lever's reversals: once it has turned twice within three passes,
+/// the two targets pulling it meet nowhere along it and alternating
+/// only cycles, so it is frozen for the rest of the fit and the fit
+/// holds the compromise.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Reversals {
+    last_dir: i8,
+    last_pass: u32,
+    count: u32,
+    /// Whether the lever is frozen.
+    pub frozen: bool,
+}
+
+impl Reversals {
+    /// Note a move of `delta` at `pass`; whether the lever is frozen.
+    pub fn observe(&mut self, delta: f64, pass: u32) -> bool {
+        if self.frozen || delta == 0.0 {
+            return self.frozen;
+        }
+        let dir = if delta > 0.0 { 1 } else { -1 };
+        if self.last_dir != 0 && dir != self.last_dir && pass.saturating_sub(self.last_pass) <= 3 {
+            self.count += 1;
+            self.frozen = self.count >= 2;
+        }
+        self.last_dir = dir;
+        self.last_pass = pass;
+        self.frozen
+    }
 }
 
 /// Whether the MPKI target is set, measured, and short by more than
@@ -281,6 +316,8 @@ impl Fitter {
             proxy_misses: false,
             last_set: None,
             kernel_counted: false,
+            lines_track: Reversals::default(),
+            seq_track: Reversals::default(),
         }
     }
 
@@ -798,6 +835,10 @@ impl Fitter {
             }
         }
 
+        // The IPC and MPKI rules are done with the run length and the
+        // sequential share; the dTLB rule below may pull them back, and
+        // that tug of war is what the reversals count.
+        let (lines_mid, seq_mid) = (k.lines, k.seq);
         // Instructions per access after this pass, by the same model, and
         // the access rate it implies at unchanged cycles per instruction.
         let ipa_next =
@@ -909,6 +950,23 @@ impl Fitter {
                 }
                 // Otherwise dTLB waits: every lever left would cost misses
                 // the profile cannot spare.
+            }
+        }
+        // At one op per access the IPC and MPKI rules pull the run length
+        // and the sequential share against each other: a prefetched walk
+        // or a longer run brings the misses the one wants and the IPC the
+        // other does not. A lever that has turned twice within three
+        // passes is frozen where it stands, since the two targets meet
+        // nowhere along it; the fit then holds the compromise.
+        if knobs.ops <= 1 {
+            let pass = self.passes + 1;
+            self.lines_track.observe(lines_mid - knobs.lines, pass);
+            if self.lines_track.observe(k.lines - lines_mid, pass) {
+                k.lines = knobs.lines;
+            }
+            self.seq_track.observe(seq_mid - knobs.seq, pass);
+            if self.seq_track.observe(k.seq - seq_mid, pass) {
+                k.seq = knobs.seq;
             }
         }
         k.sparse_pages = k.sparse_pages.clamp(1, self.limits.sparse_capacity.max(1));
@@ -1222,6 +1280,66 @@ mod tests {
             next.seq > 0.0,
             "with counted misses the walk is allowed: {next:?}"
         );
+    }
+
+    #[test]
+    fn a_lever_that_turns_twice_at_one_op_is_frozen() {
+        let mut r = Reversals::default();
+        assert!(!r.observe(1.0, 1));
+        assert!(!r.observe(1.0, 2), "same way: no reversal");
+        assert!(!r.observe(-1.0, 3), "one reversal");
+        assert!(r.observe(1.0, 4), "two: frozen");
+        assert!(r.observe(0.0, 9), "stays frozen");
+        let mut slow = Reversals::default();
+        assert!(!slow.observe(1.0, 1));
+        assert!(!slow.observe(-1.0, 8), "far apart: not a cycle");
+        assert!(!slow.observe(1.0, 15));
+        assert!(!slow.frozen);
+
+        // At one op with counted misses the run length is raised by the
+        // MPKI rule and halved by the dTLB rule in turn; after the second
+        // reversal it stays put.
+        let goal = Goal {
+            ipc: Some(0.22),
+            mpki: Some(95.0),
+            dtlb_pki: Some(0.01),
+            ..Goal::default()
+        };
+        let mut f = Fitter::new(4, LIMITS);
+        f.wset_blocked = true;
+        let mut k = Knobs {
+            ops: 1,
+            chains: 0.5,
+            lines: 20.0,
+            dep: 1.0,
+            wset: 0.125,
+            tlbvisits: 0.0001,
+            ..Knobs::default()
+        };
+        let short = Measured {
+            ipc: Some(0.19),
+            mpki: Some(50.0),
+            dtlb_pki: Some(0.005),
+            accesses_per_s: 1.0e7,
+            instructions_per_s: Some(5.0e9),
+            ..Measured::default()
+        };
+        let walks = Measured {
+            ipc: Some(0.30),
+            mpki: Some(60.0),
+            dtlb_pki: Some(2.0),
+            ..short.clone()
+        };
+        let mut moves = Vec::new();
+        for m in [&short, &walks, &short, &walks, &short, &walks] {
+            let next = f.step(&k, m, &goal);
+            moves.push(next.lines - k.lines);
+            k = next;
+        }
+        // The second turn freezes the lever and cancels its own move.
+        assert!(moves[0] > 0.0 && moves[1] < 0.0, "{moves:?}");
+        assert!(f.lines_track.frozen, "{moves:?}");
+        assert_eq!(moves[2..], [0.0, 0.0, 0.0, 0.0], "{moves:?}");
     }
 
     #[test]

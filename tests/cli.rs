@@ -194,7 +194,6 @@ fn run_starts_from_its_cached_fit() {
     let cal: thrashgen::calibration::Calibration =
         serde_json::from_str(&std::fs::read_to_string(entries[0].path()).unwrap()).unwrap();
     assert_eq!(cal.threads, 1);
-    assert!(cal.converged);
     first.stderr(predicate::str::contains("fit kept at"));
     run(&[]).stderr(predicate::str::contains("starting from the fit cached at"));
     run(&["--no-cache"]).stderr(predicate::str::contains("cached").not());

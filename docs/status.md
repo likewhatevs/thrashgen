@@ -32,13 +32,21 @@ Not verified anywhere:
 
 In rough order of value.
 
-1. **Bandwidth for memory-bound profiles.** Measured through resctrl,
-   the bandwidth rule's levers, the write share and non-temporal
-   lines, move IPC as well, and taobench's IPC drifted 28 percent high
-   while they moved. The rule now waits for IPC and MPKI to be near
-   their targets; a model of what each lever costs in IPC would let it
-   move earlier. stress-ng's 70 GB/s is a streaming store's figure and
-   out of reach for random 64-byte lines on this host.
+1. **Bandwidth measurement and levers.** Under resctrl the bandwidth
+   rule has three levers, the write share, non-temporal lines and
+   page-cache reads where the first two cannot carry it; the first two
+   move IPC as well, so the rule waits for IPC and MPKI to be near
+   their targets, and a model of what each costs in IPC would let it
+   move earlier. On this host resctrl's monitoring runs in its
+   `default` assignment mode, the only one it offers, where the
+   kernel's documentation warns that the hardware reallocates counters
+   and readings come back misleading or `Unavailable`; a probe showed
+   a single thread at half duty losing its counter within seconds,
+   pinned or not, while the busy multi-thread replays read fine and
+   TaoBench's bandwidth landed within 2 percent. fio's replay has no
+   bandwidth reading for that reason. A host with the `mbm_event` mode
+   would not have the problem; the tool could select it when it mounts
+   resctrl itself.
 2. **stress-ng's dTLB rate is a hardware floor here.** Under the
    L2-hit definition this Zen 4 reloads its L1 dTLB on about 1.4
    percent of hugepage touches whatever the set, measured for random
@@ -50,23 +58,26 @@ In rough order of value.
    walk meets the dTLB rate but lifts IPC to 0.74 against 0.22. The
    fitter waits, as designed; a per-CPU-model table of the floor would
    let it say so up front. See `docs/design.md` section 5.1.
-3. **Kernel-mode work and counted misses.** In the `kernel` mode the
-   profiles acquire the kernel's misses and TLB events; the generator
-   produces none. fio's 2.4 misses per thousand instructions are
-   page-cache copies over a 2 MiB anonymous footprint, which a main
-   stream over the page-cache mapping could make and a knob that makes
-   system calls per access could make faithfully. Under `CAP_PERFMON`
-   the L3 PMU counts prefetched lines too, so stress-ng reads 95 MPKI
-   and fio 15.6; a miss every ten instructions needs the prefetched
-   walk, which lifts IPC as it lifts MPKI, and the IPC and MPKI rules
-   then trade the sequential share and the run length back and forth
-   until the passes run out. A joint rule for the two at one op per
-   access, or accepting the IPC the walk gives, would settle it.
-4. **The first dTLB measurement.** Run and recorder once disagreed on
-   a replay's dTLB rate by fifty times while both shared the PMU; the
-   harness now records a counter-free run, which removed it, but the
-   mechanism, time-multiplexing against a 10 ms duty cycle, was not
-   pinned down.
+3. **Profiles whose misses are the kernel's.** The page-cache read
+   knob gives the generator the kernel's copies, and with the kernel
+   in the count fio's kernel-mode profile is reached, IPC, MPKI and
+   dTLB within tolerance for seconds at a time, but not held: at 28
+   percent duty with a CV of one the quiet seconds carry the misses of
+   cold caches and the kernel's wakeups, the pooled windows span them
+   only in part, and the fit moves again. Under `CAP_PERFMON` the L3
+   PMU counts prefetched lines too, so stress-ng reads 95 MPKI; a miss
+   every ten instructions needs the prefetched walk, which lifts IPC,
+   and the two targets meet nowhere, so the fit now freezes the lever
+   they fight over and holds the closest pass as the compromise, by
+   1.6 s, where it used to cycle through its whole budget.
+
+Closed since 2026-10-16: the fast fit closed the pass-budget item and
+fio's TLB rate; busy cores and burstiness are judged from the third
+second; a repeat fit starts from its cached knobs; and the dTLB
+disagreement between a fitting run and a recorder sharing the PMU did
+not reproduce, the two agreeing within one percent on every ratio over
+25 s of TaoBench, so the harness's counter-free hold is a precaution
+rather than a fix.
 
 ## Conventions
 

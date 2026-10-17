@@ -683,6 +683,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut rate_n = 0usize;
     let mut converged = false;
     let mut ever_converged = false;
+    let mut compromise = false;
     let mut streak = 0u32;
     let mut out_of_tolerance = 0u32;
     // The closest pass so far, to hold when the passes run out: the last
@@ -893,7 +894,21 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 // only when a second of windows in a row is out.
                 if fitting && !stop && (settings.adaptive || refit) {
                     if fitter.passes < settings.max_passes || ever_converged {
-                        let next = fitter.step(&knobs, &m, &goal);
+                        let mut next = fitter.step(&knobs, &m, &goal);
+                        // A lever the IPC and MPKI rules pulled against
+                        // each other has just been frozen: the two targets
+                        // meet nowhere along it, so the fit goes back to
+                        // the closest pass it saw and continues from there.
+                        let frozen = fitter.lines_track.frozen || fitter.seq_track.frozen;
+                        if frozen && !compromise {
+                            compromise = true;
+                            if let Some((_, k, pass)) = &best {
+                                next = k.clone();
+                                notes.push(format!(
+                                    "IPC and MPKI pull a lever against each other at one op per access; holding pass {pass}, the closest, as the compromise"
+                                ));
+                            }
+                        }
                         if next != knobs {
                             generator.set_knobs(next.clone(), &buffers)?;
                             knobs = next;

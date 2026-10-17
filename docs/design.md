@@ -282,7 +282,14 @@ tolerance moves none of its knobs, and a window with every judged
 target within moves nothing: every rule nudges, a nudge from inside
 the band chases noise, and each one is a pass that resets the
 averaging of windows; the visit rates still follow a change in
-instructions per access, which the model predicts. Ops
+instructions per access, which the model predicts. At one op per
+access the IPC and MPKI rules pull the run length and the sequential
+share against each other, a prefetched walk or a longer run bringing
+the misses the one wants and the IPC the other does not; a lever that
+has turned twice within three passes is frozen, since the two targets
+meet nowhere along it; the fit goes back to the closest pass it saw,
+by the largest relative error over its tolerance, and continues from
+there with the lever held. Ops
 follow the misses per access the run length the IPC rule chose
 implies, by the share of the misses that followed the run length last
 pass, between none and all, since misses the main stream does not
