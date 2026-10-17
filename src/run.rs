@@ -34,7 +34,7 @@ use crate::topology::Topology;
 /// Whether to pin workers to CPUs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pin {
-    /// Pin when it buys per-core L3 attribution: AMD with CAP_PERFMON.
+    /// Pin when it buys per-core L3 attribution: AMD with `CAP_PERFMON`.
     Auto,
     /// Always.
     Yes,
@@ -129,7 +129,160 @@ pub const MIN_MAIN_BYTES: u64 = 1 << 20;
 /// measurable and thirty-six passes fit in under four seconds. An
 /// explicit request overrides.
 pub fn window_seconds(requested: Option<f64>) -> f64 {
-    requested.map(|r| r.max(0.05)).unwrap_or(0.1)
+    requested.map_or(0.1, |r| r.max(0.05))
+}
+
+/// Measured busy cores per second beside what the knobs intended for
+/// that second, the duty times its factor, over a rolling window of
+/// [`CORES_WINDOW_SECONDS`].
+#[derive(Debug, Default)]
+pub struct CoresWindow {
+    pairs: std::collections::VecDeque<(f64, f64)>,
+}
+
+impl CoresWindow {
+    /// Note one second's measured cores and what was intended for it.
+    pub fn tick(&mut self, measured: f64, intended: f64) {
+        self.pairs.push_back((measured, intended));
+        while self.pairs.len() > CORES_WINDOW_SECONDS {
+            self.pairs.pop_front();
+        }
+    }
+
+    /// Seconds in the window.
+    pub fn len(&self) -> usize {
+        self.pairs.len()
+    }
+
+    /// Whether no second has been measured yet.
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    /// The long-run busy cores and burstiness the window predicts; see
+    /// [`predicted_cores_cv`].
+    pub fn predict(&self, knobs: &Knobs, threads: usize) -> (Option<f64>, Option<f64>) {
+        let (measured, intended): (Vec<f64>, Vec<f64>) = self.pairs.iter().copied().unzip();
+        predicted_cores_cv(&measured, &intended, knobs, threads)
+    }
+}
+
+/// The raw windows at the current knobs, newest last, with their
+/// lengths, pooled for the fitter by [`pool`] over as many as
+/// [`pool_count`] says; a change of knobs starts the pool afresh.
+#[derive(Debug)]
+pub struct Pool {
+    recent: std::collections::VecDeque<(Knobs, Measured, f64)>,
+    rate_sum: f64,
+    rate_n: usize,
+    seconds: f64,
+}
+
+impl Pool {
+    /// A pool for a target with this burstiness.
+    pub fn new(goal_cv: Option<f64>) -> Pool {
+        Pool {
+            recent: std::collections::VecDeque::with_capacity(POOL_WINDOWS_MAX),
+            rate_sum: 0.0,
+            rate_n: 0,
+            seconds: pool_seconds(goal_cv),
+        }
+    }
+
+    /// Add a window measured at `knobs` over `seconds` and return the
+    /// pooled measurement the fitter sees.
+    pub fn push(&mut self, knobs: &Knobs, window: Measured, seconds: f64) -> Measured {
+        if self.recent.front().is_some_and(|(k, _, _)| k != knobs) {
+            self.recent.clear();
+        }
+        if let Some(rate) = window.instructions_per_s {
+            self.rate_sum += rate;
+            self.rate_n += 1;
+        }
+        self.recent.push_back((knobs.clone(), window, seconds));
+        while self.recent.len() > POOL_WINDOWS_MAX {
+            self.recent.pop_front();
+        }
+        let mean_rate = if self.rate_n > 0 {
+            self.rate_sum / self.rate_n as f64
+        } else {
+            0.0
+        };
+        let lengths: Vec<(f64, f64)> = self
+            .recent
+            .iter()
+            .map(|(_, w, secs)| (w.instructions_per_s.unwrap_or(0.0), *secs))
+            .collect();
+        let n = pool_count(&lengths, mean_rate, self.seconds);
+        let raws: Vec<Measured> = self
+            .recent
+            .iter()
+            .skip(self.recent.len() - n)
+            .map(|(_, w, _)| w.clone())
+            .collect();
+        pool(&raws)
+    }
+}
+
+/// Where the fit stands: the streak of windows within tolerance, how
+/// long it has been out, whether it has ever converged, and the closest
+/// pass seen, to hold when the passes run out, since the last pass is
+/// as likely to be a swing as a settling.
+#[derive(Debug)]
+pub struct Convergence {
+    streak: u32,
+    out_of_tolerance: u32,
+    refit_windows: u32,
+    /// Whether the last [`CONVERGED_WINDOWS`] windows were within.
+    pub converged: bool,
+    /// Whether the fit has converged at any point.
+    pub ever: bool,
+    /// Whether a frozen lever has already sent the fit to its closest pass.
+    pub compromise: bool,
+    /// Distance, knobs and pass of the closest pass.
+    pub best: Option<(f64, Knobs, u32)>,
+}
+
+impl Convergence {
+    /// A fit that re-fits after `refit_windows` consecutive windows out
+    /// once it has converged.
+    pub fn new(refit_windows: u32) -> Convergence {
+        Convergence {
+            streak: 0,
+            out_of_tolerance: 0,
+            refit_windows,
+            converged: false,
+            ever: false,
+            compromise: false,
+            best: None,
+        }
+    }
+
+    /// Note a window: whether its judged targets were all within, and
+    /// its distance from tolerance at `knobs` after `pass` passes.
+    pub fn observe(&mut self, within: bool, distance: f64, knobs: &Knobs, pass: u32) {
+        if within {
+            self.out_of_tolerance = 0;
+            self.streak += 1;
+        } else {
+            self.out_of_tolerance += 1;
+            self.streak = 0;
+        }
+        if self.best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
+            self.best = Some((distance, knobs.clone(), pass));
+        }
+        self.converged = self.streak >= CONVERGED_WINDOWS;
+        self.ever |= self.converged;
+    }
+
+    /// Whether the fitter should move this window: out of tolerance,
+    /// and, once converged, out for a second of windows in a row, since
+    /// a window or a few out is noise, a neighbour's burst or the
+    /// recorder attaching. The memory of having converged is not the
+    /// current streak, which the noisy window has just reset.
+    pub fn refit(&self) -> bool {
+        self.streak == 0 && (!self.ever || self.out_of_tolerance >= self.refit_windows)
+    }
 }
 
 /// Long-run busy cores and burstiness predicted from the seconds
@@ -390,7 +543,7 @@ pub fn choose_cpus(affinity: &[u32], topo: &Topology, n: usize) -> Vec<u32> {
     for &c in affinity {
         match topo.cpu(c) {
             Some(cpu) if cpu.siblings.iter().find(|s| affinity.contains(s)) == Some(&c) => {
-                first.push(c)
+                first.push(c);
             }
             _ => rest.push(c),
         }
@@ -400,9 +553,9 @@ pub fn choose_cpus(affinity: &[u32], topo: &Topology, n: usize) -> Vec<u32> {
 }
 
 /// The memory the sampler should see as the process's page cache.
-fn cache_handles(cache: &Option<CacheFile>) -> Vec<File> {
+fn cache_handles(cache: Option<&CacheFile>) -> Vec<File> {
     cache
-        .iter()
+        .into_iter()
         .filter_map(|c| c.file().try_clone().ok())
         .collect()
 }
@@ -530,8 +683,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut extra_anon: Vec<AnonBuffer> = Vec::new();
 
     // Bandwidth: a resctrl group with this thread in it, inherited by the workers.
-    let bandwidth: Option<MonGroup> = match Resctrl::from_facts(&root, &facts) {
-        Some(rc) => match rc
+    let bandwidth: Option<MonGroup> = if let Some(rc) = Resctrl::from_facts(&root, &facts) {
+        match rc
             .acquire_group(&format!("thrashgen-{}", std::process::id()))
             .and_then(|g| g.add_self().map(|()| g))
         {
@@ -550,13 +703,10 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 ));
                 None
             }
-        },
-        None => {
-            notes.push(
-                "DRAM bandwidth modelled: resctrl is not mounted with mbm_total_bytes".into(),
-            );
-            None
         }
+    } else {
+        notes.push("DRAM bandwidth modelled: resctrl is not mounted with mbm_total_bytes".into());
+        None
     };
 
     // Counters, before the workers exist so inherit covers them.
@@ -587,7 +737,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         plan.fields.clone(),
         counters,
         bandwidth,
-        cache_handles(&cache),
+        cache_handles(cache.as_ref()),
     );
     let mut provenance = sampler.provenance();
     if !provenance.contains_key("dram_bytes_per_sec")
@@ -640,10 +790,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let fitting = settings.knobs.is_none() && !goal.is_empty();
     let window_s = window_seconds(settings.window_s);
     let refit_windows = ((REFIT_SECONDS / window_s).ceil() as u32).max(CONVERGED_WINDOWS);
-    // Measured busy cores per second beside what the knobs intended for
-    // that second, the duty times its factor.
-    let mut rolling: std::collections::VecDeque<(f64, f64)> =
-        std::collections::VecDeque::with_capacity(CORES_WINDOW_SECONDS);
+    let mut cores_window = CoresWindow::default();
     writeln!(
         progress,
         "run: {threads} threads, window {window_s:.1} s, busy-cores window {CORES_WINDOW_SECONDS} s, main buffer {} MiB{}",
@@ -675,22 +822,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut windows: Vec<WindowRow> = Vec::new();
     let mut last_statuses: Vec<Status> = Vec::new();
     let mut last_sample: Option<Sample> = None;
-    // The raw windows at the current knobs, newest last, with their
-    // length, pooled for the fitter; and the run's mean instruction
-    // rate, which says how many of them a pool needs.
-    let pool_s = pool_seconds(goal.cv);
-    let mut recent: std::collections::VecDeque<(Knobs, Measured, f64)> =
-        std::collections::VecDeque::with_capacity(POOL_WINDOWS_MAX);
-    let mut rate_sum = 0.0;
-    let mut rate_n = 0usize;
-    let mut converged = false;
-    let mut ever_converged = false;
-    let mut compromise = false;
-    let mut streak = 0u32;
-    let mut out_of_tolerance = 0u32;
-    // The closest pass so far, to hold when the passes run out: the last
-    // one is as likely to be a swing as a settling.
-    let mut best: Option<(f64, Knobs, u32)> = None;
+    let mut pool = Pool::new(goal.cv);
+    let mut fit = Convergence::new(refit_windows);
     let window_len = Duration::from_secs_f64(window_s);
     let deadline = settings
         .duration_s
@@ -704,7 +837,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     loop {
         let stop = stop_requested()
             || deadline.is_some_and(|d| Instant::now() >= d)
-            || (settings.stop_when_converged && converged);
+            || (settings.stop_when_converged && fit.converged);
         if !stop {
             let mut wake = next_cpu.min(window_end);
             if let Some(d) = deadline {
@@ -727,10 +860,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             let intended = threads as f64
                 * (knobs.duty * crate::loadgen::duty_factor(settings.seed, ended, knobs.cv))
                     .min(1.0);
-            rolling.push_back((c.cores, intended));
-            while rolling.len() > CORES_WINDOW_SECONDS {
-                rolling.pop_front();
-            }
+            cores_window.tick(c.cores, intended);
             next_cpu =
                 Instant::now() + Duration::from_secs_f64((1.0 - unix_now().fract()).max(0.05));
         }
@@ -746,45 +876,18 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 // which need no long-run average; applied to the clipped
                 // model they predict the long-run values, and those are
                 // judged.
-                let (long, intended): (Vec<f64>, Vec<f64>) = rolling.iter().copied().unzip();
-                let (cores_pred, cv_pred) = predicted_cores_cv(&long, &intended, &knobs, threads);
+                let (cores_pred, cv_pred) = cores_window.predict(&knobs, threads);
                 let dram = sample
                     .values
                     .get("dram_bytes_per_sec")
                     .copied()
                     .or_else(|| dram_model(&sample, &knobs, aps));
                 let mut m = measured_from(&sample, cv_pred, aps, dram);
-                m.cv_samples = long.len();
+                m.cv_samples = cores_window.len();
                 if cores_pred.is_some() {
                     m.cores = cores_pred;
                 }
-                if recent.front().is_some_and(|(k, _, _)| *k != knobs) {
-                    recent.clear();
-                }
-                recent.push_back((knobs.clone(), m.clone(), seconds));
-                while recent.len() > POOL_WINDOWS_MAX {
-                    recent.pop_front();
-                }
-                if let Some(rate) = m.instructions_per_s {
-                    rate_sum += rate;
-                    rate_n += 1;
-                }
-                let mean_rate = if rate_n > 0 {
-                    rate_sum / rate_n as f64
-                } else {
-                    0.0
-                };
-                let lengths: Vec<(f64, f64)> = recent
-                    .iter()
-                    .map(|(_, w, secs)| (w.instructions_per_s.unwrap_or(0.0), *secs))
-                    .collect();
-                let n = pool_count(&lengths, mean_rate, pool_s);
-                let raws: Vec<Measured> = recent
-                    .iter()
-                    .skip(recent.len() - n)
-                    .map(|(_, w, _)| w.clone())
-                    .collect();
-                m = pool(&raws);
+                let m = pool.push(&knobs, m, seconds);
                 let statuses = fitter.statuses(&m, &goal);
                 writeln!(
                     progress,
@@ -796,9 +899,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         .map(|s| format!(
                             "{}={}{}",
                             s.key,
-                            s.measured
-                                .map(|v| format!("{v:.4}"))
-                                .unwrap_or_else(|| "-".into()),
+                            s.measured.map_or_else(|| "-".into(), |v| format!("{v:.4}")),
                             s.error
                                 .map(|e| format!("({:+.1}%)", e * 100.0))
                                 .unwrap_or_default()
@@ -831,24 +932,17 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 let judged: Vec<Status> = statuses
                     .iter()
                     .filter(|s| {
-                        long.len() >= crate::fit::MIN_CV_SAMPLES
+                        cores_window.len() >= crate::fit::MIN_CV_SAMPLES
                             || !matches!(s.key, "cpu_usage_cores" | "cpu_usage_cv_1s")
                     })
                     .cloned()
                     .collect();
-                streak = if Fitter::converged(&judged) {
-                    out_of_tolerance = 0;
-                    streak + 1
-                } else {
-                    out_of_tolerance += 1;
-                    0
-                };
-                let distance = fitter.distance(&judged);
-                if best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
-                    best = Some((distance, knobs.clone(), fitter.passes));
-                }
-                converged = streak >= CONVERGED_WINDOWS;
-                ever_converged |= converged;
+                fit.observe(
+                    Fitter::converged(&judged),
+                    fitter.distance(&judged),
+                    &knobs,
+                    fitter.passes,
+                );
                 if knobs.duty >= 1.0
                     && last_statuses_short_of_cores(&statuses)
                     && !notes.iter().any(|n| n.starts_with("busy cores"))
@@ -876,35 +970,25 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     }
                 }
                 if let Some(c) = cache.as_mut() {
-                    if c.resident_bytes()
-                        .map(|r| r < c.len() * 95 / 100)
-                        .unwrap_or(false)
-                    {
+                    if c.resident_bytes().is_ok_and(|r| r < c.len() * 95 / 100) {
                         let _ = c.reread();
                     }
                 }
                 last_sample = Some(sample);
-                // Once the fit has converged, a window or a few out of
-                // tolerance is noise, a neighbour's burst or the recorder
-                // attaching; the fit moves again only when a second of
-                // them in a row is out. The memory of having converged
-                // must not be the current streak, which the noisy window
-                // has just reset.
-                let refit = streak == 0 && (!ever_converged || out_of_tolerance >= refit_windows);
                 // The pass limit is for a fit that has never converged;
                 // one that has keeps following the host, since it moves
                 // only when a second of windows in a row is out.
-                if fitting && !stop && (settings.adaptive || refit) {
-                    if fitter.passes < settings.max_passes || ever_converged {
+                if fitting && !stop && (settings.adaptive || fit.refit()) {
+                    if fitter.passes < settings.max_passes || fit.ever {
                         let mut next = fitter.step(&knobs, &m, &goal);
                         // A lever the IPC and MPKI rules pulled against
                         // each other has just been frozen: the two targets
                         // meet nowhere along it, so the fit goes back to
                         // the closest pass it saw and continues from there.
                         let frozen = fitter.lines_track.frozen || fitter.seq_track.frozen;
-                        if frozen && !compromise {
-                            compromise = true;
-                            if let Some((_, k, pass)) = &best {
+                        if frozen && !fit.compromise {
+                            fit.compromise = true;
+                            if let Some((_, k, pass)) = &fit.best {
                                 next = k.clone();
                                 notes.push(format!(
                                     "IPC and MPKI pull a lever against each other at one op per access; holding pass {pass}, the closest, as the compromise"
@@ -917,7 +1001,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         }
                     } else if !notes.iter().any(|n| n.starts_with("not within tolerance")) {
                         // Out of passes: hold the closest pass, not the last.
-                        let held = match &best {
+                        let held = match &fit.best {
                             Some((_, k, pass)) if *k != knobs => {
                                 generator.set_knobs(k.clone(), &buffers)?;
                                 knobs = k.clone();
@@ -998,7 +1082,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         main_bytes: mem_plan.main_bytes,
         thp_bytes,
         passes: fitter.passes,
-        converged,
+        converged: fit.converged,
         targets: target_rows,
         memory: memory_rows,
         windows,
@@ -1006,11 +1090,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     };
     // A fit that converged is kept for the next run of these targets on
     // this CPU model, which then starts where this one ended.
-    if let Some(path) = settings
-        .cache_path
-        .as_ref()
-        .filter(|_| fitting && ever_converged)
-    {
+    if let Some(path) = settings.cache_path.as_ref().filter(|_| fitting && fit.ever) {
         let written = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
@@ -1047,6 +1127,32 @@ mod tests {
         assert!(close(window_seconds(Some(2.0)), 2.0));
         assert!(close(window_seconds(Some(0.0)), 0.05));
         assert_eq!(CORES_WINDOW_SECONDS, 40);
+    }
+
+    #[test]
+    fn convergence_needs_a_streak_and_refits_after_a_second_out() {
+        let k = Knobs::default();
+        let mut c = Convergence::new(10);
+        assert!(c.refit(), "never converged: every window out moves");
+        c.observe(true, 0.5, &k, 1);
+        assert!(!c.converged && !c.refit());
+        c.observe(true, 0.2, &k, 1);
+        assert!(c.converged && c.ever);
+        assert_eq!(c.best.as_ref().map(|(d, _, p)| (*d, *p)), Some((0.2, 1)));
+        for i in 0..9 {
+            c.observe(false, 3.0, &k, 2);
+            assert!(!c.converged && c.ever);
+            assert!(!c.refit(), "window {i} out: not yet");
+        }
+        c.observe(false, 3.0, &k, 2);
+        assert!(c.refit(), "a second out: the fit moves");
+        c.observe(true, 0.9, &k, 3);
+        assert!(!c.refit() && !c.converged, "one within resets the count");
+        assert_eq!(
+            c.best.as_ref().map(|(_, _, p)| *p),
+            Some(1),
+            "the closest stays"
+        );
     }
 
     #[test]
@@ -1128,7 +1234,7 @@ mod tests {
                 kernel_files: 0
             }
         );
-        t.set("anon_bytes", 100.0 * (1 << 20) as f64).unwrap();
+        t.set("anon_bytes", 100.0 * f64::from(1 << 20)).unwrap();
         let p = plan_memory(&t, 10 << 20, 1024, 1024, None);
         assert_eq!(p.main_bytes, (100 << 20) - (10 << 20) - 2048 * PAGE as u64);
         t.set("anon_bytes", 1.0).unwrap();

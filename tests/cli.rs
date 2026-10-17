@@ -149,7 +149,7 @@ fn run_fits_busy_cores_and_memory_in_its_own_process() {
         .measured
         .unwrap();
     assert!(
-        (anon - 100_663_296.0).abs() < 16.0 * (1 << 20) as f64,
+        (anon - 100_663_296.0).abs() < 16.0 * f64::from(1 << 20),
         "{anon}"
     );
     let cache = report
@@ -159,7 +159,7 @@ fn run_fits_busy_cores_and_memory_in_its_own_process() {
         .unwrap()
         .measured
         .unwrap();
-    assert!(cache > 7.0 * (1 << 20) as f64, "{cache}");
+    assert!(cache > 7.0 * f64::from(1 << 20), "{cache}");
     assert!(report.converged || report.passes >= 1, "{report:#?}");
 }
 
@@ -169,10 +169,12 @@ fn run_starts_from_its_cached_fit() {
     let dir = tempfile::tempdir().unwrap();
     let run = |extra: &[&str]| {
         let mut cmd = Command::cargo_bin("thrashgen").unwrap();
+        // Busy cores are judged from the third second; six leave room
+        // for a loaded host to settle twice.
         cmd.args(["run", "--set", "cpu_usage_cores=0.5", "--set", "ipc=1.2"])
             .args([
                 "--duration",
-                "4",
+                "6",
                 "--window",
                 "0.5",
                 "--pin",
@@ -189,7 +191,10 @@ fn run_starts_from_its_cached_fit() {
     };
     let first = run(&[]);
     let cache = dir.path().join("thrashgen");
-    let entries: Vec<_> = std::fs::read_dir(&cache).unwrap().flatten().collect();
+    let entries: Vec<_> = std::fs::read_dir(&cache)
+        .unwrap_or_else(|e| panic!("no cache written at {}: {e}", cache.display()))
+        .flatten()
+        .collect();
     assert_eq!(entries.len(), 1, "one cached fit: {entries:?}");
     let cal: thrashgen::calibration::Calibration =
         serde_json::from_str(&std::fs::read_to_string(entries[0].path()).unwrap()).unwrap();

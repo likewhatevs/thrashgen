@@ -174,12 +174,9 @@ pub const MIN_CV_SAMPLES: usize = 3;
 /// two hugepages of slack for process-level accounting noise.
 pub fn absolute_tolerance(key: &str) -> f64 {
     match key {
-        "cpu_usage_cores" => 0.05,
-        "cpu_usage_cv_1s" => 0.02,
-        "ipc" => 0.02,
-        "l3_mpki" => 0.05,
+        "cpu_usage_cores" | "l3_mpki" => 0.05,
+        "cpu_usage_cv_1s" | "ipc" | "dtlb_pki" => 0.02,
         "dram_bytes_per_sec" => 1.0e8,
-        "dtlb_pki" => 0.02,
         "itlb_pki" => 0.01,
         "memory_current_bytes" | "anon_bytes" | "pagecache_bytes" | "shmem_bytes" => {
             8.0 * 1024.0 * 1024.0
@@ -301,6 +298,47 @@ fn factor(target: f64, measured: f64, damping: f64) -> f64 {
     (target / measured).powf(damping).clamp(0.25, 4.0)
 }
 
+/// What one pass works from: the knobs it starts at, the pooled
+/// window, the goal, and the quantities the rules share and hand on.
+struct Pass<'a> {
+    knobs: &'a Knobs,
+    m: &'a Measured,
+    goal: &'a Goal,
+    /// The damping exponent.
+    d: f64,
+    st: Vec<Status>,
+    /// MPKI within its absolute floor.
+    mpki_met: bool,
+    /// Whether a prefetched walk and diluted visits may cost counted
+    /// misses.
+    misses_to_spare: bool,
+    ipa: Option<f64>,
+    /// Misses per access now.
+    mpa_now: Option<f64>,
+    /// Compute work, ops times chains, and instructions per unit of it.
+    work_now: f64,
+    slope: f64,
+    /// The share of the misses that followed the run length last pass.
+    lines_elasticity: f64,
+    /// The compute work the pass wants, as the rules shape it.
+    work: f64,
+    /// Page-cache reads were given back for MPKI, so the ops rule rests.
+    mpki_handled: bool,
+    /// Instructions per access and accesses per second after the pass.
+    ipa_next: Option<f64>,
+    aps_next: f64,
+}
+
+impl Pass<'_> {
+    fn within(&self, key: &str) -> bool {
+        self.st.iter().any(|s| s.key == key && s.within)
+    }
+
+    fn mpki_within(&self) -> bool {
+        self.mpki_met || self.within("l3_mpki")
+    }
+}
+
 impl Fitter {
     /// A fitter for `threads` workers with default damping.
     pub fn new(threads: usize, limits: Limits) -> Fitter {
@@ -355,18 +393,18 @@ impl Fitter {
             }
             let (mut lo, mut hi) = (0.0, 1.0);
             for _ in 0..24 {
-                let mid = 0.5 * (lo + hi);
+                let mid = f64::midpoint(lo, hi);
                 if clipped_duty_stats(mid, knob).0 < mean {
                     lo = mid;
                 } else {
                     hi = mid;
                 }
             }
-            Some(0.5 * (lo + hi))
+            Some(f64::midpoint(lo, hi))
         };
         let (mut lo, mut hi) = (0.0, 6.0);
         for _ in 0..24 {
-            let mid = 0.5 * (lo + hi);
+            let mid = f64::midpoint(lo, hi);
             match duty_for(mid) {
                 Some(duty) if clipped_duty_stats(duty, mid).1 < cv => lo = mid,
                 _ => hi = mid,
@@ -529,10 +567,48 @@ impl Fitter {
     /// measured efficiency against the instructions per access the next
     /// pass will have, so a change in ops never drags them off target.
     pub fn step(&mut self, knobs: &Knobs, m: &Measured, goal: &Goal) -> Knobs {
-        // A target within tolerance moves nothing: every rule nudges, a
-        // nudge from inside the band chases noise, and each one is a pass
-        // that resets the blend of windows. Busy cores and burstiness are
-        // judged only once their rolling window is full.
+        let Some(mut p) = self.begin(knobs, m, goal) else {
+            return knobs.clone();
+        };
+        let mut k = knobs.clone();
+        Self::cores_and_burstiness(&p, &mut k);
+        if self.undo_costly_shrink(&p, &mut k) {
+            self.passes += 1;
+            return k;
+        }
+        self.remember(&p);
+        self.ipc_ladder(&mut p, &mut k);
+        self.dilution(&p, &mut k);
+        Self::reads_back(&mut p, &mut k);
+        Self::ops_rule(&p, &mut k);
+        self.sparse_shrink(&p, &mut k);
+        self.misses_at_floor(&p, &mut k);
+        // The IPC and MPKI rules are done with the run length and the
+        // sequential share; the dTLB rule below may pull them back, and
+        // that tug of war is what the reversals count.
+        let (lines_mid, seq_mid) = (k.lines, k.seq);
+        Self::predict_next(&mut p, &k);
+        self.bandwidth(&p, &mut k);
+        Self::visit_rates(&p, &mut k);
+        self.dtlb_excess(&p, &mut k);
+        self.freeze_fought_levers(&p, &mut k, lines_mid, seq_mid);
+        k.sparse_pages = k.sparse_pages.clamp(1, self.limits.sparse_capacity.max(1));
+        k.code_pages = k.code_pages.clamp(1, self.limits.code_capacity.max(1));
+        // A window that moved nothing, because every lever a target
+        // needs is at its range, is not a pass: an unreachable target
+        // must not spend the budget a later disturbance will need.
+        if k != *knobs {
+            self.passes += 1;
+        }
+        k
+    }
+
+    /// What a pass works from, or nothing when every judged target is
+    /// within tolerance: every rule nudges, a nudge from inside the band
+    /// chases noise, and each one is a pass that resets the pooling of
+    /// windows. Busy cores and burstiness are judged only once a few
+    /// seconds are in.
+    fn begin<'a>(&self, knobs: &'a Knobs, m: &'a Measured, goal: &'a Goal) -> Option<Pass<'a>> {
         let st = self.statuses(m, goal);
         let judged = |s: &&Status| {
             m.cv_samples >= MIN_CV_SAMPLES
@@ -543,11 +619,8 @@ impl Fitter {
             .filter(judged)
             .all(|s| s.within || s.measured.is_none())
         {
-            return knobs.clone();
+            return None;
         }
-        let within = |key: &str| st.iter().any(|s| s.key == key && s.within);
-        let d = self.damping;
-        let mut k = knobs.clone();
         // A sequential walk is prefetched, and the L3 miss proxy does not
         // count prefetched lines, so under the proxy the walk costs
         // counted misses, and so does diluting visits. There, both are
@@ -565,29 +638,11 @@ impl Fitter {
                 (Some(t), Some(v)) => (v - t).abs() <= absolute_tolerance("l3_mpki"),
                 (Some(_), None) => false,
             };
-
-        // Busy cores and burstiness start from the clipped model and are
-        // corrected from the long-run values the measured seconds
-        // predict, once there are a few of them.
-        if m.cv_samples >= MIN_CV_SAMPLES {
-            if let (Some(t), Some(v), false) = (goal.cores, m.cores, within("cpu_usage_cores")) {
-                k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
-            }
-            if let (Some(t), Some(v), false) = (goal.cv, m.cv, within("cpu_usage_cv_1s")) {
-                // The knob stays within twice the target so clipping at
-                // full duty cannot run it away.
-                if v > 0.0 && k.cv > 0.0 {
-                    k.cv = (k.cv * factor(t, v, d)).clamp(0.0, 2.0 * t);
-                }
-            }
-        }
-
         // Instructions per access now, and the slope against compute
-        // work, which is ops times chains.
+        // work, which is ops times chains. Below one chain the slow
+        // iterations cost about what one-chain iterations do in
+        // instructions, so work does not shrink with the knob there.
         let ipa = m.instructions_per_access();
-        // Below one chain the slow iterations cost about what one-chain
-        // iterations do in instructions, so work does not shrink with
-        // the knob there.
         let work_now = f64::from(knobs.ops) * knobs.chains.max(1.0);
         let mut slope = Self::INSTRUCTIONS_PER_WORK;
         if let (Some(ipa), Some((work_prev, ipa_prev))) = (ipa, self.last_work_ipa) {
@@ -598,10 +653,6 @@ impl Fitter {
                 }
             }
         }
-        // A shrink of the working set that cost misses, beyond what the
-        // run length explains and above the absolute floor, is undone and
-        // not tried again, and the window it spoiled moves nothing else:
-        // the other rules would chase the misses it took away.
         let mpa_now = m.mpki.zip(ipa).map(|(v, ipa)| v / 1000.0 * ipa);
         // How much of the misses followed the run length last pass,
         // between none and all; all until a pass has changed it. Misses
@@ -619,283 +670,364 @@ impl Fitter {
             }
             _ => 1.0,
         };
-        if let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa), Some(ipa)) =
-            (self.last_set, mpa_now, ipa)
-        {
-            let explained = mpa_prev * (knobs.lines / lines_prev.max(LINES_MIN));
-            // Compute can buy misses per instruction back by shedding its
-            // own instructions, so a loss up to its share of them is
-            // recoverable; at one op per access none is.
-            let compute_share = (work_now * slope / ipa).clamp(0.0, 1.0);
-            if knobs.wset < wset_prev
-                && !mpki_met
-                && mpa < 0.75 * explained
-                && compute_share < 1.0 - mpa / explained
-            {
-                self.wset_blocked = true;
-                k.wset = wset_prev;
-                self.passes += 1;
-                return k;
-            }
-        }
-        if let Some(mpa) = mpa_now {
-            self.last_set = Some((knobs.wset, knobs.lines, mpa));
-        }
-        if let Some(ipa) = ipa {
-            self.last_work_ipa = Some((work_now, ipa));
-        }
+        Some(Pass {
+            knobs,
+            m,
+            goal,
+            d: self.damping,
+            st,
+            mpki_met,
+            misses_to_spare,
+            ipa,
+            mpa_now,
+            work_now,
+            slope,
+            lines_elasticity,
+            work: work_now,
+            mpki_handled: false,
+            ipa_next: None,
+            aps_next: m.accesses_per_s,
+        })
+    }
 
-        let mut work = work_now;
-        if let (Some(t), Some(v), false) = (goal.ipc, m.ipc, within("ipc")) {
-            // Longer runs let the prefetcher stream, raising IPC at equal
-            // MPKI; more chains raise the compute IPC. Run length is the
-            // fine knob; chains move once it is at its range or the last
-            // pass failed to move IPC by the tolerance, which is what a
-            // compute-bound regime looks like. With no MPKI target,
-            // compute work is free to carry IPC too.
-            let g = factor(t, v, d);
-            if goal.mpki.is_none() {
-                work *= g;
-            }
-            let stalled = self
-                .last_ipc
-                .is_some_and(|prev| (v - prev).abs() < prev * self.tol.ratio);
-            let chains_can_move = if g > 1.0 {
-                k.chains < 4.0
-            } else {
-                k.chains > SLOWEST_CHAINS
-            };
-            // With no compute left to cut and MPKI still short, run length
-            // is the only lever MPKI has; IPC yields to it there.
-            let mpki_short = goal
-                .mpki
-                .zip(m.mpki)
-                .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
-            let lines_locked = g < 1.0 && knobs.ops <= 1 && mpki_short;
-            let memory_bound = m.mpki.is_some_and(|x| x >= MEMORY_BOUND_MPKI) && t < 1.5;
-            // The shares are given back first: a sequential walk when IPC
-            // is high, dependent misses when it is short. A small share
-            // goes back whole and the ladder continues this pass.
-            let mut handled = false;
-            if g < 1.0 && k.seq > 0.0 {
-                handled = k.seq >= SHARE_SMALL;
-                k.seq = if handled { k.seq * g } else { 0.0 };
-            } else if g > 1.0 && k.dep > 0.0 {
-                // Given back in proportion to the shortfall, between a
-                // twentieth and a fifth a pass: a fixed fifth each way made
-                // a limit cycle around a target that needed a tenth.
-                handled = k.dep >= SHARE_SMALL;
-                k.dep = if handled {
-                    (k.dep - Self::dep_step(t, v)).max(0.0)
-                } else {
-                    0.0
-                };
-            }
-            // A visit share is not a run: a run of one on every access
-            // would undo the dilution the share is, so IPC short leaves
-            // it to the chains.
-            let lines_can_move = if g > 1.0 {
-                (1.0..64.0).contains(&k.lines)
-            } else {
-                k.lines > 1.0 && !lines_locked
-            };
-            let dep_up = |k: &mut Knobs| k.dep = (k.dep + Self::dep_step(t, v)).min(1.0);
-            let chains_move = |k: &mut Knobs| k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
-            let lines_move = |k: &mut Knobs| k.lines = (k.lines * g).clamp(1.0, 64.0);
-            if !handled && g < 1.0 && memory_bound {
-                // Stalls set IPC here: serialize the misses once compute is
-                // down to a chain or has stopped helping; then fewer lines
-                // per visit, which is less overlap, undamped since the
-                // ops rule keeps MPKI; then compute.
-                if k.dep < 1.0 && (k.chains <= 1.0 || stalled || knobs.ops <= 1) {
-                    dep_up(&mut k);
-                } else if lines_can_move {
-                    k.lines = (k.lines * factor(t, v, 1.0)).max(1.0);
-                } else if chains_can_move {
-                    chains_move(&mut k);
-                }
-            } else if !handled && g < 1.0 {
-                // Compute sets IPC: shorter runs, then fewer chains. With
-                // both at their floors and a visit on only a share of
-                // accesses, the access is scaled up whole, compute and
-                // visits alike, so the slow chain carries more of the
-                // instructions at unchanged misses per instruction.
-                if lines_can_move && !stalled {
-                    lines_move(&mut k);
-                } else if chains_can_move {
-                    chains_move(&mut k);
-                } else if k.lines <= 1.0 && goal.mpki.is_some() {
-                    let up = (1.0 / g).powi(2).min(2.0);
-                    work *= up;
-                    k.lines = (k.lines * up).min(64.0);
-                } else {
-                    dep_up(&mut k);
-                }
-            } else if !handled {
-                // IPC short: longer runs, more chains, then a sequential
-                // walk that lets the prefetcher stream; when none of the
-                // others can move, run length keeps moving even if it
-                // seemed to have stalled.
-                let others_can_move = chains_can_move || (k.seq < 1.0 && misses_to_spare);
-                if lines_can_move && (!stalled || !others_can_move) {
-                    lines_move(&mut k);
-                } else if chains_can_move {
-                    chains_move(&mut k);
-                } else if k.seq < 1.0 && misses_to_spare {
-                    k.seq = (k.seq.max(SHARE_SEED) * g).clamp(0.0, 1.0);
-                }
-            }
-            self.last_ipc = Some(v);
+    /// Busy cores and burstiness start from the clipped model and are
+    /// corrected from the long-run values the measured seconds predict,
+    /// once there are a few of them.
+    fn cores_and_burstiness(p: &Pass, k: &mut Knobs) {
+        let (m, goal, d) = (p.m, p.goal, p.d);
+        if m.cv_samples < MIN_CV_SAMPLES {
+            return;
         }
-        if knobs.ops > OPS_DILUTION_CAP
+        if let (Some(t), Some(v), false) = (goal.cores, m.cores, p.within("cpu_usage_cores")) {
+            k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
+        }
+        if let (Some(t), Some(v), false) = (goal.cv, m.cv, p.within("cpu_usage_cv_1s")) {
+            // The knob stays within twice the target so clipping at
+            // full duty cannot run it away.
+            if v > 0.0 && k.cv > 0.0 {
+                k.cv = (k.cv * factor(t, v, d)).clamp(0.0, 2.0 * t);
+            }
+        }
+    }
+
+    /// A shrink of the working set that cost misses, beyond what the
+    /// run length explains and above the absolute floor, is undone and
+    /// not tried again, and the window it spoiled moves nothing else:
+    /// the other rules would chase the misses it took away. Whether it
+    /// was undone.
+    fn undo_costly_shrink(&mut self, p: &Pass, k: &mut Knobs) -> bool {
+        let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa), Some(ipa)) =
+            (self.last_set, p.mpa_now, p.ipa)
+        else {
+            return false;
+        };
+        let explained = mpa_prev * (p.knobs.lines / lines_prev.max(LINES_MIN));
+        // Compute can buy misses per instruction back by shedding its
+        // own instructions, so a loss up to its share of them is
+        // recoverable; at one op per access none is.
+        let compute_share = (p.work_now * p.slope / ipa).clamp(0.0, 1.0);
+        if p.knobs.wset < wset_prev
+            && !p.mpki_met
+            && mpa < 0.75 * explained
+            && compute_share < 1.0 - mpa / explained
+        {
+            self.wset_blocked = true;
+            k.wset = wset_prev;
+            return true;
+        }
+        false
+    }
+
+    /// What the next pass compares itself with.
+    fn remember(&mut self, p: &Pass) {
+        if let Some(mpa) = p.mpa_now {
+            self.last_set = Some((p.knobs.wset, p.knobs.lines, mpa));
+        }
+        if let Some(ipa) = p.ipa {
+            self.last_work_ipa = Some((p.work_now, ipa));
+        }
+    }
+
+    /// The IPC ladder. Longer runs let the prefetcher stream, raising
+    /// IPC at equal MPKI; more chains raise the compute IPC. Run length
+    /// is the fine knob; chains move once it is at its range or the
+    /// last pass failed to move IPC by the tolerance, which is what a
+    /// compute-bound regime looks like. With no MPKI target, compute
+    /// work is free to carry IPC too.
+    fn ipc_ladder(&mut self, p: &mut Pass, k: &mut Knobs) {
+        let (knobs, m, goal, d) = (p.knobs, p.m, p.goal, p.d);
+        let (Some(t), Some(v), false) = (goal.ipc, m.ipc, p.within("ipc")) else {
+            return;
+        };
+        let g = factor(t, v, d);
+        if goal.mpki.is_none() {
+            p.work *= g;
+        }
+        let stalled = self
+            .last_ipc
+            .is_some_and(|prev| (v - prev).abs() < prev * self.tol.ratio);
+        let chains_can_move = if g > 1.0 {
+            k.chains < 4.0
+        } else {
+            k.chains > SLOWEST_CHAINS
+        };
+        // With no compute left to cut and MPKI still short, run length
+        // is the only lever MPKI has; IPC yields to it there.
+        let mpki_short = goal
+            .mpki
+            .zip(m.mpki)
+            .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
+        let lines_locked = g < 1.0 && knobs.ops <= 1 && mpki_short;
+        let memory_bound = m.mpki.is_some_and(|x| x >= MEMORY_BOUND_MPKI) && t < 1.5;
+        // The shares are given back first: a sequential walk when IPC
+        // is high, dependent misses when it is short. A small share
+        // goes back whole and the ladder continues this pass.
+        let mut handled = false;
+        if g < 1.0 && k.seq > 0.0 {
+            handled = k.seq >= SHARE_SMALL;
+            k.seq = if handled { k.seq * g } else { 0.0 };
+        } else if g > 1.0 && k.dep > 0.0 {
+            // Given back in proportion to the shortfall, between a
+            // twentieth and a fifth a pass: a fixed fifth each way made
+            // a limit cycle around a target that needed a tenth.
+            handled = k.dep >= SHARE_SMALL;
+            k.dep = if handled {
+                (k.dep - Self::dep_step(t, v)).max(0.0)
+            } else {
+                0.0
+            };
+        }
+        // A visit share is not a run: a run of one on every access
+        // would undo the dilution the share is, so IPC short leaves
+        // it to the chains.
+        let lines_can_move = if g > 1.0 {
+            (1.0..64.0).contains(&k.lines)
+        } else {
+            k.lines > 1.0 && !lines_locked
+        };
+        let dep_up = |k: &mut Knobs| k.dep = (k.dep + Self::dep_step(t, v)).min(1.0);
+        let chains_move = |k: &mut Knobs| k.chains = (k.chains * g).clamp(SLOWEST_CHAINS, 4.0);
+        let lines_move = |k: &mut Knobs| k.lines = (k.lines * g).clamp(1.0, 64.0);
+        if !handled && g < 1.0 && memory_bound {
+            // Stalls set IPC here: serialize the misses once compute is
+            // down to a chain or has stopped helping; then fewer lines
+            // per visit, which is less overlap, undamped since the
+            // ops rule keeps MPKI; then compute.
+            if k.dep < 1.0 && (k.chains <= 1.0 || stalled || knobs.ops <= 1) {
+                dep_up(k);
+            } else if lines_can_move {
+                k.lines = (k.lines * factor(t, v, 1.0)).max(1.0);
+            } else if chains_can_move {
+                chains_move(k);
+            }
+        } else if !handled && g < 1.0 {
+            // Compute sets IPC: shorter runs, then fewer chains. With
+            // both at their floors and a visit on only a share of
+            // accesses, the access is scaled up whole, compute and
+            // visits alike, so the slow chain carries more of the
+            // instructions at unchanged misses per instruction.
+            if lines_can_move && !stalled {
+                lines_move(k);
+            } else if chains_can_move {
+                chains_move(k);
+            } else if k.lines <= 1.0 && goal.mpki.is_some() {
+                let up = (1.0 / g).powi(2).min(2.0);
+                p.work *= up;
+                k.lines = (k.lines * up).min(64.0);
+            } else {
+                dep_up(k);
+            }
+        } else if !handled {
+            // IPC short: longer runs, more chains, then a sequential
+            // walk that lets the prefetcher stream; when none of the
+            // others can move, run length keeps moving even if it
+            // seemed to have stalled.
+            let others_can_move = chains_can_move || (k.seq < 1.0 && p.misses_to_spare);
+            if lines_can_move && (!stalled || !others_can_move) {
+                lines_move(k);
+            } else if chains_can_move {
+                chains_move(k);
+            } else if k.seq < 1.0 && p.misses_to_spare {
+                k.seq = (k.seq.max(SHARE_SEED) * g).clamp(0.0, 1.0);
+            }
+        }
+        self.last_ipc = Some(v);
+    }
+
+    /// Past the dilution cap, with misses not short, the stream is pure
+    /// dilution and the run length halves each pass, since every miss
+    /// dropped saves a thousand instructions of compute.
+    fn dilution(&self, p: &Pass, k: &mut Knobs) {
+        if p.knobs.ops > OPS_DILUTION_CAP
             && k.lines > LINES_MIN
-            && !mpki_short_now(goal, m, self.tol.ratio)
+            && !mpki_short_now(p.goal, p.m, self.tol.ratio)
         {
             k.lines = (k.lines * 0.5).max(LINES_MIN);
         }
-        // Within the absolute floor the target is met and what remains
-        // is mostly noise; chasing it swung ops between one and tens of
-        // thousands.
-        let mpki_within = mpki_met || within("l3_mpki");
-        // Page-cache reads give misses back before compute dilutes them,
-        // since they were the last lever taken: by the model, the misses
-        // over per access over the lines a page holds, damped.
-        let mut mpki_handled = false;
-        if let (Some(t), Some(v), Some(ipa)) = (goal.mpki, m.mpki, ipa) {
-            if k.kreads > 0.0 && !mpki_within && v > t {
+    }
+
+    /// Page-cache reads give misses back before compute dilutes them,
+    /// since they were the last lever taken: by the model, the misses
+    /// over per access over the lines a page holds, damped.
+    fn reads_back(p: &mut Pass, k: &mut Knobs) {
+        if let (Some(t), Some(v), Some(ipa)) = (p.goal.mpki, p.m.mpki, p.ipa) {
+            if k.kreads > 0.0 && !p.mpki_within() && v > t {
                 let over = (v - t) / 1000.0 * ipa;
-                k.kreads = (k.kreads - d * over / KREAD_LINES).max(0.0);
-                mpki_handled = true;
+                k.kreads = (k.kreads - p.d * over / KREAD_LINES).max(0.0);
+                p.mpki_handled = true;
             }
         }
-        match (goal.mpki, m.mpki, ipa) {
-            (Some(t), Some(v), Some(ipa))
-                if t > 0.0 && v > 0.0 && !mpki_within && !mpki_handled =>
-            {
-                // Misses per access follow the run length the IPC rule just
-                // chose; at that length, the instructions per access the
-                // target needs are known, and the work that gives them.
+    }
+
+    /// The ops rule, model-based: misses per access follow the run
+    /// length the IPC rule just chose; at that length, the instructions
+    /// per access the target needs are known, and the work that gives
+    /// them. Within the absolute floor the target is met and what
+    /// remains is mostly noise; chasing it swung ops between one and
+    /// tens of thousands.
+    fn ops_rule(p: &Pass, k: &mut Knobs) {
+        let (knobs, m, goal, d) = (p.knobs, p.m, p.goal, p.d);
+        let mut work = p.work;
+        let quiet = p.mpki_within() || p.mpki_handled;
+        match (goal.mpki, m.mpki, p.ipa) {
+            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 && !quiet => {
                 let misses_per_access = v / 1000.0
                     * ipa
-                    * (k.lines / knobs.lines.max(LINES_MIN)).powf(lines_elasticity);
+                    * (k.lines / knobs.lines.max(LINES_MIN)).powf(p.lines_elasticity);
                 let want_ipa = misses_per_access * 1000.0 / t;
-                work += d * (want_ipa - ipa) / slope;
+                work += d * (want_ipa - ipa) / p.slope;
             }
-            (Some(t), Some(v), None) if !mpki_within && !mpki_handled => work *= factor(v, t, d),
+            (Some(t), Some(v), None) if !quiet => work *= factor(v, t, d),
             _ => {}
         }
-        let work = work.clamp(work_now / OPS_STEP_MAX, work_now * OPS_STEP_MAX);
+        let work = work.clamp(p.work_now / OPS_STEP_MAX, p.work_now * OPS_STEP_MAX);
         k.ops = (work / k.chains.max(1.0))
             .clamp(OPS_RANGE.0, OPS_RANGE.1)
             .round() as u32;
-        // With compute at its ceiling, the main stream diluted to its
-        // floor and misses still high, the misses left are the sparse
-        // set's own: its lines, one per page, and their page-table
-        // entries, refetched after every idle period of the duty cycle.
-        // Half the set per pass, down to the floor the dTLB regime needs;
-        // the visit rate makes up for the hit rate. Not before the main
-        // stream is diluted away: halving both at once took the set to
-        // the floor while the main stream still made the misses, and at
-        // the floor few visits miss the L1, so the dTLB rate ran out of
-        // visits.
-        if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
+    }
+
+    /// With compute at its ceiling, the main stream diluted to its
+    /// floor and misses still high, the misses left are the sparse
+    /// set's own: its lines, one per page, and their page-table
+    /// entries, refetched after every idle period of the duty cycle.
+    /// Half the set per pass, down to the floor the dTLB regime needs;
+    /// the visit rate makes up for the hit rate. Not before the main
+    /// stream is diluted away: halving both at once took the set to
+    /// the floor while the main stream still made the misses, and at
+    /// the floor few visits miss the L1, so the dTLB rate ran out of
+    /// visits.
+    fn sparse_shrink(&self, p: &Pass, k: &mut Knobs) {
+        if let (Some(t), Some(v)) = (p.goal.mpki, p.m.mpki) {
             if k.ops >= OPS_RANGE.1 as u32
-                && knobs.ops >= OPS_RANGE.1 as u32
+                && p.knobs.ops >= OPS_RANGE.1 as u32
                 && k.lines <= LINES_MIN
-                && !mpki_within
+                && !p.mpki_within()
                 && v > t
                 && k.sparse_pages > self.limits.sparse_floor
             {
                 k.sparse_pages = (k.sparse_pages / 2).max(self.limits.sparse_floor);
             }
         }
-        if let (Some(t), Some(v)) = (goal.mpki, m.mpki) {
-            // Compute cannot go below one op per access; past that, more
-            // lines per access are the only way to more misses.
-            if k.ops <= 1 && knobs.ops <= 1 && v < t * (1.0 - self.tol.ratio) {
-                // Undamped: misses follow run length about linearly, and
-                // passes are few.
-                k.lines = (k.lines * factor(t, v, 1.0)).clamp(LINES_MIN, 64.0);
-                // The main stream at its range and misses still short,
-                // with the kernel's in the count: page-cache reads, each
-                // a page the kernel copies out of the page cache, which is
-                // where a page-cache reader's kernel-mode misses come
-                // from. By the model, the misses short per access over the
-                // lines a page holds, damped: a read is sixty-four misses,
-                // and a whole one per access swung MPKI by thirty.
-                if let (true, true, true, Some(ipa)) = (
-                    self.kernel_counted,
-                    self.limits.kreads_available,
-                    knobs.lines >= 64.0,
-                    ipa,
-                ) {
-                    let short = (t - v) / 1000.0 * ipa;
-                    k.kreads = (k.kreads + d * short / KREAD_LINES).clamp(0.0, KREADS_MAX);
-                }
+    }
+
+    /// Compute cannot go below one op per access; past that, more lines
+    /// per access are the only way to more misses, undamped since misses
+    /// follow run length about linearly and passes are few. With the run
+    /// at its range and the kernel's misses in the count: page-cache
+    /// reads, each a page the kernel copies out of the page cache, which
+    /// is where a page-cache reader's kernel-mode misses come from. By
+    /// the model, the misses short per access over the lines a page
+    /// holds, damped: a read is sixty-four misses, and a whole one per
+    /// access swung MPKI by thirty.
+    fn misses_at_floor(&self, p: &Pass, k: &mut Knobs) {
+        let (Some(t), Some(v)) = (p.goal.mpki, p.m.mpki) else {
+            return;
+        };
+        if k.ops <= 1 && p.knobs.ops <= 1 && v < t * (1.0 - self.tol.ratio) {
+            k.lines = (k.lines * factor(t, v, 1.0)).clamp(LINES_MIN, 64.0);
+            if let (true, true, true, Some(ipa)) = (
+                self.kernel_counted,
+                self.limits.kreads_available,
+                p.knobs.lines >= 64.0,
+                p.ipa,
+            ) {
+                let short = (t - v) / 1000.0 * ipa;
+                k.kreads = (k.kreads + p.d * short / KREAD_LINES).clamp(0.0, KREADS_MAX);
             }
         }
+    }
 
-        // The IPC and MPKI rules are done with the run length and the
-        // sequential share; the dTLB rule below may pull them back, and
-        // that tug of war is what the reversals count.
-        let (lines_mid, seq_mid) = (k.lines, k.seq);
-        // Instructions per access after this pass, by the same model, and
-        // the access rate it implies at unchanged cycles per instruction.
-        let ipa_next =
-            ipa.map(|i| (i + slope * (f64::from(k.ops) * k.chains.max(1.0) - work_now)).max(1.0));
-        let aps_next = match (ipa, ipa_next) {
-            (Some(i), Some(n)) if m.accesses_per_s > 0.0 => m.accesses_per_s * i / n,
-            _ => m.accesses_per_s,
+    /// Instructions per access after this pass, by the same model, and
+    /// the access rate it implies at unchanged cycles per instruction.
+    fn predict_next(p: &mut Pass, k: &Knobs) {
+        p.ipa_next = p
+            .ipa
+            .map(|i| (i + p.slope * (f64::from(k.ops) * k.chains.max(1.0) - p.work_now)).max(1.0));
+        p.aps_next = match (p.ipa, p.ipa_next) {
+            (Some(i), Some(n)) if p.m.accesses_per_s > 0.0 => p.m.accesses_per_s * i / n,
+            _ => p.m.accesses_per_s,
         };
+    }
 
-        // Bandwidth comes last and only while IPC and MPKI are near their
-        // targets, within twice the tolerance, since both its levers
-        // change them: stores to missed lines write back, and
-        // non-temporal lines bypass the caches. The write share goes
-        // first, up to every line, then non-temporal lines by the model's
-        // count, damped linearly since it is an absolute estimate.
-        let ratios_within = self
-            .statuses(m, goal)
-            .iter()
-            .filter(|s| s.key == "ipc" || s.key == "l3_mpki")
-            .all(|s| s.within || s.error.is_none_or(|e| e.abs() <= 2.0 * self.tol.ratio));
+    /// Bandwidth comes last and only while IPC and MPKI are near their
+    /// targets, within twice the tolerance, since both its levers
+    /// change them: stores to missed lines write back, and non-temporal
+    /// lines bypass the caches. The write share goes first, up to every
+    /// line, then non-temporal lines by the model's count, damped
+    /// linearly since it is an absolute estimate, then page-cache reads
+    /// where non-temporal lines cannot carry it.
+    fn bandwidth(&self, p: &Pass, k: &mut Knobs) {
+        let (m, goal, d) = (p.m, p.goal, p.d);
+        let ratios_within =
+            p.st.iter()
+                .filter(|s| s.key == "ipc" || s.key == "l3_mpki")
+                .all(|s| s.within || s.error.is_none_or(|e| e.abs() <= 2.0 * self.tol.ratio));
         // Measured on Zen 4 at fixed knobs: the write share from a quarter
         // to all lines left IPC and MPKI where they were and raised
         // bandwidth by half; 64 non-temporal lines per access quadrupled
         // IPC and divided MPKI by ten. Non-temporal lines are therefore
         // only for profiles whose IPC can carry them.
         let nt_fits = goal.ipc.is_none_or(|t| t >= NT_IPC_FLOOR);
-        if let (Some(t), Some(v)) = (goal.dram, m.dram) {
-            if aps_next > 0.0 && ratios_within {
-                if v < t * (1.0 - self.tol.ratio) && k.wfrac < 1.0 {
-                    k.wfrac = (k.wfrac * factor(t, v, d)).min(1.0);
-                } else if v > t * (1.0 + self.tol.ratio) && k.ntlines <= 0.0 && k.wfrac > 0.0 {
-                    k.wfrac = (k.wfrac * factor(t, v, d)).max(0.0);
-                } else if v < t * (1.0 - self.tol.ratio)
-                    && (!nt_fits || k.ntlines >= NTLINES_MAX)
-                    && self.limits.kreads_available
-                {
-                    // Non-temporal lines cannot carry it: page-cache reads,
-                    // a page from DRAM each, by the shortfall, damped.
-                    let need = (t - v) / (KREAD_BYTES * aps_next);
-                    k.kreads = (k.kreads + d * need).clamp(0.0, KREADS_MAX);
-                } else if v < t * (1.0 - self.tol.ratio) && !nt_fits {
-                    // Bandwidth waits: the lever left would take IPC with it.
-                } else {
-                    let per_line_now = 64.0 * m.accesses_per_s;
-                    let nt_now = k.ntlines * per_line_now;
-                    let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
-                    let need_lines = ((t / aps_next - other_per_access) / 64.0).max(0.0);
-                    let now = k.ntlines;
-                    k.ntlines = (now + d * (need_lines - now)).clamp(0.0, NTLINES_MAX);
-                }
-            }
+        let (Some(t), Some(v)) = (goal.dram, m.dram) else {
+            return;
+        };
+        if !(p.aps_next > 0.0 && ratios_within) {
+            return;
         }
-        // Visits per access may grow with the access itself: a visit is a
-        // few instructions, so a quarter of them is the ceiling.
+        if v < t * (1.0 - self.tol.ratio) && k.wfrac < 1.0 {
+            k.wfrac = (k.wfrac * factor(t, v, d)).min(1.0);
+        } else if v > t * (1.0 + self.tol.ratio) && k.ntlines <= 0.0 && k.wfrac > 0.0 {
+            k.wfrac = (k.wfrac * factor(t, v, d)).max(0.0);
+        } else if v < t * (1.0 - self.tol.ratio)
+            && (!nt_fits || k.ntlines >= NTLINES_MAX)
+            && self.limits.kreads_available
+        {
+            // Non-temporal lines cannot carry it: page-cache reads,
+            // a page from DRAM each, by the shortfall, damped.
+            let need = (t - v) / (KREAD_BYTES * p.aps_next);
+            k.kreads = (k.kreads + d * need).clamp(0.0, KREADS_MAX);
+        } else if v < t * (1.0 - self.tol.ratio) && !nt_fits {
+            // Bandwidth waits: the lever left would take IPC with it.
+        } else {
+            let per_line_now = 64.0 * m.accesses_per_s;
+            let nt_now = k.ntlines * per_line_now;
+            let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
+            let need_lines = ((t / p.aps_next - other_per_access) / 64.0).max(0.0);
+            let now = k.ntlines;
+            k.ntlines = (now + d * (need_lines - now)).clamp(0.0, NTLINES_MAX);
+        }
+    }
+
+    /// The per-access rates of the sparse and code streams: full
+    /// compensation for the change in instructions per access, which
+    /// the model predicts, then a damped correction of the measured
+    /// error. Visits per access may grow with the access itself: a
+    /// visit is a few instructions, so a quarter of them is the ceiling.
+    fn visit_rates(p: &Pass, k: &mut Knobs) {
+        let (m, goal, d) = (p.m, p.goal, p.d);
         let visits_max = VISITS_RANGE
             .1
-            .max((ipa_next.unwrap_or(0.0) / 4.0).min(VISITS_CAP));
+            .max((p.ipa_next.unwrap_or(0.0) / 4.0).min(VISITS_CAP));
         let rate_rule = |target: Option<f64>, measured: Option<f64>, visits: f64, met: bool| {
             let (Some(t), Some(v)) = (target, measured) else {
                 return visits;
@@ -904,80 +1036,81 @@ impl Fitter {
                 return 0.0;
             }
             let correction = if met { 1.0 } else { factor(t, v, d) };
-            match (ipa, ipa_next) {
+            match (p.ipa, p.ipa_next) {
                 (Some(ipa), Some(next)) if visits > 0.0 && v > 0.0 => {
-                    // Full compensation for the change in instructions per
-                    // access, which the model predicts, then a damped
-                    // correction of the measured error.
                     (visits * (next / ipa) * correction).clamp(VISITS_RANGE.0, visits_max)
                 }
                 _ if visits > 0.0 => (visits * correction).clamp(VISITS_RANGE.0, visits_max),
                 _ => VISITS_RANGE.0 * 100.0,
             }
         };
-        k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits, within("dtlb_pki"));
-        k.codevisits = rate_rule(goal.itlb_pki, m.itlb_pki, k.codevisits, within("itlb_pki"));
+        k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits, p.within("dtlb_pki"));
+        k.codevisits = rate_rule(
+            goal.itlb_pki,
+            m.itlb_pki,
+            k.codevisits,
+            p.within("itlb_pki"),
+        );
+    }
 
-        // The main stream's own pages cause dTLB events the sparse stream
-        // cannot take back. When they alone exceed the target, touch
-        // fewer pages, or walk them in order when the set cannot shrink
-        // or IPC is short and would gain from streaming.
-        if let (Some(t), Some(v), Some(ipa)) = (goal.dtlb_pki, m.dtlb_pki, ipa) {
-            let sparse_at_most = 1000.0 * knobs.tlbvisits / ipa;
-            let excess = v - sparse_at_most;
-            let abs_tol = absolute_tolerance("dtlb_pki");
-            if excess > t * (1.0 + self.tol.ratio) + abs_tol {
-                // Half the set per pass at most: the miss rate is steep at
-                // the cache edge, and the guard above only sees one step.
-                let f = factor(t.max(0.5 * abs_tol), excess, d).max(0.5);
-                let wset_min = (WSET_MIN_PAGES / self.limits.main_pages.max(1) as f64).min(1.0);
-                let ipc_short = goal
-                    .ipc
-                    .zip(m.ipc)
-                    .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
-                let ipc_high = goal
-                    .ipc
-                    .zip(m.ipc)
-                    .is_some_and(|(t, v)| v > t * (1.0 + self.tol.ratio));
-                if k.wset > wset_min && !self.wset_blocked && !ipc_short {
-                    k.wset = (k.wset * f).clamp(wset_min, 1.0);
-                } else if misses_to_spare && !ipc_high {
-                    k.seq = (k.seq.max(SHARE_SEED) / f).clamp(0.0, 1.0);
-                } else if misses_to_spare {
-                    // A walk would raise IPC further; fewer visits per
-                    // access dilute the events instead.
-                    k.lines = (k.lines * f).max(LINES_MIN);
-                }
-                // Otherwise dTLB waits: every lever left would cost misses
-                // the profile cannot spare.
-            }
+    /// The main stream's own pages cause dTLB events the sparse stream
+    /// cannot take back. When they alone exceed the target, touch fewer
+    /// pages, or walk them in order when the set cannot shrink or IPC is
+    /// short and would gain from streaming; otherwise dTLB waits, since
+    /// every lever left would cost misses the profile cannot spare.
+    fn dtlb_excess(&self, p: &Pass, k: &mut Knobs) {
+        let (knobs, m, goal, d) = (p.knobs, p.m, p.goal, p.d);
+        let (Some(t), Some(v), Some(ipa)) = (goal.dtlb_pki, m.dtlb_pki, p.ipa) else {
+            return;
+        };
+        let sparse_at_most = 1000.0 * knobs.tlbvisits / ipa;
+        let excess = v - sparse_at_most;
+        let abs_tol = absolute_tolerance("dtlb_pki");
+        if excess <= t * (1.0 + self.tol.ratio) + abs_tol {
+            return;
         }
-        // At one op per access the IPC and MPKI rules pull the run length
-        // and the sequential share against each other: a prefetched walk
-        // or a longer run brings the misses the one wants and the IPC the
-        // other does not. A lever that has turned twice within three
-        // passes is frozen where it stands, since the two targets meet
-        // nowhere along it; the fit then holds the compromise.
-        if knobs.ops <= 1 {
-            let pass = self.passes + 1;
-            self.lines_track.observe(lines_mid - knobs.lines, pass);
-            if self.lines_track.observe(k.lines - lines_mid, pass) {
-                k.lines = knobs.lines;
-            }
-            self.seq_track.observe(seq_mid - knobs.seq, pass);
-            if self.seq_track.observe(k.seq - seq_mid, pass) {
-                k.seq = knobs.seq;
-            }
+        // Half the set per pass at most: the miss rate is steep at
+        // the cache edge, and the guard above only sees one step.
+        let f = factor(t.max(0.5 * abs_tol), excess, d).max(0.5);
+        let wset_min = (WSET_MIN_PAGES / self.limits.main_pages.max(1) as f64).min(1.0);
+        let ipc_short = goal
+            .ipc
+            .zip(m.ipc)
+            .is_some_and(|(t, v)| v < t * (1.0 - self.tol.ratio));
+        let ipc_high = goal
+            .ipc
+            .zip(m.ipc)
+            .is_some_and(|(t, v)| v > t * (1.0 + self.tol.ratio));
+        if k.wset > wset_min && !self.wset_blocked && !ipc_short {
+            k.wset = (k.wset * f).clamp(wset_min, 1.0);
+        } else if p.misses_to_spare && !ipc_high {
+            k.seq = (k.seq.max(SHARE_SEED) / f).clamp(0.0, 1.0);
+        } else if p.misses_to_spare {
+            // A walk would raise IPC further; fewer visits per
+            // access dilute the events instead.
+            k.lines = (k.lines * f).max(LINES_MIN);
         }
-        k.sparse_pages = k.sparse_pages.clamp(1, self.limits.sparse_capacity.max(1));
-        k.code_pages = k.code_pages.clamp(1, self.limits.code_capacity.max(1));
-        // A window that moved nothing, because every lever a target
-        // needs is at its range, is not a pass: an unreachable target
-        // must not spend the budget a later disturbance will need.
-        if k != *knobs {
-            self.passes += 1;
+    }
+
+    /// At one op per access the IPC and MPKI rules pull the run length
+    /// and the sequential share against each other: a prefetched walk
+    /// or a longer run brings the misses the one wants and the IPC the
+    /// other does not. A lever that has turned twice within three
+    /// passes is frozen where it stands, since the two targets meet
+    /// nowhere along it; the run then adopts the closest pass.
+    fn freeze_fought_levers(&mut self, p: &Pass, k: &mut Knobs, lines_mid: f64, seq_mid: f64) {
+        if p.knobs.ops > 1 {
+            return;
         }
-        k
+        let pass = self.passes + 1;
+        self.lines_track.observe(lines_mid - p.knobs.lines, pass);
+        if self.lines_track.observe(k.lines - lines_mid, pass) {
+            k.lines = p.knobs.lines;
+        }
+        self.seq_track.observe(seq_mid - p.knobs.seq, pass);
+        if self.seq_track.observe(k.seq - seq_mid, pass) {
+            k.seq = p.knobs.seq;
+        }
     }
 }
 
