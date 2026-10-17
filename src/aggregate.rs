@@ -156,7 +156,15 @@ fn merge_provenance(
 ) -> Result<BTreeMap<String, Provenance>, AggregateError> {
     let mut merged: BTreeMap<String, Provenance> = BTreeMap::new();
     for r in recordings {
-        for (k, p) in &r.header.provenance {
+        // Diagnostic keys the recorder notes alongside the fields, such
+        // as the DRAM-fill proxy next to L3 PMU misses, have no field
+        // and the profile would not validate with them.
+        for (k, p) in r
+            .header
+            .provenance
+            .iter()
+            .filter(|(k, _)| crate::profile::field(k).is_some())
+        {
             match merged.get(k) {
                 Some(existing) if existing != p => {
                     return Err(AggregateError::ProvenanceMismatch(k.clone()));
@@ -580,13 +588,17 @@ mod tests {
         let mut b = rec(vec![sample("y", 1.0, &[("ipc", 1.0)])], vec![]);
         b.header.cpu = Some(amd2);
         b.header.provenance.insert("l3_mpki".into(), prov);
+        b.header
+            .provenance
+            .insert(crate::plan::L3_FILLS_KEY.into(), prov);
         let p = aggregate(&[a.clone(), b.clone()], &Options::default()).unwrap();
         assert_eq!(
             p.cpu.as_ref().unwrap().name,
             "A",
             "same CPU, first name wins"
         );
-        assert_eq!(p.provenance.len(), 2);
+        assert_eq!(p.provenance.len(), 2, "the diagnostic key is dropped");
+        p.validate().unwrap();
 
         b.header.cpu = Some(intel);
         assert_eq!(
