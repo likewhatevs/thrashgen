@@ -181,7 +181,10 @@ Knobs depend on the hardware, so they are fit per CPU model and
 cached. Order: footprint first and let it settle; threads and duty for
 busy cores; chains, then ops and lines for IPC and MPKI; the write share and then
 non-temporal lines for bandwidth, only while IPC and MPKI are within
-twice their tolerance, since both change them; tlbvisits; codevisits; repeat until
+twice their tolerance, since both change them, and non-temporal lines
+only for an IPC target of 0.6 or more, since each line is eight stores
+retiring at high IPC and 64 of them per access quadrupled IPC and
+divided MPKI by ten on Zen 4, where the write share moved neither; tlbvisits; codevisits; repeat until
 every verified target is within tolerance or the pass limit is hit.
 
 Busy cores and burstiness are not fitted within the budget: the duty

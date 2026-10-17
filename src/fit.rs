@@ -151,6 +151,9 @@ pub struct Limits {
 const OPS_RANGE: (f64, f64) = (1.0, 8.0e4);
 /// Sparse or code visits per access at most, for the same reason.
 const VISITS_CAP: f64 = 1.0e4;
+/// IPC target below which non-temporal lines are not used for
+/// bandwidth: each line is eight stores retiring at high IPC.
+const NT_IPC_FLOOR: f64 = 0.6;
 /// Ops move at most this much per pass: the proxy for L3 misses counts
 /// fewer of them once compute gives the prefetcher time, so a large
 /// step lands far from where the model said.
@@ -652,12 +655,20 @@ impl Fitter {
             .iter()
             .filter(|s| s.key == "ipc" || s.key == "l3_mpki")
             .all(|s| s.within || s.error.is_none_or(|e| e.abs() <= 2.0 * self.tol.ratio));
+        // Measured on Zen 4 at fixed knobs: the write share from a quarter
+        // to all lines left IPC and MPKI where they were and raised
+        // bandwidth by half; 64 non-temporal lines per access quadrupled
+        // IPC and divided MPKI by ten. Non-temporal lines are therefore
+        // only for profiles whose IPC can carry them.
+        let nt_fits = goal.ipc.is_none_or(|t| t >= NT_IPC_FLOOR);
         if let (Some(t), Some(v)) = (goal.dram, m.dram) {
             if aps_next > 0.0 && ratios_within {
                 if v < t * (1.0 - self.tol.ratio) && k.wfrac < 1.0 {
                     k.wfrac = (k.wfrac * factor(t, v, d)).min(1.0);
                 } else if v > t * (1.0 + self.tol.ratio) && k.ntlines <= 0.0 && k.wfrac > 0.0 {
                     k.wfrac = (k.wfrac * factor(t, v, d)).max(0.0);
+                } else if v < t * (1.0 - self.tol.ratio) && !nt_fits {
+                    // Bandwidth waits: the lever left would take IPC with it.
                 } else {
                     let per_line_now = 64.0 * m.accesses_per_s;
                     let nt_now = k.ntlines * per_line_now;
@@ -849,7 +860,8 @@ mod tests {
                     ops: 40,
                     chains: 1.0,
                     lines: 4.0,
-                    ntlines: 3.0,
+                    wfrac: 0.75,
+                    ntlines: 0.0,
                     tlbvisits: 0.5,
                     sparse_pages: 2048,
                     codevisits: 0.02,
@@ -1184,6 +1196,52 @@ mod tests {
             (next.lines / k.lines - up).abs() < 1e-9,
             "visits scale by the same factor as compute: {next:?}"
         );
+    }
+
+    #[test]
+    fn bandwidth_takes_the_write_share_first_and_non_temporal_lines_only_at_high_ipc() {
+        let goal = Goal {
+            ipc: Some(0.3),
+            mpki: Some(20.0),
+            dram: Some(4.0e10),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 1,
+            lines: 4.0,
+            wfrac: 0.25,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(0.3),
+            mpki: Some(20.0),
+            dram: Some(1.0e10),
+            accesses_per_s: 1.0e7,
+            instructions_per_s: Some(2.0e9),
+            ..Measured::default()
+        };
+        let mut f = Fitter::new(4, LIMITS);
+        let k1 = f.step(&k, &m, &goal);
+        assert!(k1.wfrac > 0.25 && k1.ntlines == 0.0, "{k1:?}");
+        let full = Knobs {
+            wfrac: 1.0,
+            ..k.clone()
+        };
+        let k2 = f.step(&full, &m, &goal);
+        assert_eq!(
+            k2.ntlines, 0.0,
+            "a low-IPC profile waits rather than pay IPC: {k2:?}"
+        );
+        let high = Goal {
+            ipc: Some(1.2),
+            ..goal.clone()
+        };
+        let m_high = Measured {
+            ipc: Some(1.2),
+            ..m.clone()
+        };
+        let k3 = f.step(&full, &m_high, &high);
+        assert!(k3.ntlines > 0.0, "{k3:?}");
     }
 
     #[test]
