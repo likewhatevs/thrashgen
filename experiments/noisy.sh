@@ -31,7 +31,7 @@ done
 echo "== noisy: fitting ${names[*]} at once for ${fit_secs}s"
 pids=()
 for n in "${names[@]}"; do
-  run_in_scope "thrashgen-noisy-$n-fit-$$" "$bin" run "$out/$n/orig.json" --duration "$fit_secs" --scratch-dir "$scratch" --report "$out/$n/report.json" > "$out/$n/run.log" 2>&1 &
+  run_in_scope "thrashgen-noisy-$n-fit-$$" "$bin" run "$out/$n/orig.json" --duration "$fit_secs" --no-cache --scratch-dir "$scratch" --report "$out/$n/report.json" > "$out/$n/run.log" 2>&1 &
   pids+=($!)
 done
 wait "${pids[@]}"

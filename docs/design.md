@@ -274,9 +274,9 @@ otherwise, the sequential share rises when IPC is not high, or visits
 per access fall and dilute the events when it is; otherwise dTLB
 waits.
 A shrink that cost a quarter of the misses beyond what the run length
-explains, with misses above their absolute floor and more of them than
-compute could buy back by shedding its share of the instructions, is
-undone and not tried again, and the window it spoiled moves nothing else, since the
+explains, with misses above their absolute floor and MPKI left short
+of what shedding every compute instruction would recover, by the
+measured slope, is undone and not tried again, and the window it spoiled moves nothing else, since the
 other rules would chase the misses it took away. A target within
 tolerance moves none of its knobs, and a window with every judged
 target within moves nothing: every rule nudges, a nudge from inside
@@ -332,7 +332,8 @@ runs out of passes without ever converging holds the closest pass it
 saw, by the largest relative error over its tolerance, rather than
 the last, which is as likely to be a swing as a settling, and says
 so; one that has converged is not limited, since it moves only after
-a second out. The first guess takes
+a second out. A fit that ends out of tolerance reports the closest
+pass's knobs, which is what a hold of them should run. The first guess takes
 compute from the MPKI target where that asks for far more than the
 default, since at eight lines a visit the instructions the misses need
 are known to a factor, and growing it from the default a pass at a

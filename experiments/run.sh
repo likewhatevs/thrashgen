@@ -9,7 +9,8 @@
 # replay's own fitter. OUT_DIR chooses where NAME's outputs go;
 # BENCH_WARMUP_SECS delays the recording for a benchmark that needs to
 # fill up first, and the command must then run that much longer than
-# RECORD_SECS.
+# RECORD_SECS. The fit starts cold: the experiments measure the fit,
+# and the cache of earlier fits is the product's, not the experiment's.
 set -euo pipefail
 name=$1 record_secs=$2 fit_secs=$3; shift 3
 hold_secs=${HOLD_SECS:-150}
@@ -45,7 +46,7 @@ wait $bench_pid || echo "benchmark exited with $? (see benchmark.log)" >&2
 
 echo "== $name: fitting for ${fit_secs}s"
 unit=thrashgen-$name-fit-$$
-run_in_scope "$unit" "$bin" run "$out/orig.json" --duration "$fit_secs" --scratch-dir "$scratch" --report "$out/report.json" > "$out/run.log" 2>&1
+run_in_scope "$unit" "$bin" run "$out/orig.json" --duration "$fit_secs" --no-cache --scratch-dir "$scratch" --report "$out/report.json" > "$out/run.log" 2>&1
 jq .knobs "$out/report.json" > "$out/knobs.json"
 
 echo "== $name: holding the fitted knobs for ${hold_secs}s"

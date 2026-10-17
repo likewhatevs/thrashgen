@@ -711,25 +711,29 @@ impl Fitter {
     }
 
     /// A shrink of the working set that cost misses, beyond what the
-    /// run length explains and above the absolute floor, is undone and
-    /// not tried again, and the window it spoiled moves nothing else:
-    /// the other rules would chase the misses it took away. Whether it
-    /// was undone.
+    /// run length explains and above the absolute floor, and left MPKI
+    /// short of what shedding every compute instruction would recover,
+    /// is undone and not tried again, and the window it spoiled moves
+    /// nothing else: the other rules would chase the misses it took
+    /// away. Whether it was undone.
     fn undo_costly_shrink(&mut self, p: &Pass, k: &mut Knobs) -> bool {
-        let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa), Some(ipa)) =
-            (self.last_set, p.mpa_now, p.ipa)
+        let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa), Some(ipa), Some(t), Some(v)) =
+            (self.last_set, p.mpa_now, p.ipa, p.goal.mpki, p.m.mpki)
         else {
             return false;
         };
         let explained = mpa_prev * (p.knobs.lines / lines_prev.max(LINES_MIN));
-        // Compute can buy misses per instruction back by shedding its
-        // own instructions, so a loss up to its share of them is
-        // recoverable; at one op per access none is.
-        let compute_share = (p.work_now * p.slope / ipa).clamp(0.0, 1.0);
+        // MPKI at one op per access, by the measured slope: the misses
+        // stay and the instructions go. At a quarter of stress-ng's set
+        // the shrink took three misses in ten per access and a pass later
+        // the ops rule had MPKI back at target; undoing it left the dTLB
+        // rate twenty times higher.
+        let ipa_floor = (ipa - (p.work_now - 1.0) * p.slope).max(1.0);
+        let recoverable = v * ipa / ipa_floor;
         if p.knobs.wset < wset_prev
             && !p.mpki_met
             && mpa < 0.75 * explained
-            && compute_share < 1.0 - mpa / explained
+            && recoverable < t * (1.0 - self.tol.ratio)
         {
             self.wset_blocked = true;
             k.wset = wset_prev;

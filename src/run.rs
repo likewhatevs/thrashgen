@@ -1073,6 +1073,19 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         measured: last_values.get(*k).copied(),
     })
     .collect();
+    // A fit that ends out of tolerance reports the closest pass it saw,
+    // which is what a hold of its knobs should run; the last pass is as
+    // likely to be a swing as a settling.
+    if fitting && !fit.converged {
+        if let Some((_, k, pass)) = &fit.best {
+            if *k != knobs {
+                knobs = k.clone();
+                notes.push(format!(
+                    "ended out of tolerance; the knobs reported are those of pass {pass}, the closest"
+                ));
+            }
+        }
+    }
     let report = Report {
         cpu: ident,
         table: table.map(|t| t.table.to_string()),

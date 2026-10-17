@@ -54,6 +54,11 @@ case $mode in
     mkdir -p "$(dirname "$cap_bin")"
     cp "$root/target/release/thrashgen" "$cap_bin"
     sudo setcap cap_perfmon+ep "$cap_bin"
+    # A capability the kernel ignores would make this a second user mode.
+    if ! "$cap_bin" caps | grep -q '^capabilities .*PERFMON'; then
+      echo "CAP_PERFMON is not effective on $cap_bin; is the tree on a nosuid mount?" >&2
+      rm -f "$cap_bin"; exit 1
+    fi
     export THRASHGEN=$cap_bin
     # shellcheck disable=SC2064
     trap "rm -f $cap_bin" EXIT
