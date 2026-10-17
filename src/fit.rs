@@ -163,11 +163,24 @@ const NT_IPC_FLOOR: f64 = 0.6;
 /// fewer of them once compute gives the prefetcher time, so a large
 /// step lands far from where the model said.
 const OPS_STEP_MAX: f64 = 4.0;
-/// One-second samples before busy cores and burstiness are judged.
-/// Each is compared with the factor the generator intended for that
-/// second, so three suffice where thirty did when the long-run mean
-/// had to be measured.
-pub const MIN_CV_SAMPLES: usize = 3;
+/// One-second samples before busy cores are judged. Each is compared
+/// with what the generator intended for that second, so three suffice
+/// where thirty did when the long-run mean had to be measured.
+pub const MIN_CORES_SAMPLES: usize = 3;
+/// One-second samples before burstiness is judged: three factors'
+/// worth, since the ratio of the measured to the intended CV needs
+/// seconds that intended different things.
+pub const MIN_CV_SAMPLES: usize = 3 * crate::loadgen::FACTOR_SECONDS as usize;
+
+/// Whether a target is judged with this many one-second samples in:
+/// busy cores and burstiness wait for theirs, the rest never do.
+pub fn judged(key: &str, cv_samples: usize) -> bool {
+    match key {
+        "cpu_usage_cores" => cv_samples >= MIN_CORES_SAMPLES,
+        "cpu_usage_cv_1s" => cv_samples >= MIN_CV_SAMPLES,
+        _ => true,
+    }
+}
 
 /// Absolute tolerance per field: a target near zero is met when the
 /// measurement is near zero too, whatever the ratio says. Memory gets
@@ -610,13 +623,9 @@ impl Fitter {
     /// seconds are in.
     fn begin<'a>(&self, knobs: &'a Knobs, m: &'a Measured, goal: &'a Goal) -> Option<Pass<'a>> {
         let st = self.statuses(m, goal);
-        let judged = |s: &&Status| {
-            m.cv_samples >= MIN_CV_SAMPLES
-                || !matches!(s.key, "cpu_usage_cores" | "cpu_usage_cv_1s")
-        };
         if st
             .iter()
-            .filter(judged)
+            .filter(|s| judged(s.key, m.cv_samples))
             .all(|s| s.within || s.measured.is_none())
         {
             return None;
@@ -695,13 +704,20 @@ impl Fitter {
     /// once there are a few of them.
     fn cores_and_burstiness(p: &Pass, k: &mut Knobs) {
         let (m, goal, d) = (p.m, p.goal, p.d);
-        if m.cv_samples < MIN_CV_SAMPLES {
-            return;
-        }
-        if let (Some(t), Some(v), false) = (goal.cores, m.cores, p.within("cpu_usage_cores")) {
+        if let (true, Some(t), Some(v), false) = (
+            judged("cpu_usage_cores", m.cv_samples),
+            goal.cores,
+            m.cores,
+            p.within("cpu_usage_cores"),
+        ) {
             k.duty = (k.duty * factor(t, v, d)).clamp(0.0, 1.0);
         }
-        if let (Some(t), Some(v), false) = (goal.cv, m.cv, p.within("cpu_usage_cv_1s")) {
+        if let (true, Some(t), Some(v), false) = (
+            judged("cpu_usage_cv_1s", m.cv_samples),
+            goal.cv,
+            m.cv,
+            p.within("cpu_usage_cv_1s"),
+        ) {
             // The knob stays within twice the target so clipping at
             // full duty cannot run it away.
             if v > 0.0 && k.cv > 0.0 {

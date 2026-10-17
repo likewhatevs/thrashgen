@@ -395,8 +395,8 @@ pub fn pool(windows: &[Measured]) -> Measured {
 }
 
 /// Rolling window of one-second samples behind busy cores and
-/// burstiness: two factor blocks, so the ratio sees every quantile
-/// twice and a neighbour's arrival is in within a minute.
+/// burstiness: ten factors, so the ratio sees half a block, and a
+/// neighbour's arrival is in within a minute.
 pub const CORES_WINDOW_SECONDS: usize = 2 * crate::loadgen::FACTOR_BLOCK as usize;
 
 /// Whether the sparse stream should run on the page-cache file: the
@@ -824,6 +824,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let mut last_sample: Option<Sample> = None;
     let mut pool = Pool::new(goal.cv);
     let mut fit = Convergence::new(refit_windows);
+    let mut last_move = Instant::now();
     let window_len = Duration::from_secs_f64(window_s);
     let deadline = settings
         .duration_s
@@ -931,10 +932,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 // fills, which is what the fitter does too.
                 let judged: Vec<Status> = statuses
                     .iter()
-                    .filter(|s| {
-                        cores_window.len() >= crate::fit::MIN_CV_SAMPLES
-                            || !matches!(s.key, "cpu_usage_cores" | "cpu_usage_cv_1s")
-                    })
+                    .filter(|s| crate::fit::judged(s.key, cores_window.len()))
                     .cloned()
                     .collect();
                 fit.observe(
@@ -998,6 +996,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         if next != knobs {
                             generator.set_knobs(next.clone(), &buffers)?;
                             knobs = next;
+                            last_move = Instant::now();
                         }
                     } else if !notes.iter().any(|n| n.starts_with("not within tolerance")) {
                         // Out of passes: hold the closest pass, not the last.
@@ -1073,10 +1072,11 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         measured: last_values.get(*k).copied(),
     })
     .collect();
-    // A fit that ends out of tolerance reports the closest pass it saw,
-    // which is what a hold of its knobs should run; the last pass is as
-    // likely to be a swing as a settling.
-    if fitting && !fit.converged {
+    // A fit that ends out of tolerance while still moving reports the
+    // closest pass it saw, which is what a hold of its knobs should
+    // run, since the last pass is then as likely a swing as a settling;
+    // one that has stood still for a second has settled where it is.
+    if fitting && !fit.converged && last_move.elapsed().as_secs_f64() < REFIT_SECONDS {
         if let Some((_, k, pass)) = &fit.best {
             if *k != knobs {
                 knobs = k.clone();

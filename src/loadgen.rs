@@ -190,12 +190,19 @@ impl Knobs {
     }
 }
 
-/// Seconds in a block of per-second factors. Within a block the
-/// factors are the block's midpoint quantiles of the lognormal, in an
-/// order seeded from the block, so every block has exactly the set's
-/// mean and CV and a recording a few blocks long reads them off,
-/// where independent draws needed `(cv / tolerance)²` seconds to.
+/// Factors in a block. Within a block the factors are the block's
+/// midpoint quantiles of the lognormal, in an order seeded from the
+/// block, so every block has exactly the set's mean and CV and a
+/// recording a few blocks long reads them off, where independent
+/// draws needed `(cv / tolerance)²` seconds to.
 pub const FACTOR_BLOCK: u64 = 20;
+/// Seconds a factor holds. A recorder whose one-second samples are
+/// not aligned to the generator's seconds averages two factors in the
+/// samples that straddle a change, which lowers the CV it sees by a
+/// third of the variance in those samples; one change in four seconds
+/// keeps that below the tolerance where one a second lost a fifth of
+/// the CV on average and a third at the worst phase.
+pub const FACTOR_SECONDS: u64 = 4;
 
 /// The `i`th of a block's factors: the lognormal with mean 1 and CV
 /// `cv` at probability (i + ½) / block.
@@ -206,16 +213,17 @@ pub fn factor_quantile(cv: f64, i: u64) -> f64 {
     (-0.5 * sigma2 + sigma2.sqrt() * z).exp()
 }
 
-/// Per-second duty factor: the block's quantile at this second's slot
-/// of a permutation seeded from the run seed and the block, so every
-/// thread uses the same value and every block the whole set. A CV of
-/// zero is exactly 1.
+/// Duty factor of a wall-clock second: the block's quantile at this
+/// second's slot, held for [`FACTOR_SECONDS`], of a permutation seeded
+/// from the run seed and the block, so every thread uses the same
+/// value and every block the whole set. A CV of zero is exactly 1.
 pub fn duty_factor(seed: u64, second: u64, cv: f64) -> f64 {
     if cv <= 0.0 {
         return 1.0;
     }
-    let block = second / FACTOR_BLOCK;
-    let slot = (second % FACTOR_BLOCK) as usize;
+    let plateau = second / FACTOR_SECONDS;
+    let block = plateau / FACTOR_BLOCK;
+    let slot = (plateau % FACTOR_BLOCK) as usize;
     let mut order: [u8; FACTOR_BLOCK as usize] = std::array::from_fn(|i| i as u8);
     let mut rng =
         Xoshiro256PlusPlus::seed_from_u64(seed ^ block.wrapping_mul(0x9E37_79B9_7F4A_7C15));
@@ -1046,9 +1054,16 @@ mod tests {
             "deterministic"
         );
         assert_ne!(duty_factor(7, 99, 0.5), duty_factor(7, 100, 0.5));
+        for s in 0..FACTOR_SECONDS {
+            assert_eq!(
+                duty_factor(7, 40 + s, 0.5),
+                duty_factor(7, 40, 0.5),
+                "a factor holds for its seconds"
+            );
+        }
         let block = |seed: u64, b: u64, cv: f64| -> Vec<f64> {
             (0..FACTOR_BLOCK)
-                .map(|slot| duty_factor(seed, b * FACTOR_BLOCK + slot, cv))
+                .map(|slot| duty_factor(seed, (b * FACTOR_BLOCK + slot) * FACTOR_SECONDS, cv))
                 .collect()
         };
         let sorted = |mut v: Vec<f64>| {

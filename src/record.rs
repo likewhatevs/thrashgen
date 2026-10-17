@@ -376,7 +376,13 @@ pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summ
     let cpu_step = Duration::from_secs_f64(settings.cpu_interval_s);
     let step = Duration::from_secs_f64(settings.interval_s);
     let deadline = settings.duration_s.map(Duration::from_secs_f64);
-    let (mut next_cpu, mut next_interval) = (cpu_step, step);
+    // Busy-cores ticks sit on wall-clock multiples of their interval,
+    // the second boundaries where a replay's duty factor changes; a
+    // tick straddling two of its seconds would average two factors and
+    // lower the CV it measures.
+    let phase = settings.cpu_interval_s - t0 % settings.cpu_interval_s;
+    let first_cpu = Duration::from_secs_f64(phase.max(0.01));
+    let (mut next_cpu, mut next_interval) = (first_cpu, step);
     let mut last_interval_t = t0;
     loop {
         let next = next_cpu.min(next_interval);

@@ -144,7 +144,7 @@ PRNG, not from loaded data, so misses overlap.
 | --- | --- | --- |
 | `threads` | busy cores | default `cpu_limit_cores`, capped at the CPUs in the affinity mask; each worker pinned to one CPU so uncore attribution is possible |
 | `duty` | busy cores | busy fraction of each 10 ms period |
-| `cv` | burstiness | per-second factor: within each block of 20 wall-clock seconds, the 20 midpoint quantiles of a lognormal with mean 1 and CV `cv` (σ² = ln(1 + cv²), μ = −σ²/2), in an order seeded from the run seed and the block, so every block carries exactly the set's mean and CV and all threads move together |
+| `cv` | burstiness | duty factor held for four wall-clock seconds at a time: within each block of 20 such plateaus, the 20 midpoint quantiles of a lognormal with mean 1 and CV `cv` (σ² = ln(1 + cv²), μ = −σ²/2), in an order seeded from the run seed and the block, so every block carries exactly the set's mean and CV and all threads move together; four seconds, since a recorder whose seconds are not the generator's averages two factors in a sample that straddles a change, which at one change a second lost a fifth of the CV on average |
 | `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 0.25 to 4: a fraction mixes the two nearest of 1, 2 and 4, and below one a share of the iterations runs a long-latency square-root chain; `ops` iterations, kept alive with an empty `asm!` barrier |
 | `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer, 1/1024 to 64; below one it is the share of accesses that visit at all, so a profile with one miss per hundred thousand instructions needs no hundred thousand ops of compute per access; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
 | `seq` | dTLB rate down and IPC up at equal MPKI | share of visits that continue where the worker's last one ended, inside the worker's own slice of the working set, never crossing a page within a visit; a walk changes page once per 64 lines and lets the prefetcher stream |
@@ -196,14 +196,16 @@ every verified target is within tolerance or the pass limit is hit.
 Busy cores and burstiness start from the clipped model: the duty and
 burstiness knobs are solved so that the block's factors, clipped at
 full duty, have the target mean and CV, with the mean given priority
-when the duty cannot carry the CV. From the third one-second sample
-on they are judged: each second's busy cores are compared with what
-the knobs intended for that second, the duty times its factor, so the
-mean's efficiency and the burstiness ratio need no long-run average,
-and applied to the clipped model's mean and CV they give the values a
-long recording would see; those are what is judged, reported and
-corrected by the factor target / predicted. With no intended
-variation the measured jitter is the burstiness. IPC moves by the same factor raised to a
+when the duty cannot carry the CV. Each second's busy cores are
+compared with what the knobs intended for that second, the duty times
+its factor, so the mean's efficiency and the burstiness ratio need no
+long-run average, and applied to the clipped model's mean and CV they
+give the values a long recording would see; those are what is judged,
+reported and corrected by the factor target / predicted. Busy cores
+are judged from the third one-second sample, burstiness from the
+twelfth, three factors' worth, since its ratio needs seconds that
+intended different things. With no intended variation the measured
+jitter is the burstiness. IPC moves by the same factor raised to a
 damping exponent of one half, bounded to a quarter and four times per
 pass. Line run length answers to IPC; the chain count,
 continuous between a quarter and four by mixing the two nearest loops
@@ -319,8 +321,8 @@ page-cache refill or a quiet second of a bursty duty cycle, whose few
 instructions carry the misses of a cold cache and the kernel's
 wakeups, moves nothing on its own. Busy cores and
 burstiness are judged on a rolling window of forty one-second
-samples, two factor blocks, from the third sample on, as above; until
-then they are not judged at all, so an early reading of them neither
+samples, ten factors, from the third and the twelfth sample on, as
+above; until then they are not judged at all, so an early reading of them neither
 picks the pass to hold nor keeps a fit whose ratios are at target from
 converging. Convergence is declared after two consecutive windows
 with every judged target within tolerance; the generator then holds and keeps reporting, and
@@ -332,8 +334,10 @@ runs out of passes without ever converging holds the closest pass it
 saw, by the largest relative error over its tolerance, rather than
 the last, which is as likely to be a swing as a settling, and says
 so; one that has converged is not limited, since it moves only after
-a second out. A fit that ends out of tolerance reports the closest
-pass's knobs, which is what a hold of them should run. The first guess takes
+a second out. A fit that ends out of tolerance while still moving
+reports the closest pass's knobs, which is what a hold of them should
+run; one that has stood still for a second has settled and reports
+where it stands. The first guess takes
 compute from the MPKI target where that asks for far more than the
 default, since at eight lines a visit the instructions the misses need
 are known to a factor, and growing it from the default a pass at a
