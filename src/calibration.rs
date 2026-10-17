@@ -3,7 +3,9 @@
 //! still get knobs that were verified somewhere.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::ffi::OsStr;
+use std::hash::Hasher;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -79,10 +81,93 @@ impl Calibration {
     }
 }
 
+/// Directory of cached fits: `$XDG_CACHE_HOME/thrashgen`, else
+/// `~/.cache/thrashgen`; none without a home.
+pub fn cache_dir() -> Option<PathBuf> {
+    cache_dir_from(
+        std::env::var_os("XDG_CACHE_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+/// [`cache_dir`] from the two variables it reads.
+pub fn cache_dir_from(xdg: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
+    let base = match xdg {
+        Some(x) if !x.is_empty() => PathBuf::from(x),
+        _ => PathBuf::from(home.filter(|h| !h.is_empty())?).join(".cache"),
+    };
+    Some(base.join("thrashgen"))
+}
+
+/// File name of the cached fit for a CPU model and target set: a hash
+/// of the vendor, family and model and of the targets as JSON, whose
+/// keys are sorted. Threads are not part of it; the cached fit carries
+/// the count it was made with.
+pub fn cache_key(cpu: Option<&CpuIdent>, targets: &Targets) -> String {
+    let mut h = fnv::FnvHasher::default();
+    if let Some(c) = cpu {
+        h.write(format!("{}/{}/{}", c.vendor, c.family, c.model).as_bytes());
+    }
+    h.write(
+        serde_json::to_string(targets)
+            .expect("targets serialize")
+            .as_bytes(),
+    );
+    format!("{:016x}.json", h.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::report::TargetRow;
+
+    #[test]
+    fn cache_dir_follows_xdg_then_home() {
+        let d =
+            |x: Option<&str>, h: Option<&str>| cache_dir_from(x.map(OsStr::new), h.map(OsStr::new));
+        assert_eq!(
+            d(Some("/c"), Some("/h")),
+            Some(PathBuf::from("/c/thrashgen"))
+        );
+        assert_eq!(
+            d(Some(""), Some("/h")),
+            Some(PathBuf::from("/h/.cache/thrashgen"))
+        );
+        assert_eq!(
+            d(None, Some("/h")),
+            Some(PathBuf::from("/h/.cache/thrashgen"))
+        );
+        assert_eq!(d(None, None), None);
+        assert_eq!(d(None, Some("")), None);
+    }
+
+    #[test]
+    fn cache_key_depends_on_cpu_model_and_targets_only() {
+        let mut a = Targets::new();
+        a.set("ipc", 1.0).unwrap();
+        let mut b = Targets::new();
+        b.set("ipc", 1.5).unwrap();
+        let zen = CpuIdent {
+            vendor: "amd".into(),
+            family: 25,
+            model: 24,
+            name: "one name".into(),
+        };
+        let same_model = CpuIdent {
+            name: "another name".into(),
+            ..zen.clone()
+        };
+        let other = CpuIdent {
+            model: 1,
+            ..zen.clone()
+        };
+        let k = cache_key(Some(&zen), &a);
+        assert_eq!(k.len(), 16 + 5);
+        assert_eq!(k, cache_key(Some(&same_model), &a), "the name is not in it");
+        assert_ne!(k, cache_key(Some(&other), &a));
+        assert_ne!(k, cache_key(Some(&zen), &b));
+        assert_ne!(k, cache_key(None, &a));
+    }
 
     fn report(cpu: Option<CpuIdent>) -> Report {
         Report {

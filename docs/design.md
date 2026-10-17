@@ -321,7 +321,13 @@ time cost the cache-resident profiles most of their passes.
 
 Targets without a verified or proxy measurement take their knobs from
 the calibration file for this CPU model, or the built-in defaults, and
-are reported as unverified. DRAM bandwidth without resctrl is modelled
+are reported as unverified. A fit that converged is kept under
+`$XDG_CACHE_HOME/thrashgen`, or `~/.cache/thrashgen`, in a file named
+by a hash of the CPU model and the target set, and the next run of the
+same targets on the same CPU model starts from it, so a profile
+replayed in many containers fits once and the rest start at its
+knobs; `--calibration` and `--knobs` take precedence, and `--no-cache`
+neither reads nor writes it. DRAM bandwidth without resctrl is modelled
 from the counted misses and the bytes the generator wrote
 non-temporally or dirtied, and fitted against that model.
 
@@ -332,7 +338,7 @@ non-temporally or dirtied, and fitted against that model.
 | `caps` | none | the tier table for this process |
 | `record` | `--cgroup PATH`, `--pid N`, `--host`, or `-- cmd args`; interval, duration | `samples.jsonl`: a header line with host and CPU identity, then one line per sample |
 | `aggregate` | one or more `samples.jsonl` | `profile.json`: `count`, `cpu`, `avg`, `pctiles`, `provenance` |
-| `run` | `profile.json` with `--pick avg|pNN`, `--set key=value`, or one option per field such as `--ipc`; `--calibration` to start from; `--knobs` to fix, with `--no-counters` to leave the PMU to a recorder; scratch dir; duration | load, plus `report.json` and a table on stdout |
+| `run` | `profile.json` with `--pick avg|pNN`, `--set key=value`, or one option per field such as `--ipc`; `--calibration` to start from; `--knobs` to fix, with `--no-counters` to leave the PMU to a recorder; `--no-cache` to neither start from nor keep the cached fit; scratch dir; duration | load, plus `report.json` and a table on stdout |
 | `calibrate` | the `run` inputs, on a host with counters; stops once converged | `calibration.json`: knobs, CPU model, threads and tiers |
 | `compare` | a profile and a report, recording or profile | per-field error table, optionally JSON |
 

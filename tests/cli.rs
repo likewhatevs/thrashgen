@@ -122,6 +122,7 @@ fn run_fits_busy_cores_and_memory_in_its_own_process() {
         .arg(dir.path())
         .arg("--report")
         .arg(&report_path)
+        .env("XDG_CACHE_HOME", dir.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("cpu_usage_cores"))
@@ -160,6 +161,43 @@ fn run_fits_busy_cores_and_memory_in_its_own_process() {
         .unwrap();
     assert!(cache > 7.0 * (1 << 20) as f64, "{cache}");
     assert!(report.converged || report.passes >= 1, "{report:#?}");
+}
+
+#[test]
+#[serial_test::serial]
+fn run_starts_from_its_cached_fit() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("thrashgen").unwrap();
+        cmd.args(["run", "--set", "cpu_usage_cores=0.5", "--set", "ipc=1.2"])
+            .args([
+                "--duration",
+                "4",
+                "--window",
+                "0.5",
+                "--pin",
+                "no",
+                "--threads",
+                "1",
+            ])
+            .args(["--sparse-pages", "64", "--code-pages", "64", "--no-huge"])
+            .args(extra)
+            .arg("--scratch-dir")
+            .arg(dir.path())
+            .env("XDG_CACHE_HOME", dir.path());
+        cmd.assert().success()
+    };
+    let first = run(&[]);
+    let cache = dir.path().join("thrashgen");
+    let entries: Vec<_> = std::fs::read_dir(&cache).unwrap().flatten().collect();
+    assert_eq!(entries.len(), 1, "one cached fit: {entries:?}");
+    let cal: thrashgen::calibration::Calibration =
+        serde_json::from_str(&std::fs::read_to_string(entries[0].path()).unwrap()).unwrap();
+    assert_eq!(cal.threads, 1);
+    assert!(cal.converged);
+    first.stderr(predicate::str::contains("fit kept at"));
+    run(&[]).stderr(predicate::str::contains("starting from the fit cached at"));
+    run(&["--no-cache"]).stderr(predicate::str::contains("cached").not());
 }
 
 #[test]

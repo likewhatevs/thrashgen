@@ -13,6 +13,7 @@ use nix::sched::sched_getaffinity;
 use nix::unistd::Pid;
 
 use crate::aggregate::pooled_cv;
+use crate::calibration::Calibration;
 use crate::caps::{Expectations, Facts, Root};
 use crate::cpu;
 use crate::events::{Sysfs, Vendor, table_for};
@@ -78,6 +79,9 @@ pub struct Settings {
     pub initial_knobs: Option<Knobs>,
     /// Stop once two consecutive windows are within tolerance.
     pub stop_when_converged: bool,
+    /// Where a fit that converged is kept for the next run of the same
+    /// targets on this CPU model; `None` keeps nothing.
+    pub cache_path: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -99,6 +103,7 @@ impl Default for Settings {
             counters: true,
             initial_knobs: None,
             stop_when_converged: false,
+            cache_path: None,
         }
     }
 }
@@ -877,7 +882,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         measured: last_values.get(*k).copied(),
     })
     .collect();
-    Ok(Report {
+    let report = Report {
         cpu: ident,
         table: table.map(|t| t.table.to_string()),
         threads,
@@ -891,7 +896,25 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         memory: memory_rows,
         windows,
         notes,
-    })
+    };
+    // A fit that converged is kept for the next run of these targets on
+    // this CPU model, which then starts where this one ended.
+    if let Some(path) = settings
+        .cache_path
+        .as_ref()
+        .filter(|_| fitting && ever_converged)
+    {
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .map_err(anyhow::Error::from)
+            .and_then(|()| Calibration::from_report(targets, &report).save(path));
+        match written {
+            Ok(()) => writeln!(progress, "cached    fit kept at {}", path.display())?,
+            Err(e) => writeln!(progress, "note      fit not cached: {e:#}")?,
+        }
+    }
+    Ok(report)
 }
 
 /// Whether the busy-cores target is measured and below tolerance.

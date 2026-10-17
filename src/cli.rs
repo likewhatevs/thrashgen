@@ -131,6 +131,10 @@ pub struct RunArgs {
     /// Start fitting from a calibration written by `calibrate`
     #[arg(long)]
     calibration: Option<PathBuf>,
+    /// Neither start from nor save the cached fit for this CPU model
+    /// and target set
+    #[arg(long)]
+    no_cache: bool,
     /// Write the report as JSON here
     #[arg(long)]
     report: Option<PathBuf>,
@@ -413,10 +417,11 @@ fn run_setup(args: &RunArgs) -> Result<(Targets, run::Settings, Vec<String>)> {
     };
     let mut notes = Vec::new();
     let mut threads = args.threads;
-    let initial_knobs = match &args.calibration {
+    let cpu = crate::cpu::detect();
+    let mut initial_knobs = match &args.calibration {
         Some(path) => {
             let cal = Calibration::load(path)?;
-            if cal.matches(crate::cpu::detect().as_ref()) {
+            if cal.matches(cpu.as_ref()) {
                 threads = threads.or(Some(cal.threads));
                 Some(cal.knobs)
             } else {
@@ -426,6 +431,31 @@ fn run_setup(args: &RunArgs) -> Result<(Targets, run::Settings, Vec<String>)> {
         }
         None => None,
     };
+    // The cached fit of these targets on this CPU model: the start of
+    // the fit when nothing else says where to start, and where a fit
+    // that converges is kept for the next run.
+    let cache_path = (!args.no_cache && knobs.is_none())
+        .then(|| {
+            crate::calibration::cache_dir()
+                .map(|d| d.join(crate::calibration::cache_key(cpu.as_ref(), &targets)))
+        })
+        .flatten();
+    if initial_knobs.is_none() {
+        if let Some(path) = cache_path.as_ref().filter(|p| p.exists()) {
+            match Calibration::load(path) {
+                Ok(cal) if cal.matches(cpu.as_ref()) => {
+                    threads = threads.or(Some(cal.threads));
+                    notes.push(format!(
+                        "starting from the fit cached at {}",
+                        path.display()
+                    ));
+                    initial_knobs = Some(cal.knobs);
+                }
+                Ok(_) => {}
+                Err(e) => notes.push(format!("cached fit {} not read: {e:#}", path.display())),
+            }
+        }
+    }
     let settings = run::Settings {
         duration_s: args.duration,
         window_s: args.window,
@@ -443,6 +473,7 @@ fn run_setup(args: &RunArgs) -> Result<(Targets, run::Settings, Vec<String>)> {
         knobs,
         initial_knobs,
         stop_when_converged: false,
+        cache_path,
     };
     Ok((targets, settings, notes))
 }
