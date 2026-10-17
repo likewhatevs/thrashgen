@@ -18,7 +18,7 @@ use crate::cpu;
 use crate::events::{Sysfs, Vendor, table_for};
 use crate::fit::{Fitter, Goal, Limits, Measured, Status, TlbRegime};
 use crate::footprint::{AnonBuffer, CacheFile, KernelFiles, ShmemBuffer, is_tmpfs};
-use crate::loadgen::{Buffers, Generator, Knobs, PAGE};
+use crate::loadgen::{Buffers, Generator, Knobs, PAGE, SparseSet};
 use crate::measure::{self, Scope};
 use crate::perf;
 use crate::plan::{Access, ScopeInfo, plan};
@@ -147,6 +147,14 @@ pub fn long_window_seconds(goal_cv: Option<f64>, tol: f64) -> f64 {
         .map(|cv| (cv / tol).powi(2))
         .unwrap_or(0.0)
         .clamp(30.0, 300.0)
+}
+
+/// Whether the sparse stream should run on the page-cache file: the
+/// anonymous target cannot spare the pages the configured sparse set
+/// needs, and the file has them. Pages visited there count as page
+/// cache, which the profile asked for anyway.
+pub fn sparse_from_file(anon_cap: usize, configured: usize, pagecache_bytes: u64) -> bool {
+    anon_cap < configured && pagecache_bytes >= (configured * PAGE) as u64
 }
 
 /// Pages to reserve for the sparse and code streams: the configured
@@ -358,15 +366,6 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             settings.scratch_dir.display()
         ));
     }
-    let buffers = Arc::new(
-        Buffers::new(
-            mem_plan.main_bytes as usize,
-            settings.huge,
-            sparse_capacity,
-            code_capacity,
-        )
-        .context("allocate the main, sparse and code buffers")?,
-    );
     let mut cache = if mem_plan.pagecache_bytes > 0 {
         Some(
             CacheFile::create(&settings.scratch_dir, mem_plan.pagecache_bytes)
@@ -375,6 +374,38 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     } else {
         None
     };
+    let on_file = cache.as_ref().filter(|_| {
+        sparse_from_file(
+            sparse_capacity,
+            settings.sparse_capacity,
+            mem_plan.pagecache_bytes,
+        )
+    });
+    let sparse = match on_file {
+        Some(c) => {
+            notes.push(format!(
+                "sparse stream on the page-cache file: {} pages, which the anonymous footprint could not spare",
+                settings.sparse_capacity
+            ));
+            SparseSet::File(
+                c.map(settings.sparse_capacity * PAGE)
+                    .context("map the page-cache file for the sparse stream")?,
+            )
+        }
+        None => SparseSet::Anon(
+            crate::footprint::AnonBuffer::new(sparse_capacity.max(1) * PAGE, false)
+                .context("allocate the sparse buffer")?,
+        ),
+    };
+    let buffers = Arc::new(
+        Buffers::with_sparse(
+            mem_plan.main_bytes as usize,
+            settings.huge,
+            sparse,
+            code_capacity,
+        )
+        .context("allocate the main, sparse and code buffers")?,
+    );
     let _shmem = if mem_plan.shmem_bytes > 0 {
         Some(ShmemBuffer::new(mem_plan.shmem_bytes as usize).context("create shared memory")?)
     } else {
@@ -798,6 +829,20 @@ mod tests {
         assert!(close(long_window_seconds(Some(0.3), 0.05), 36.0));
         assert!(close(long_window_seconds(Some(0.73), 0.05), 213.16));
         assert!(close(long_window_seconds(Some(5.0), 0.05), 300.0));
+    }
+
+    #[test]
+    fn the_sparse_set_moves_to_the_page_cache_file_when_anon_cannot_spare_it() {
+        assert!(sparse_from_file(103, 16384, 1 << 30));
+        assert!(
+            !sparse_from_file(16384, 16384, 1 << 30),
+            "anon has the pages"
+        );
+        assert!(
+            !sparse_from_file(103, 16384, 1 << 20),
+            "the file is too small"
+        );
+        assert!(!sparse_from_file(103, 16384, 0), "no file at all");
     }
 
     #[test]

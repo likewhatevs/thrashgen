@@ -152,7 +152,7 @@ PRNG, not from loaded data, so misses overlap.
 | `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
 | `wfrac` | write share, so DRAM bandwidth at equal misses | fraction of main-stream lines stored to; a dirtied line is written back |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
-| `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks) |
+| `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks); the set is anonymous memory, capped at an eighth of the anonymous target, or a read-only mapping of the page-cache file when that cap cannot hold it and the file can, so a small process with a large page cache gets its TLB rate from pages that count as page cache |
 | `codevisits`, code page count | iTLB rate | calls through a function pointer into one-instruction stubs placed one per executable page at varying offsets; `codevisits` may be below one per access |
 | `huge` | main-stream page walks | `MADV_HUGEPAGE` on the main buffer; the report shows what THP actually backed. Without it the buffer is advised `MADV_NOHUGEPAGE`, since a THP policy of `always` would otherwise back it with hugepages anyway |
 

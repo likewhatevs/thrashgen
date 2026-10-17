@@ -16,7 +16,7 @@ use rand_xoshiro::Xoshiro256PlusPlus;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::footprint::AnonBuffer;
+use crate::footprint::{AnonBuffer, FileMap};
 
 /// Cache line size the streams assume.
 pub const LINE: usize = 64;
@@ -290,27 +290,69 @@ impl CodePages {
     }
 }
 
+/// The pages the sparse stream picks from: anonymous memory, or a
+/// mapping of the page-cache file when the anonymous footprint cannot
+/// spare them and the profile has page cache to lend.
+#[derive(Debug)]
+pub enum SparseSet {
+    /// Anonymous pages of the process's own.
+    Anon(AnonBuffer),
+    /// Pages of the page-cache file, read only.
+    File(FileMap),
+}
+
+impl SparseSet {
+    fn as_ptr(&self) -> *const u8 {
+        match self {
+            SparseSet::Anon(b) => b.as_ptr(),
+            SparseSet::File(m) => m.as_ptr(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            SparseSet::Anon(b) => b.len(),
+            SparseSet::File(m) => m.len(),
+        }
+    }
+}
+
 /// Everything the streams touch. Capacities are fixed; knobs choose
 /// how much of each to use.
 #[derive(Debug)]
 pub struct Buffers {
     main: AnonBuffer,
-    sparse: AnonBuffer,
+    sparse: SparseSet,
     code: CodePages,
 }
 
 impl Buffers {
-    /// Allocate `main_bytes` of main buffer, `sparse_pages` pages for
-    /// the sparse stream and `code_pages` executable pages.
+    /// Allocate `main_bytes` of main buffer, `sparse_pages` anonymous
+    /// pages for the sparse stream and `code_pages` executable pages.
     pub fn new(
         main_bytes: usize,
         huge: bool,
         sparse_pages: usize,
         code_pages: usize,
     ) -> std::io::Result<Buffers> {
+        Self::with_sparse(
+            main_bytes,
+            huge,
+            SparseSet::Anon(AnonBuffer::new(sparse_pages.max(1) * PAGE, false)?),
+            code_pages,
+        )
+    }
+
+    /// As [`new`](Self::new), with the sparse set given.
+    pub fn with_sparse(
+        main_bytes: usize,
+        huge: bool,
+        sparse: SparseSet,
+        code_pages: usize,
+    ) -> std::io::Result<Buffers> {
         Ok(Buffers {
             main: AnonBuffer::new(main_bytes.max(PAGE), huge)?,
-            sparse: AnonBuffer::new(sparse_pages.max(1) * PAGE, false)?,
+            sparse,
             code: CodePages::new(code_pages.max(1))?,
         })
     }
@@ -318,6 +360,11 @@ impl Buffers {
     /// The main buffer.
     pub fn main(&self) -> &AnonBuffer {
         &self.main
+    }
+
+    /// Whether the sparse stream runs on the page-cache file.
+    pub fn sparse_on_file(&self) -> bool {
+        matches!(self.sparse, SparseSet::File(_))
     }
 
     /// Pages available to the sparse stream.
@@ -1300,6 +1347,31 @@ mod tests {
                 slow: 0
             }
         );
+    }
+
+    #[test]
+    fn the_sparse_stream_can_run_on_a_page_cache_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::footprint::CacheFile::create(dir.path(), 64 * PAGE as u64).unwrap();
+        let map = cache.map(64 * PAGE).unwrap();
+        let b = Arc::new(Buffers::with_sparse(1 << 20, false, SparseSet::File(map), 1).unwrap());
+        assert!(b.sparse_on_file());
+        assert_eq!(b.sparse_capacity(), 64);
+        let knobs = Knobs {
+            duty: 0.5,
+            tlbvisits: 3.0,
+            sparse_pages: 64,
+            code_pages: 1,
+            ..Knobs::default()
+        };
+        let g = Generator::start(Arc::clone(&b), knobs, 1, None, 1).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let accesses = g.stats()[0].accesses.load(Ordering::Relaxed);
+        assert!(
+            accesses > 100,
+            "visits over the file's pages ran: {accesses}"
+        );
+        g.stop();
     }
 
     #[test]

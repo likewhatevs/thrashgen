@@ -233,6 +233,71 @@ impl Drop for CacheFile {
     }
 }
 
+/// A read-only shared mapping of the start of a [`CacheFile`]: pages
+/// the sparse stream can visit that count as page cache, not as
+/// anonymous memory, for a profile whose anonymous footprint cannot
+/// spare them.
+#[derive(Debug)]
+pub struct FileMap {
+    ptr: NonNull<libc::c_void>,
+    len: usize,
+}
+
+// SAFETY: a plain read-only region; workers only read it through
+// volatile loads and never form references into it.
+unsafe impl Send for FileMap {}
+// SAFETY: as above; concurrent volatile reads of a read-only mapping
+// race with nothing.
+unsafe impl Sync for FileMap {}
+
+impl FileMap {
+    /// Length in bytes.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the mapping is empty; it never is.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Start of the mapping.
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr().cast()
+    }
+}
+
+impl Drop for FileMap {
+    fn drop(&mut self) {
+        // SAFETY: the mapping was made by `CacheFile::map` with this length.
+        let _ = unsafe { munmap(self.ptr, self.len) };
+    }
+}
+
+impl CacheFile {
+    /// Map the first `len` bytes read-only and shared, advised for
+    /// random access so no read-ahead follows the stream.
+    pub fn map(&self, len: usize) -> io::Result<FileMap> {
+        let len = len.min(self.len as usize);
+        let size = NonZeroUsize::new(len)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty mapping"))?;
+        // SAFETY: a shared read-only mapping of our own file.
+        let ptr = unsafe {
+            mmap(
+                None,
+                size,
+                ProtFlags::PROT_READ,
+                MapFlags::MAP_SHARED,
+                self.file.as_fd(),
+                0,
+            )
+        }?;
+        // SAFETY: the range is exactly what was just mapped.
+        let _ = unsafe { madvise(ptr, len, MmapAdvise::MADV_RANDOM) };
+        Ok(FileMap { ptr, len })
+    }
+}
+
 /// Shared memory: a `memfd` mapped and touched, so it counts as
 /// resident shmem for the process and as shmem for its cgroup.
 #[derive(Debug)]
@@ -350,6 +415,23 @@ impl Drop for KernelFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cache_file_maps_read_only_and_shows_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = CacheFile::create(dir.path(), 3 * 4096).unwrap();
+        let map = cache.map(2 * 4096).unwrap();
+        assert_eq!(map.len(), 2 * 4096, "capped to what was asked");
+        assert!(!map.is_empty());
+        let whole = cache.map(1 << 30).unwrap();
+        assert_eq!(whole.len(), 3 * 4096, "capped to the file");
+        // SAFETY: inside the mapping.
+        let first = unsafe { std::ptr::read_volatile(map.as_ptr()) };
+        // SAFETY: the last byte of the mapping.
+        let last = unsafe { std::ptr::read_volatile(map.as_ptr().add(2 * 4096 - 1)) };
+        let _ = (first, last);
+        assert!(cache.map(0).is_err());
+    }
     use crate::caps::Root;
     use crate::measure::{Scope, memory};
 
