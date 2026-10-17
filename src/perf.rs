@@ -108,7 +108,7 @@ pub struct Options {
 /// Why an open failed, in terms of what to do about it.
 pub fn hint(err: &io::Error) -> &'static str {
     match err.raw_os_error() {
-        Some(libc::EACCES) | Some(libc::EPERM) => {
+        Some(libc::EACCES | libc::EPERM) => {
             "not permitted at this perf_event_paranoid level without CAP_PERFMON"
         }
         Some(libc::ENOENT) => "the PMU or event is not supported here",
@@ -118,7 +118,7 @@ pub fn hint(err: &io::Error) -> &'static str {
         Some(libc::ENODEV) => "no such CPU",
         Some(libc::EOPNOTSUPP) => "the PMU does not support this mode",
         Some(libc::ESRCH) => "no such task",
-        Some(libc::EMFILE) | Some(libc::ENFILE) => "out of file descriptors",
+        Some(libc::EMFILE | libc::ENFILE) => "out of file descriptors",
         _ => "unexpected error",
     }
 }
@@ -456,10 +456,7 @@ mod tests {
         // No such PMU gives ENOENT; a kernel that checks the mode first
         // answers EACCES at the default paranoid level.
         assert!(
-            matches!(
-                err.source.raw_os_error(),
-                Some(libc::ENOENT) | Some(libc::EACCES)
-            ),
+            matches!(err.source.raw_os_error(), Some(libc::ENOENT | libc::EACCES)),
             "{err}"
         );
         let empty = Counters::open(&[], &Target::SelfThreads, Options::default()).unwrap();
@@ -490,7 +487,7 @@ mod hw_tests {
     fn burn(iters: u64) -> u64 {
         let mut x = 1u64;
         for i in 0..iters {
-            x = black_box(x.wrapping_mul(6364136223846793005).wrapping_add(i));
+            x = black_box(x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(i));
         }
         x
     }
@@ -639,9 +636,10 @@ mod amd_l3_root_tests {
     fn l3_pmu_filters_attribute_misses_to_the_pinned_cpu() {
         let ident = cpu::detect().unwrap();
         let table = table_for(&ident).unwrap();
-        if table.vendor != crate::events::Vendor::Amd {
-            panic!("this test is for AMD hosts; got {ident:?}");
-        }
+        assert!(
+            table.vendor == crate::events::Vendor::Amd,
+            "this test is for AMD hosts; got {ident:?}"
+        );
         let sysfs = Sysfs::default();
         let topo = Topology::read(&sysfs).unwrap();
         let domain = topo

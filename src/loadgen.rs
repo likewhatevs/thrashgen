@@ -489,7 +489,7 @@ fn compute(ops: u32, chains: u8, s: &mut [u64; 4]) {
                 a = a.wrapping_mul(K).wrapping_add(1);
                 // SAFETY: an empty asm block that only pins a register.
                 unsafe {
-                    std::arch::asm!("/* {0} */", inout(reg) a, options(nomem, nostack, preserves_flags))
+                    std::arch::asm!("/* {0} */", inout(reg) a, options(nomem, nostack, preserves_flags));
                 };
             }
         }
@@ -499,7 +499,7 @@ fn compute(ops: u32, chains: u8, s: &mut [u64; 4]) {
                 b ^= b << 13;
                 // SAFETY: as above.
                 unsafe {
-                    std::arch::asm!("/* {0} {1} */", inout(reg) a, inout(reg) b, options(nomem, nostack, preserves_flags))
+                    std::arch::asm!("/* {0} {1} */", inout(reg) a, inout(reg) b, options(nomem, nostack, preserves_flags));
                 };
             }
         }
@@ -511,7 +511,7 @@ fn compute(ops: u32, chains: u8, s: &mut [u64; 4]) {
                 d ^= a;
                 // SAFETY: as above.
                 unsafe {
-                    std::arch::asm!("/* {0} {1} {2} {3} */", inout(reg) a, inout(reg) b, inout(reg) c, inout(reg) d, options(nomem, nostack, preserves_flags))
+                    std::arch::asm!("/* {0} {1} {2} {3} */", inout(reg) a, inout(reg) b, inout(reg) c, inout(reg) d, options(nomem, nostack, preserves_flags));
                 };
             }
         }
@@ -535,7 +535,7 @@ fn compute_slow(ops: u32, s: &mut [u64; 4]) {
         a ^= (f.sqrt() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         // SAFETY: an empty asm block that only pins a register.
         unsafe {
-            std::arch::asm!("/* {0} */", inout(reg) a, options(nomem, nostack, preserves_flags))
+            std::arch::asm!("/* {0} */", inout(reg) a, options(nomem, nostack, preserves_flags));
         };
     }
     s[0] = a;
@@ -590,10 +590,10 @@ impl ComputeSplit {
 
 #[cfg(test)]
 fn compute_mixed(ops: u32, chains: f64, s: &mut [u64; 4]) {
-    ComputeSplit::of(ops, chains).run(s)
+    ComputeSplit::of(ops, chains).run(s);
 }
 
-/// The streams' random source: SplitMix64, one word of state that
+/// The streams' random source: `SplitMix64`, one word of state that
 /// stays in a register, a few instructions a draw.
 #[derive(Clone, Copy, Debug)]
 struct Draws(u64);
@@ -915,7 +915,7 @@ impl Worker {
                 .fetch_add(busy.as_nanos() as u64, Ordering::Relaxed);
             self.stats.periods.fetch_add(1, Ordering::Relaxed);
             if busy < period {
-                std::thread::sleep(period - busy);
+                std::thread::sleep(period.saturating_sub(busy));
             }
         }
         std::hint::black_box(state);
@@ -946,7 +946,7 @@ impl Generator {
         if threads == 0 {
             return Err(KnobError("threads must be at least 1".into()));
         }
-        if cpus.is_some_and(|c| c.is_empty()) {
+        if cpus.is_some_and(<[u32]>::is_empty) {
             return Err(KnobError("an empty CPU list cannot pin anything".into()));
         }
         let knobs = Arc::new(RwLock::new(knobs));
@@ -1052,7 +1052,7 @@ mod tests {
                 .collect()
         };
         let sorted = |mut v: Vec<f64>| {
-            v.sort_by(|a, b| a.total_cmp(b));
+            v.sort_by(f64::total_cmp);
             v
         };
         let mut last_cv = 0.0;
@@ -1348,7 +1348,7 @@ mod tests {
         assert_eq!(lines[63], 129 * PAGE_LINES);
         assert_eq!(c.cursor, PAGE_LINES + 3);
         // The walk wraps at the slice end: 128 pages of 21 visits each.
-        for _ in 22..(128 * 21 + 1) {
+        for _ in 22..=(128 * 21) {
             chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         assert_eq!(c.cursor, 3, "back at the slice start");

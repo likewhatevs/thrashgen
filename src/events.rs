@@ -30,7 +30,7 @@ pub enum Vendor {
     Amd,
     /// Intel Core-derived server parts.
     Intel,
-    /// Arm Ltd. cores with PMUv3.
+    /// Arm Ltd. cores with `PMUv3`.
     Arm,
 }
 
@@ -90,6 +90,7 @@ impl EventDef {
     }
 
     /// A copy with extra fields appended, for uncore filters.
+    #[must_use]
     pub fn with_fields(&self, extra: &[(&'static str, u64)]) -> EventDef {
         let mut fields = self.fields.clone();
         fields.extend_from_slice(extra);

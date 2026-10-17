@@ -63,7 +63,7 @@ impl Resctrl {
     /// name; not removed on drop.
     pub fn find_idle_group(&self) -> io::Result<Option<MonGroup>> {
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(self.mount.join("mon_groups"))?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .map(|e| e.path())
             .filter(|p| p.is_dir())
             .collect();
@@ -267,9 +267,9 @@ mod tests {
         for e in fs::read_dir(&dir).unwrap() {
             let p = e.unwrap().path();
             if p.is_dir() {
-                fs::remove_dir_all(p).unwrap()
+                fs::remove_dir_all(p).unwrap();
             } else {
-                fs::remove_file(p).unwrap()
+                fs::remove_file(p).unwrap();
             }
         }
         drop(bw);

@@ -129,16 +129,13 @@ fn has_cap(mask: u64, bit: u32) -> bool {
 
 /// Mount point of the first mount with this filesystem type.
 fn mount_point(mounts: &str, fstype: &str) -> Option<PathBuf> {
-    mounts
-        .lines()
-        .filter_map(|l| {
-            let mut it = l.split_whitespace();
-            let _dev = it.next()?;
-            let point = it.next()?;
-            let ty = it.next()?;
-            (ty == fstype).then(|| PathBuf::from(point))
-        })
-        .next()
+    mounts.lines().find_map(|l| {
+        let mut it = l.split_whitespace();
+        let _dev = it.next()?;
+        let point = it.next()?;
+        let ty = it.next()?;
+        (ty == fstype).then(|| PathBuf::from(point))
+    })
 }
 
 /// Own cgroup v2 path from `/proc/self/cgroup`, without the leading slash.
@@ -160,8 +157,7 @@ impl Facts {
     pub fn detect(root: &Root) -> Facts {
         let (euid, caps) = root
             .read("/proc/self/status")
-            .map(|t| parse_status(&t))
-            .unwrap_or((None, 0));
+            .map_or((None, 0), |t| parse_status(&t));
         let mounts = root.read("/proc/self/mounts").unwrap_or_default();
 
         let cgroup = mount_point(&mounts, "cgroup2").and_then(|mount| {
@@ -193,7 +189,7 @@ impl Facts {
             let can_make_groups = access(&dir.join("mon_groups"), AccessFlags::W_OK).is_ok();
             let mut usable_groups: Vec<String> = std::fs::read_dir(dir.join("mon_groups"))
                 .map(|rd| {
-                    rd.filter_map(|e| e.ok())
+                    rd.filter_map(std::result::Result::ok)
                         .filter(|e| access(&e.path().join("tasks"), AccessFlags::W_OK).is_ok())
                         .map(|e| e.file_name().to_string_lossy().into_owned())
                         .collect()
@@ -210,7 +206,7 @@ impl Facts {
 
         let mut pmus: Vec<String> = std::fs::read_dir(root.path("/sys/bus/event_source/devices"))
             .map(|rd| {
-                rd.filter_map(|e| e.ok())
+                rd.filter_map(std::result::Result::ok)
                     .map(|e| e.file_name().to_string_lossy().into_owned())
                     .collect()
             })
@@ -218,9 +214,7 @@ impl Facts {
         pmus.sort();
 
         let cachestat_ok = root.is_live().then(|| {
-            std::fs::File::open("/proc/self/exe")
-                .map(|f| cachestat(&f, 0, 0).is_ok())
-                .unwrap_or(false)
+            std::fs::File::open("/proc/self/exe").is_ok_and(|f| cachestat(&f, 0, 0).is_ok())
         });
 
         Facts {
@@ -405,7 +399,7 @@ impl Expectations {
 impl fmt::Display for Facts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let opt = |v: Option<&dyn fmt::Display>| {
-            v.map(|v| v.to_string()).unwrap_or_else(|| "absent".into())
+            v.map_or_else(|| "absent".into(), std::string::ToString::to_string)
         };
         writeln!(
             f,
@@ -712,7 +706,7 @@ mod tests {
         fs::write(groups.join("theirs/tasks"), "").unwrap();
         let ro = |p: &Path, mode: u32| {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap()
+            fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
         };
         ro(&groups.join("theirs/tasks"), 0o444);
         ro(&groups, 0o555);

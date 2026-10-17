@@ -35,17 +35,17 @@ pub fn from_cpuinfo(text: &str) -> Option<CpuIdent> {
             model: kv.get("model")?.parse().ok()?,
             name: kv
                 .get("model name")
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .unwrap_or_default(),
         });
     }
     if let (Some(imp), Some(part)) = (kv.get("CPU implementer"), kv.get("CPU part")) {
         let family = parse_hex(imp)?;
         let model = parse_hex(part)?;
-        let name = kv
-            .get("model name")
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("ARM implementer 0x{family:x} part 0x{model:x}"));
+        let name = kv.get("model name").map_or_else(
+            || format!("ARM implementer 0x{family:x} part 0x{model:x}"),
+            std::string::ToString::to_string,
+        );
         return Some(CpuIdent {
             vendor: "arm".to_string(),
             family,

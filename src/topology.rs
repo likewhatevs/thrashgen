@@ -147,7 +147,10 @@ fn l3_dir(cpu_dir: &Path) -> Result<Option<std::path::PathBuf>, TopologyError> {
     let Ok(entries) = std::fs::read_dir(&cache) else {
         return Ok(None);
     };
-    let mut dirs: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    let mut dirs: Vec<_> = entries
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.path())
+        .collect();
     dirs.sort();
     for d in dirs {
         let level = d.join("level");

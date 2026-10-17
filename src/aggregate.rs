@@ -45,7 +45,7 @@ pub enum AggregateError {
     BadOption(String),
 }
 
-/// Linear-interpolation percentile of sorted values (NumPy's default).
+/// Linear-interpolation percentile of sorted values (`NumPy`'s default).
 /// `p` is in 0..=100. Panics on an empty slice.
 pub fn percentile(sorted: &[f64], p: f64) -> f64 {
     assert!(!sorted.is_empty(), "percentile of nothing");
@@ -207,7 +207,7 @@ fn pctiles_of(mut values: Vec<f64>, opts: &Options) -> Option<BTreeMap<String, f
     if values.is_empty() {
         return None;
     }
-    values.sort_by(|a, b| a.total_cmp(b));
+    values.sort_by(f64::total_cmp);
     Some(
         opts.pctiles
             .iter()
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn windows_keep_half_full_tail_or_only_window() {
-        let s: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let s: Vec<f64> = (0..10).map(f64::from).collect();
         assert_eq!(windows(&s, 4).len(), 3, "4,4,2: tail is half full");
         assert_eq!(windows(&s, 7).len(), 1, "7,3: tail under half is dropped");
         assert_eq!(
@@ -673,7 +673,7 @@ mod tests {
             p in 0.0..=100.0f64,
             q in 0.0..=100.0f64,
         ) {
-            v.sort_by(|a, b| a.total_cmp(b));
+            v.sort_by(f64::total_cmp);
             let (lo, hi) = (p.min(q), p.max(q));
             let a = percentile(&v, lo);
             let b = percentile(&v, hi);

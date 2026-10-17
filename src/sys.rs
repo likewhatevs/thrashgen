@@ -3,7 +3,7 @@
 use std::io;
 use std::os::fd::AsRawFd;
 
-/// `__NR_cachestat`, the same on x86_64 and the asm-generic table
+/// `__NR_cachestat`, the same on `x86_64` and the asm-generic table
 /// (arm64, riscv) at v7.1.
 pub const NR_CACHESTAT: libc::c_long = 451;
 

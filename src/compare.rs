@@ -192,10 +192,9 @@ impl fmt::Display for Comparison {
                 "{:22} {:>12} {:>12} {:>8}  {}",
                 r.key,
                 human(r.expected),
-                r.actual.map(human).unwrap_or_else(|| "-".into()),
+                r.actual.map_or_else(|| "-".into(), human),
                 r.error
-                    .map(|e| format!("{:+.1}%", e * 100.0))
-                    .unwrap_or_else(|| "-".into()),
+                    .map_or_else(|| "-".into(), |e| format!("{:+.1}%", e * 100.0)),
                 match r.within {
                     Some(true) => "yes",
                     Some(false) => "no",

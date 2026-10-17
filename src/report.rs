@@ -219,10 +219,9 @@ impl fmt::Display for Report {
                 t.key,
                 t.tier.to_string(),
                 human(t.target),
-                t.measured.map(human).unwrap_or_else(|| "-".into()),
+                t.measured.map_or_else(|| "-".into(), human),
                 t.error
-                    .map(|e| format!("{:+.1}%", e * 100.0))
-                    .unwrap_or_else(|| "-".into())
+                    .map_or_else(|| "-".into(), |e| format!("{:+.1}%", e * 100.0))
             )?;
         }
         if !self.memory.is_empty() {
@@ -233,8 +232,8 @@ impl fmt::Display for Report {
                     f,
                     "{:22} {:>12} {:>12}",
                     m.key,
-                    m.target.map(human).unwrap_or_else(|| "-".into()),
-                    m.measured.map(human).unwrap_or_else(|| "-".into())
+                    m.target.map_or_else(|| "-".into(), human),
+                    m.measured.map_or_else(|| "-".into(), human)
                 )?;
             }
         }

@@ -101,7 +101,7 @@ pub fn install_stop_handler() -> Result<()> {
 /// Thread ids of a process, from `/proc/<pid>/task`.
 pub fn thread_ids(root: &Root, pid: i32) -> io::Result<Vec<i32>> {
     let mut tids: Vec<i32> = std::fs::read_dir(root.path(format!("/proc/{pid}/task")))?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter_map(|e| e.file_name().to_str()?.parse().ok())
         .collect();
     tids.sort_unstable();
@@ -124,8 +124,7 @@ pub fn cgroup_scope_info(cg: &Cgroup, topo: &Topology) -> io::Result<ScopeInfo> 
 pub fn unix_now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
+        .map_or(0.0, |d| d.as_secs_f64())
 }
 
 /// A command launched and held at its exec, so counters attach before
@@ -385,7 +384,10 @@ pub fn run(what: &What, settings: &Settings, out: &mut dyn Write) -> Result<Summ
             if STOP.load(Ordering::SeqCst) || child.as_ref().is_some_and(StoppedChild::finished) {
                 break;
             }
-            std::thread::sleep((next - start.elapsed()).min(Duration::from_millis(100)));
+            std::thread::sleep(
+                next.saturating_sub(start.elapsed())
+                    .min(Duration::from_millis(100)),
+            );
         }
         let stop = STOP.load(Ordering::SeqCst)
             || child.as_ref().is_some_and(StoppedChild::finished)

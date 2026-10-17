@@ -116,7 +116,7 @@ pub fn ratio_chart(exp: &Experiment, path: &Path) -> Res {
             font(11, &INK).pos(Pos::new(HPos::Right, VPos::Center)),
         )))?;
         let label = if *ratio > max {
-            format!("{:.2}x", ratio)
+            format!("{ratio:.2}x")
         } else {
             format!("{:+.1}%", (ratio - 1.0) * 100.0)
         };
@@ -131,7 +131,7 @@ pub fn ratio_chart(exp: &Experiment, path: &Path) -> Res {
 }
 
 fn series(rec: &Recording) -> Vec<(f64, f64)> {
-    let t0 = rec.cpu.first().map(|c| c.t).unwrap_or(0.0);
+    let t0 = rec.cpu.first().map_or(0.0, |c| c.t);
     rec.cpu.iter().map(|c| (c.t - t0, c.cores)).collect()
 }
 
@@ -273,7 +273,7 @@ pub fn summary_chart(exps: &[Experiment], path: &Path) -> Res {
 pub fn draw_all(out: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let mut exps = Vec::new();
     let mut entries: Vec<_> = std::fs::read_dir(out)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| p.join("compare.json").is_file())
         .collect();

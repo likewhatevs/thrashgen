@@ -81,7 +81,7 @@ fn rusage_self() -> io::Result<Duration> {
     // SAFETY: rusage is plain data; all-zero is a valid value.
     let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
     // SAFETY: `ru` is a valid, writable rusage.
-    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) } != 0 {
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &raw mut ru) } != 0 {
         return Err(io::Error::last_os_error());
     }
     let tv = |t: libc::timeval| Duration::new(t.tv_sec as u64, (t.tv_usec as u32) * 1000);
@@ -356,7 +356,7 @@ mod tests {
 
         let h = busy_time(&Scope::Host, &root).unwrap();
         let expect =
-            (17_061_365 + 12_145 + 6_165_105 + 265_740 + 1_248_759 + 248_499) as f64 / ticks;
+            f64::from(17_061_365 + 12_145 + 6_165_105 + 265_740 + 1_248_759 + 248_499) / ticks;
         assert!((h.total.as_secs_f64() - expect).abs() < 1e-6, "{h:?}");
 
         assert!(

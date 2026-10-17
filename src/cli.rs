@@ -302,7 +302,7 @@ fn run_aggregate(args: AggregateArgs) -> Result<()> {
     let text = profile.to_json();
     match args.output {
         Some(path) => {
-            std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?
+            std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
         }
         None => io::stdout().write_all(text.as_bytes())?,
     }
