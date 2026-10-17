@@ -9,137 +9,137 @@
   "threads": 1,
   "pinned_cpus": null,
   "knobs": {
-    "duty": 0.25717049821655075,
-    "cv": 1.0745008722020108,
-    "ops": 31374,
-    "chains": 0.7304094133404575,
-    "lines": 0.014618929724829349,
+    "duty": 0.2620091736316681,
+    "cv": 0.7082140445709229,
+    "ops": 46863,
+    "chains": 1.0,
+    "lines": 0.03125,
     "seq": 0.0,
     "dep": 0.0,
     "wset": 1.0,
     "wfrac": 0.25,
     "ntlines": 0.0,
-    "tlbvisits": 10000.0,
-    "sparse_pages": 103,
-    "codevisits": 52.637282631581016,
+    "tlbvisits": 1909.1390158083955,
+    "sparse_pages": 256,
+    "codevisits": 7.170594745748937,
     "code_pages": 103,
     "period_ms": 10
   },
-  "main_bytes": 2099063,
-  "thp_bytes": 0,
-  "passes": 15,
-  "converged": false,
+  "main_bytes": 2107221,
+  "thp_bytes": 2097152,
+  "passes": 11,
+  "converged": true,
   "targets": [
     {
       "key": "cpu_usage_cores",
-      "target": 0.2625506398690617,
+      "target": 0.25865622192709503,
       "tier": "verified",
       "provenance": {
         "scope": "process",
         "mode": "not_applicable",
         "method": "rusage"
       },
-      "measured": 0.3152416317045876,
-      "error": 0.20068887229451718,
-      "within": false
-    },
-    {
-      "key": "cpu_usage_cv_1s",
-      "target": 0.8704809141907591,
-      "tier": "verified",
-      "provenance": {
-        "scope": "process",
-        "mode": "not_applicable",
-        "method": "rusage"
-      },
-      "measured": 0.8987000093853342,
-      "error": 0.03241782184369767,
+      "measured": 0.29932035006492863,
+      "error": 0.1572130290733745,
       "within": true
     },
     {
+      "key": "cpu_usage_cv_1s",
+      "target": 0.6601978862876517,
+      "tier": "verified",
+      "provenance": {
+        "scope": "process",
+        "mode": "not_applicable",
+        "method": "rusage"
+      },
+      "measured": 0.3853240650164446,
+      "error": -0.4163506533122148,
+      "within": false
+    },
+    {
       "key": "ipc",
-      "target": 0.8713914647465492,
+      "target": 1.0344415170260757,
       "tier": "verified",
       "provenance": {
         "scope": "process",
         "mode": "user",
         "method": "perf"
       },
-      "measured": 0.8742708592992775,
-      "error": 0.0033043639617996905,
+      "measured": 1.040797307941514,
+      "error": 0.006144176167359058,
       "within": true
     },
     {
       "key": "l3_mpki",
-      "target": 0.019028955677837713,
+      "target": 0.018882041693484446,
       "tier": "proxy",
       "provenance": {
         "scope": "process",
         "mode": "user",
         "method": "proxy"
       },
-      "measured": 0.026830415915467264,
-      "error": 0.4099783703167489,
+      "measured": 0.04026702391645947,
+      "error": 1.1325566678710521,
       "within": true
     },
     {
       "key": "dtlb_pki",
-      "target": 8.67144107874522,
+      "target": 9.006048787995471,
       "tier": "verified",
       "provenance": {
         "scope": "process",
         "mode": "user",
         "method": "perf"
       },
-      "measured": 5.07170562786608,
-      "error": -0.41512540051763014,
-      "within": false
+      "measured": 8.604473559834174,
+      "error": -0.04458950174648989,
+      "within": true
     },
     {
       "key": "itlb_pki",
-      "target": 0.017081645686130475,
+      "target": 0.017745531200069723,
       "tier": "verified",
       "provenance": {
         "scope": "process",
         "mode": "user",
         "method": "perf"
       },
-      "measured": 0.018569502369502403,
-      "error": 0.08710265455160449,
+      "measured": 0.013222181875106393,
+      "error": -0.25490075636313203,
       "within": true
     }
   ],
   "memory": [
     {
       "key": "memory_current_bytes",
-      "target": 1042573910.0041796,
-      "measured": 1033916416.0
+      "target": 1040154138.4592497,
+      "measured": 1029922816.0
     },
     {
       "key": "anon_bytes",
-      "target": 3377015.438242204,
-      "measured": 3391488.0
+      "target": 3385173.304738037,
+      "measured": 3420160.0
     },
     {
       "key": "pagecache_bytes",
-      "target": 1028197769.9136195,
-      "measured": 1028198400.0
+      "target": 1024174926.6234597,
+      "measured": 1024176128.0
     },
     {
       "key": "shmem_bytes",
-      "target": 2326459.7324450687,
+      "target": 2326459.732453478,
       "measured": 2326528.0
     }
   ],
   "windows": [
     {
-      "end_s": 2.00023442,
-      "seconds": 2.00006818,
+      "end_s": 0.100377524,
+      "seconds": 0.100104301,
       "pass": 0,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 64,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 4096,
         "chains": 1.0,
         "lines": 8.0,
         "seq": 0.0,
@@ -148,7 +148,7 @@
         "wfrac": 0.25,
         "ntlines": 0.0,
         "tlbvisits": 0.2,
-        "sparse_pages": 103,
+        "sparse_pages": 256,
         "codevisits": 0.05,
         "code_pages": 103,
         "period_ms": 10
@@ -156,1220 +156,5588 @@
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.2564629626033699,
-          "error": -0.02318667845840248
+          "measured": 0.22149839975437519,
+          "error": -0.14365717513338291
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.006909596614561807,
-          "error": -0.992062322674834
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 1.438511440241644,
-          "error": 0.6508211274023047
+          "measured": 0.9874973459857602,
+          "error": -0.04538117454457515
         },
         {
           "key": "l3_mpki",
-          "measured": 0.3968246035328589,
-          "error": 19.853724726208974
+          "measured": 0.3587570195744299,
+          "error": 17.999906122346125
         },
         {
           "key": "dtlb_pki",
-          "measured": 2.58064171032959,
-          "error": -0.7023975960979468
+          "measured": 0.002785570715125693,
+          "error": -0.9996907000194315
         },
         {
           "key": "itlb_pki",
-          "measured": 0.012476364750485266,
-          "error": -0.26960405456626985
+          "measured": 0.006132336995569749,
+          "error": -0.6544292235362525
         }
       ],
-      "accesses_per_s": 3692706.1156485174,
-      "instructions_per_access": 479.70776895281335
+      "accesses_per_s": 58648.82868519305,
+      "instructions_per_access": 16681.747826569394
     },
     {
-      "end_s": 4.000490289,
-      "seconds": 2.000080315,
+      "end_s": 0.200867163,
+      "seconds": 0.100074304,
       "pass": 1,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 256,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 16384,
         "chains": 1.0,
-        "lines": 6.226442442207791,
+        "lines": 8.0,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 0.73345595108386,
-        "sparse_pages": 103,
-        "codevisits": 0.11704505929400341,
+        "tlbvisits": 2.2732269217532024,
+        "sparse_pages": 256,
+        "codevisits": 0.24168756358533422,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.48268427926041335,
-          "error": 0.8384425934026896
+          "measured": 0.22425234082658277,
+          "error": -0.13301006580931718
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.6260321369707986,
-          "error": -0.2808203755359896
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 1.1139081903383745,
-          "error": 0.2783097326554182
+          "measured": 0.990992952151319,
+          "error": -0.0420019538655673
         },
         {
           "key": "l3_mpki",
-          "measured": 0.10182503617648828,
-          "error": 4.351057509429166
+          "measured": 0.17754257074725066,
+          "error": 8.402721042000167
         },
         {
           "key": "dtlb_pki",
-          "measured": 1.1530985415133717,
-          "error": -0.8670234242449321
+          "measured": 0.014272172506640273,
+          "error": -0.9984152681333834
         },
         {
           "key": "itlb_pki",
-          "measured": 0.007337810921282346,
-          "error": -0.570427167492397
+          "measured": 0.006917375127951094,
+          "error": -0.6101905854515127
         }
       ],
-      "accesses_per_s": 3090160.9068633826,
-      "instructions_per_access": 1323.6919131595519
+      "accesses_per_s": 14888.936924307762,
+      "instructions_per_access": 65708.5468704162
     },
     {
-      "end_s": 6.000684686,
-      "seconds": 2.000064131,
+      "end_s": 0.301312289,
+      "seconds": 0.10018877,
       "pass": 2,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 818,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
         "chains": 1.0,
-        "lines": 5.507086906079068,
+        "lines": 4.0,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 5.7651254316235425,
-        "sparse_pages": 103,
-        "codevisits": 0.5118668201018677,
+        "tlbvisits": 25.920964495605947,
+        "sparse_pages": 256,
+        "codevisits": 1.1035106194783333,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.3972274135707186,
-          "error": 0.5129554198337603
+          "measured": 0.22364909508360134,
+          "error": -0.1353422955870778
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.691634722185083,
-          "error": -0.205456764289818
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 0.9624518645890741,
-          "error": 0.10449999056280693
+          "measured": 0.9920121679563226,
+          "error": -0.04101667264064722
         },
         {
           "key": "l3_mpki",
-          "measured": 1.227116561589833,
-          "error": 63.48680539095521
+          "measured": 0.06218446973136932,
+          "error": 2.293312806995182
         },
         {
           "key": "dtlb_pki",
-          "measured": 1.015772610589536,
-          "error": -0.882859999697245
+          "measured": 0.11887080550928732,
+          "error": -0.9868010036024083
         },
         {
           "key": "itlb_pki",
-          "measured": 0.01893011658954639,
-          "error": 0.10821386518494476
+          "measured": 0.007576696789512189,
+          "error": -0.5730363490340362
         }
       ],
-      "accesses_per_s": 274942.68382537185,
-      "instructions_per_access": 3670.99350559322
+      "accesses_per_s": 5529.561846103112,
+      "instructions_per_access": 187943.7621205696
     },
     {
-      "end_s": 8.001091134,
-      "seconds": 2.000263914,
+      "end_s": 0.401934191,
+      "seconds": 0.100355481,
       "pass": 3,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 3272,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
         "chains": 1.0,
-        "lines": 5.507086906079068,
+        "lines": 2.0,
         "seq": 0.0,
-        "dep": 0.2,
+        "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 63.874931490381954,
-        "sparse_pages": 103,
-        "codevisits": 1.843824096073548,
+        "tlbvisits": 103.68385798242379,
+        "sparse_pages": 256,
+        "codevisits": 1.6888110625674326,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.35622884855748044,
-          "error": 0.3568005346897559
+          "measured": 0.2232936102958078,
+          "error": -0.1367166479422813
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.6971628255029368,
-          "error": -0.199106133014929
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 1.0131486705258805,
-          "error": 0.1626791304647017
+          "measured": 0.9944611699357842,
+          "error": -0.03864920967715154
         },
         {
           "key": "l3_mpki",
-          "measured": 0.48397767194984354,
-          "error": 24.433748448608434
+          "measured": 0.0394895566501905,
+          "error": 1.091381710263727
         },
         {
           "key": "dtlb_pki",
-          "measured": 1.8652629124397788,
-          "error": -0.784895855775141
+          "measured": 0.5625208516754127,
+          "error": -0.9375396619630554
         },
         {
           "key": "itlb_pki",
-          "measured": 0.017331972942471532,
-          "error": 0.0146547505398916
+          "measured": 0.008874057674200114,
+          "error": -0.49992718875807746
         }
       ],
-      "accesses_per_s": 72036.49428032424,
-      "instructions_per_access": 15000.216971069283
+      "accesses_per_s": 5560.234423070525,
+      "instructions_per_access": 189349.01297425598
     },
     {
-      "end_s": 10.001315155,
-      "seconds": 2.00007035,
+      "end_s": 0.502240156,
+      "seconds": 0.100067967,
       "pass": 4,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 13088,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
         "chains": 1.0,
-        "lines": 5.107307322180863,
+        "lines": 1.0,
         "seq": 0.0,
-        "dep": 0.2,
+        "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 553.7950229718587,
-        "sparse_pages": 103,
-        "codevisits": 7.360432420465058,
+        "tlbvisits": 414.73543192969515,
+        "sparse_pages": 256,
+        "codevisits": 1.6888110625674326,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.3023321474521081,
-          "error": 0.15151937014088454
+          "measured": 0.22451919456886696,
+          "error": -0.1319783730849125
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8178754983610972,
-          "error": -0.06043258958591466
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 1.1122040811335778,
-          "error": 0.27635411422932726
+          "measured": 1.0047486458242612,
+          "error": -0.028704253177288162
         },
         {
           "key": "l3_mpki",
-          "measured": 0.16697812666775425,
-          "error": 7.774949581822149
+          "measured": 0.03271008184755162,
+          "error": 0.7323381855913794
         },
         {
           "key": "dtlb_pki",
-          "measured": 2.7818422255972113,
-          "error": -0.6791949342288847
+          "measured": 2.142385293054626,
+          "error": -0.7621170678188754
         },
         {
           "key": "itlb_pki",
-          "measured": 0.03066414442280701,
-          "error": 0.7951516491004675
+          "measured": 0.008899066384995663,
+          "error": -0.4985178924956218
         }
       ],
-      "accesses_per_s": 6460.772742318789,
-      "instructions_per_access": 66353.8221836127
+      "accesses_per_s": 5316.386611511754,
+      "instructions_per_access": 194863.65630005364
     },
     {
-      "end_s": 12.001577777,
-      "seconds": 2.000104042,
+      "end_s": 0.602568083,
+      "seconds": 0.100078641,
       "pass": 5,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
         "chains": 1.0,
-        "lines": 2.260353708549588,
+        "lines": 0.5,
         "seq": 0.0,
-        "dep": 0.2,
+        "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 2387.4218435323187,
-        "sparse_pages": 103,
-        "codevisits": 13.413851122773298,
+        "tlbvisits": 850.333909854844,
+        "sparse_pages": 256,
+        "codevisits": 1.6888110625674326,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.3190357475573637,
-          "error": 0.21513985917715553
+          "measured": 0.22399778779553386,
+          "error": -0.1339942023174297
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.7191943411950872,
-          "error": -0.17379654226688612
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 1.271496047807573,
-          "error": 0.45915595831248734
+          "measured": 1.017443358472254,
+          "error": -0.016432208369487954
         },
         {
           "key": "l3_mpki",
-          "measured": 0.024663061157638312,
-          "error": 0.29608064547453977
+          "measured": 0.03536629198393047,
+          "error": 0.873012069247479
         },
         {
           "key": "dtlb_pki",
-          "measured": 3.994056332002215,
-          "error": -0.5394010873472758
+          "measured": 4.201503744594543,
+          "error": -0.5334797930258941
         },
         {
           "key": "itlb_pki",
-          "measured": 0.008933093059252072,
-          "error": -0.4770355723684551
+          "measured": 0.008905181434802638,
+          "error": -0.4981732958905367
         }
       ],
-      "accesses_per_s": 13683.788155656355,
-      "instructions_per_access": 182192.45078963417
+      "accesses_per_s": 5026.047466012254,
+      "instructions_per_access": 202671.8183011316
     },
     {
-      "end_s": 14.001773997,
-      "seconds": 2.000058322,
+      "end_s": 0.702935412,
+      "seconds": 0.10010223,
       "pass": 6,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
         "chains": 1.0,
-        "lines": 0.9356115023890783,
+        "lines": 0.25,
         "seq": 0.0,
-        "dep": 0.2,
+        "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 3517.772171098036,
-        "sparse_pages": 103,
-        "codevisits": 18.548867863735683,
+        "tlbvisits": 1244.9567623009502,
+        "sparse_pages": 256,
+        "codevisits": 1.6888110625674326,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.28778095979091267,
-          "error": 0.09609696603456674
+          "measured": 0.22473435839347738,
+          "error": -0.1311465205858411
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.7864248565635242,
-          "error": -0.09656278070769357
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 1.3667363073076437,
-          "error": 0.5684527133911845
+          "measured": 1.0287755558324376,
+          "error": -0.005477314183915553
         },
         {
           "key": "l3_mpki",
-          "measured": 0.035102574412438095,
-          "error": 0.8446926361450672
+          "measured": 0.03275167877518103,
+          "error": 0.7345411744579786
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.078694299328512,
-          "error": -0.4143194593368082
+          "measured": 5.9363343639302535,
+          "error": -0.3408502992074577
         },
         {
           "key": "itlb_pki",
-          "measured": 0.018709670120626132,
-          "error": 0.0953084067197073
+          "measured": 0.008707825293372284,
+          "error": -0.5092947517210378
         }
       ],
-      "accesses_per_s": 3340.902575939983,
-      "instructions_per_access": 219936.74208560205
+      "accesses_per_s": 5004.883507590191,
+      "instructions_per_access": 209658.05543025627
     },
     {
-      "end_s": 16.001990648,
-      "seconds": 2.000070671,
+      "end_s": 0.803291082,
+      "seconds": 0.1000904,
       "pass": 7,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.7984804458218842,
-        "lines": 0.46780575119453915,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.125,
         "seq": 0.0,
-        "dep": 0.2,
+        "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 4596.6063377369865,
-        "sparse_pages": 103,
-        "codevisits": 17.723488057748295,
+        "tlbvisits": 1533.4239387829912,
+        "sparse_pages": 256,
+        "codevisits": 1.6888110625674326,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.32589718267973733,
-          "error": 0.24127361808094472
+          "measured": 0.22383676307981748,
+          "error": -0.13461674568606272
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8424600305111857,
-          "error": -0.032190118384873505
+          "measured": null,
+          "error": null
         },
         {
           "key": "ipc",
-          "measured": 0.7908210352755664,
-          "error": -0.09246180704147398
+          "measured": 1.0359977830487288,
+          "error": 0.0015044504663030654
         },
         {
           "key": "l3_mpki",
-          "measured": 0.005814458892141647,
-          "error": -0.6944415137340657
+          "measured": 0.035711410874965537,
+          "error": 0.8912896949744761
         },
         {
           "key": "dtlb_pki",
-          "measured": 3.4495982342904012,
-          "error": -0.6021885863070908
+          "measured": 7.133770114473198,
+          "error": -0.20789124260773598
         },
         {
           "key": "itlb_pki",
-          "measured": 0.005988987781286236,
-          "error": -0.6493904690840753
+          "measured": 0.008773682577601425,
+          "error": -0.5055835478417827
         }
       ],
-      "accesses_per_s": 6108.284160725038,
-      "instructions_per_access": 395803.7667830789
+      "accesses_per_s": 4965.511177895183,
+      "instructions_per_access": 214746.14315188344
     },
     {
-      "end_s": 18.002214961,
-      "seconds": 2.000081017,
+      "end_s": 0.903498518,
+      "seconds": 0.100078182,
       "pass": 8,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.7984804458218842,
-        "lines": 0.46780575119453915,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.0625,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 7287.8376912389,
-        "sparse_pages": 103,
-        "codevisits": 29.93211038088833,
+        "tlbvisits": 1722.938721515716,
+        "sparse_pages": 256,
+        "codevisits": 1.6888110625674326,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.34947824104696024,
-          "error": 0.3310888947795015
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8785507913791888,
-          "error": 0.00927059635297324
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.8832729775928355,
-          "error": 0.0136351035406827
+          "measured": 1.042755951617579,
+          "error": 0.008037607206066728
         },
         {
           "key": "l3_mpki",
-          "measured": 0.005636234713530599,
-          "error": -0.7038074601174827
+          "measured": 0.02224446588901414,
+          "error": 0.1780752447279022
         },
         {
           "key": "dtlb_pki",
-          "measured": 4.672234840656579,
-          "error": -0.46119280541399205
+          "measured": 7.898475480960163,
+          "error": -0.12298104675067252
         },
         {
           "key": "itlb_pki",
-          "measured": 0.006957405884069752,
-          "error": -0.5926969794415738
+          "measured": 0.007479548827861204,
+          "error": -0.5785108519134206
         }
       ],
-      "accesses_per_s": 5129.792199812674,
-      "instructions_per_access": 468789.1691798544
+      "accesses_per_s": 5265.883027331572,
+      "instructions_per_access": 263221.57149069646
     },
     {
-      "end_s": 20.002459686,
-      "seconds": 2.000104173,
+      "end_s": 1.003893888,
+      "seconds": 0.10007672,
       "pass": 9,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.79309180783123,
-        "lines": 0.46780575119453915,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 9928.462475858023,
-        "sparse_pages": 103,
-        "codevisits": 46.90061339184939,
+        "tlbvisits": 1839.7776641375226,
+        "sparse_pages": 256,
+        "codevisits": 2.6012845793210184,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.33625837729515873,
-          "error": 0.28073722259011175
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8801519356376037,
-          "error": 0.011109975289734255
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.9516529622431511,
-          "error": 0.09210727984344741
+          "measured": 1.048182341917816,
+          "error": 0.013283326960081748
         },
         {
           "key": "l3_mpki",
-          "measured": 0.02370431004627364,
-          "error": 0.24569684472391362
+          "measured": 0.010000085608364562,
+          "error": -0.4703917208373047
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.543105935915557,
-          "error": -0.3607630051823337
+          "measured": 8.363534891480779,
+          "error": -0.07134248455006437
         },
         {
           "key": "itlb_pki",
-          "measured": 0.016549989059690826,
-          "error": -0.031124438254291256
+          "measured": 0.005719667380313036,
+          "error": -0.677684070663911
         }
       ],
-      "accesses_per_s": 1769.4078377386597,
-      "instructions_per_access": 537144.2709678533
+      "accesses_per_s": 10012.318549209047,
+      "instructions_per_access": 240255.64103113877
     },
     {
-      "end_s": 22.0027126,
-      "seconds": 2.000100024,
+      "end_s": 1.104220664,
+      "seconds": 0.100082058,
       "pass": 10,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.7589109390674116,
-        "lines": 0.23390287559726958,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 47.64798307910384,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 4.581914508350355,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.31855988953324377,
-          "error": 0.21332741634952715
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9033568861224915,
-          "error": 0.037767596504164024
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.9005951966413219,
-          "error": 0.033513906293845666
+          "measured": 1.0484763550563678,
+          "error": 0.013567550991805725
         },
         {
           "key": "l3_mpki",
-          "measured": 0.04100165976586432,
-          "error": 1.154698369160498
+          "measured": 0.014020264529769639,
+          "error": -0.2574815394773989
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.290872560778737,
-          "error": -0.38985083185915625
+          "measured": 8.618182369042659,
+          "error": -0.0430673237602061
         },
         {
           "key": "itlb_pki",
-          "measured": 0.024118354642538524,
-          "error": 0.41194561025941073
+          "measured": 0.007245570897684279,
+          "error": -0.5916960266787724
         }
       ],
-      "accesses_per_s": 960.9519408715331,
-      "instructions_per_access": 569364.7247024714
+      "accesses_per_s": 10931.03021522599,
+      "instructions_per_access": 214825.87180341422
     },
     {
-      "end_s": 24.002943343,
-      "seconds": 2.000079264,
+      "end_s": 1.204535451,
+      "seconds": 0.100081596,
       "pass": 11,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.746504879071325,
-        "lines": 0.11695143779863479,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 40.09918428305676,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.30870137928306485,
-          "error": 0.17577843054208245
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9024908870311659,
-          "error": 0.03677274517864042
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.8926381394724078,
-          "error": 0.024382468253850036
+          "measured": 1.0485533646531378,
+          "error": 0.013641996569929198
         },
         {
           "key": "l3_mpki",
-          "measured": 0.02598778438558787,
-          "error": 0.3656968267499217
+          "measured": 0.01267436668504618,
+          "error": -0.3287607934146403
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.196946316824587,
-          "error": -0.40068250829000635
+          "measured": 8.61305637478824,
+          "error": -0.04363649614368813
         },
         {
           "key": "itlb_pki",
-          "measured": 0.016824656120028068,
-          "error": -0.015044777934427657
+          "measured": 0.008073916401887416,
+          "error": -0.5450169222403614
         }
       ],
-      "accesses_per_s": 1452.94241698613,
-      "instructions_per_access": 582717.8827881215
+      "accesses_per_s": 10931.080675412091,
+      "instructions_per_access": 216871.79768544238
     },
     {
-      "end_s": 26.003368788,
-      "seconds": 2.000297263,
-      "pass": 12,
+      "end_s": 1.304835628,
+      "seconds": 0.100079175,
+      "pass": 11,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.7375671776238749,
-        "lines": 0.058475718899317394,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 40.40427278480624,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.302900293070667,
-          "error": 0.15368331694688828
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8877117422717693,
-          "error": 0.019794607555558848
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.883501761232698,
-          "error": 0.01389765332355095
+          "measured": 1.0482339676454808,
+          "error": 0.013333233819788265
         },
         {
           "key": "l3_mpki",
-          "measured": 0.023626794563848412,
-          "error": 0.24162329051854503
+          "measured": 0.013947878940062526,
+          "error": -0.26131510741894676
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.133160972741866,
-          "error": -0.4080383034229591
+          "measured": 8.61673432760674,
+          "error": -0.043228109191198835
         },
         {
           "key": "itlb_pki",
-          "measured": 0.015447221550857032,
-          "error": -0.09568306036229993
+          "measured": 0.008084839995237575,
+          "error": -0.5444013535528421
         }
       ],
-      "accesses_per_s": 1604.7614818938036,
-      "instructions_per_access": 583783.967550315
+      "accesses_per_s": 10851.408397401357,
+      "instructions_per_access": 216854.09125161546
     },
     {
-      "end_s": 28.003581704,
-      "seconds": 2.000079055,
-      "pass": 13,
+      "end_s": 1.405145941,
+      "seconds": 0.100099195,
+      "pass": 11,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.7324947613571557,
-        "lines": 0.029237859449658697,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 42.48806584795043,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.28851733656928286,
-          "error": 0.09890166983851643
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9163825476001943,
-          "error": 0.05273134960357812
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.8659608822584206,
-          "error": -0.006232081340971226
+          "measured": 1.0478455877998845,
+          "error": 0.012957785001074064
         },
         {
           "key": "l3_mpki",
-          "measured": 0.05722424507196819,
-          "error": 2.0072194208016914
+          "measured": 0.011213392675110564,
+          "error": -0.40613452416112783
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.084142880210822,
-          "error": -0.4136911230738004
+          "measured": 8.61830007962629,
+          "error": -0.043054253590767595
         },
         {
           "key": "itlb_pki",
-          "measured": 0.029666533922210435,
-          "error": 0.7367491673415473
+          "measured": 0.00774204954203991,
+          "error": -0.5637183550746854
         }
       ],
-      "accesses_per_s": 643.4745650591296,
-      "instructions_per_access": 597588.6334855013
+      "accesses_per_s": 10919.168730577703,
+      "instructions_per_access": 218213.5546997701
     },
     {
-      "end_s": 30.003779237,
-      "seconds": 2.00007017,
-      "pass": 14,
+      "end_s": 1.505472477,
+      "seconds": 0.100092714,
+      "pass": 11,
       "knobs": {
-        "duty": 0.2790468633174896,
-        "cv": 1.1019346117973328,
-        "ops": 31374,
-        "chains": 0.7347879690008965,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 32.2402508186213,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.3091185580044369,
-          "error": 0.17736737628443558
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9154979109704129,
-          "error": 0.051715087655314906
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.8818701691013235,
-          "error": 0.012025254754844531
+          "measured": 1.0475352120918562,
+          "error": 0.01265774318825068
         },
         {
           "key": "l3_mpki",
-          "measured": 0.004049282295429999,
-          "error": -0.7872041764148918
+          "measured": 0.01200826555738038,
+          "error": -0.3640377586114521
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.118029710968053,
-          "error": -0.40978325695910217
+          "measured": 8.617040010864425,
+          "error": -0.043194167196781326
         },
         {
           "key": "itlb_pki",
-          "measured": 0.006408252431443664,
-          "error": -0.624845723345797
+          "measured": 0.007695533968248125,
+          "error": -0.5663396107174358
         }
       ],
-      "accesses_per_s": 4774.832475002615,
-      "instructions_per_access": 591751.5138702041
+      "accesses_per_s": 10829.95911170917,
+      "instructions_per_access": 220619.5537563647
     },
     {
-      "end_s": 32.003995677,
-      "seconds": 2.0000835,
-      "pass": 15,
+      "end_s": 1.605824942,
+      "seconds": 0.100088657,
+      "pass": 11,
       "knobs": {
-        "duty": 0.25717049821655075,
-        "cv": 1.0745008722020108,
-        "ops": 31374,
-        "chains": 0.7304094133404575,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 52.637282631581016,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.32322552251889686,
-          "error": 0.23109782813743943
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9087925112491932,
-          "error": 0.04401198973334231
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.8765971268331761,
-          "error": 0.005973964971232636
+          "measured": 1.047551063754375,
+          "error": 0.012673067072934273
         },
         {
           "key": "l3_mpki",
-          "measured": 0.005132203261073848,
-          "error": -0.7302950646392473
+          "measured": 0.016473588669442936,
+          "error": -0.1275525741939541
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.080065348575878,
-          "error": -0.4141613484490197
+          "measured": 8.617931612257678,
+          "error": -0.04309516691216803
         },
         {
           "key": "itlb_pki",
-          "measured": 0.009096156123957979,
-          "error": -0.46748947431080096
+          "measured": 0.00811129613907692,
+          "error": -0.5429104912314459
         }
       ],
-      "accesses_per_s": 3941.8354283708654,
-      "instructions_per_access": 588861.1619251869
+      "accesses_per_s": 10960.282941952153,
+      "instructions_per_access": 221611.26490870703
     },
     {
-      "end_s": 34.004215684,
-      "seconds": 2.00008288,
-      "pass": 15,
+      "end_s": 1.706120472,
+      "seconds": 0.100073415,
+      "pass": 11,
       "knobs": {
-        "duty": 0.25717049821655075,
-        "cv": 1.0745008722020108,
-        "ops": 31374,
-        "chains": 0.7304094133404575,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 52.637282631581016,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.31456982917830195,
-          "error": 0.19813011819427706
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9126905602402572,
-          "error": 0.04849003046636373
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.8751036770128773,
-          "error": 0.004260097116521384
+          "measured": 1.0480418170417496,
+          "error": 0.01314748083079025
         },
         {
           "key": "l3_mpki",
-          "measured": 0.016815764084616457,
-          "error": -0.11630651890155354
+          "measured": 0.014880543151725104,
+          "error": -0.21192086145748334
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.0761449209916645,
-          "error": -0.41461345641453684
+          "measured": 8.617935198436793,
+          "error": -0.04309476871544494
         },
         {
           "key": "itlb_pki",
-          "measured": 0.014234286032058893,
-          "error": -0.16669117873013312
+          "measured": 0.008060863132507326,
+          "error": -0.5457525028906627
         }
       ],
-      "accesses_per_s": 1242.9484922144827,
-      "instructions_per_access": 592770.9545427003
+      "accesses_per_s": 10901.996299416784,
+      "instructions_per_access": 221569.4345552965
     },
     {
-      "end_s": 36.004651816,
-      "seconds": 2.000297224,
-      "pass": 15,
+      "end_s": 1.806445546,
+      "seconds": 0.100102498,
+      "pass": 11,
       "knobs": {
-        "duty": 0.25717049821655075,
-        "cv": 1.0745008722020108,
-        "ops": 31374,
-        "chains": 0.7304094133404575,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 52.637282631581016,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.32278132704614954,
-          "error": 0.2294059812885083
+          "measured": 0.22339822629095388,
+          "error": -0.13631218833034292
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8885982935802688,
-          "error": 0.020813069068093725
+          "measured": 0.0,
+          "error": -1.0
         },
         {
           "key": "ipc",
-          "measured": 0.8772279351384403,
-          "error": 0.00669787417941803
+          "measured": 1.0485686878573008,
+          "error": 0.013656809591169045
         },
         {
           "key": "l3_mpki",
-          "measured": 0.01929441783373716,
-          "error": 0.01395043219363954
+          "measured": 0.012570345838047316,
+          "error": -0.3342697764307492
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.075143458871028,
-          "error": -0.41472894611360095
+          "measured": 8.617853921217202,
+          "error": -0.04310379345220845
         },
         {
           "key": "itlb_pki",
-          "measured": 0.01536636272540617,
-          "error": -0.10041672753562829
+          "measured": 0.008094373834038377,
+          "error": -0.5438641006133097
         }
       ],
-      "accesses_per_s": 3336.504155444451,
-      "instructions_per_access": 593059.5804881044
+      "accesses_per_s": 10669.064422348381,
+      "instructions_per_access": 221627.43685145534
     },
     {
-      "end_s": 38.004872793,
-      "seconds": 2.000069859,
-      "pass": 15,
+      "end_s": 1.906597309,
+      "seconds": 0.10004391,
+      "pass": 11,
       "knobs": {
-        "duty": 0.25717049821655075,
-        "cv": 1.0745008722020108,
-        "ops": 31374,
-        "chains": 0.7304094133404575,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 52.637282631581016,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.31636218572842106,
-          "error": 0.20495682618102198
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8878775850750282,
-          "error": 0.019985126153445748
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
         },
         {
           "key": "ipc",
-          "measured": 0.8782040871899375,
-          "error": 0.007818096365414619
+          "measured": 1.0484578534891504,
+          "error": 0.013549665430454147
         },
         {
           "key": "l3_mpki",
-          "measured": 0.016500337654848325,
-          "error": -0.132882648201991
+          "measured": 0.012983618156077835,
+          "error": -0.31238271968449033
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.0785267746406575,
-          "error": -0.4143387784656972
+          "measured": 8.617926946965355,
+          "error": -0.043095684929828494
         },
         {
           "key": "itlb_pki",
-          "measured": 0.01428640259976512,
-          "error": -0.16364015140736507
+          "measured": 0.008304797326293498,
+          "error": -0.532006270611901
         }
       ],
-      "accesses_per_s": 1528.4466121240619,
-      "instructions_per_access": 591546.336736538
+      "accesses_per_s": 11035.154463675,
+      "instructions_per_access": 221653.87487608203
     },
     {
-      "end_s": 40.005304961,
-      "seconds": 2.000291606,
-      "pass": 15,
+      "end_s": 2.006891857,
+      "seconds": 0.100076359,
+      "pass": 11,
       "knobs": {
-        "duty": 0.25717049821655075,
-        "cv": 1.0745008722020108,
-        "ops": 31374,
-        "chains": 0.7304094133404575,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 52.637282631581016,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.32600513277353876,
-          "error": 0.24168477721525597
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9023750384845898,
-          "error": 0.03663965949613147
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
         },
         {
           "key": "ipc",
-          "measured": 0.8754653082672241,
-          "error": 0.00467510147331989
+          "measured": 1.0476653504468296,
+          "error": 0.012783548613527478
         },
         {
           "key": "l3_mpki",
-          "measured": 0.014132442127799273,
-          "error": -0.25731908954631805
+          "measured": 0.015514029357928038,
+          "error": -0.17837119471664944
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.079698157673834,
-          "error": -0.4142036933025117
+          "measured": 8.61874180663363,
+          "error": -0.04300520577659977
         },
         {
           "key": "itlb_pki",
-          "measured": 0.013104991047127958,
-          "error": -0.23280278212487343
+          "measured": 0.008192500363393172,
+          "error": -0.538334453275708
         }
       ],
-      "accesses_per_s": 3749.9532455669364,
-      "instructions_per_access": 593278.9414445763
+      "accesses_per_s": 10012.354666100511,
+      "instructions_per_access": 228476.56619498527
     },
     {
-      "end_s": 42.005549002,
-      "seconds": 2.000106734,
-      "pass": 15,
+      "end_s": 2.107185083,
+      "seconds": 0.100066144,
+      "pass": 11,
       "knobs": {
-        "duty": 0.25717049821655075,
-        "cv": 1.0745008722020108,
-        "ops": 31374,
-        "chains": 0.7304094133404575,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 52.637282631581016,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.31827247089602073,
-          "error": 0.21223269939371864
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.9085438637268233,
-          "error": 0.04372634588025321
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
         },
         {
           "key": "ipc",
-          "measured": 0.8735537562346269,
-          "error": 0.0024814237636659685
+          "measured": 1.0474311892792487,
+          "error": 0.012557183793741341
         },
         {
           "key": "l3_mpki",
-          "measured": 0.019343799347099705,
-          "error": 0.016545504366730853
+          "measured": 0.01555702614956418,
+          "error": -0.17609406852796092
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.0747641917772395,
-          "error": -0.4147726836066363
+          "measured": 8.619695674486959,
+          "error": -0.04289929164313415
         },
         {
           "key": "itlb_pki",
-          "measured": 0.01518445731470187,
-          "error": -0.11106590116015785
+          "measured": 0.008565535038554797,
+          "error": -0.5173131228373066
         }
       ],
-      "accesses_per_s": 1105.4410059298366,
-      "instructions_per_access": 591775.1083019308
+      "accesses_per_s": 11102.656259044019,
+      "instructions_per_access": 225146.4914030386
     },
     {
-      "end_s": 44.006546662,
-      "seconds": 2.00085848,
-      "pass": 15,
+      "end_s": 2.207496416,
+      "seconds": 0.100069529,
+      "pass": 11,
       "knobs": {
-        "duty": 0.25717049821655075,
-        "cv": 1.0745008722020108,
-        "ops": 31374,
-        "chains": 0.7304094133404575,
-        "lines": 0.014618929724829349,
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
         "seq": 0.0,
         "dep": 0.0,
         "wset": 1.0,
         "wfrac": 0.25,
         "ntlines": 0.0,
-        "tlbvisits": 10000.0,
-        "sparse_pages": 103,
-        "codevisits": 52.637282631581016,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
         "code_pages": 103,
         "period_ms": 10
       },
       "values": [
         {
           "key": "cpu_usage_cores",
-          "measured": 0.3152416317045876,
-          "error": 0.20068887229451718
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
         },
         {
           "key": "cpu_usage_cv_1s",
-          "measured": 0.8987000093853342,
-          "error": 0.03241782184369767
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
         },
         {
           "key": "ipc",
-          "measured": 0.8742708592992775,
-          "error": 0.0033043639617996905
+          "measured": 1.0475647038700957,
+          "error": 0.012686253043814391
         },
         {
           "key": "l3_mpki",
-          "measured": 0.026830415915467264,
-          "error": 0.4099783703167489
+          "measured": 0.01475772269934852,
+          "error": -0.21842547861543435
         },
         {
           "key": "dtlb_pki",
-          "measured": 5.07170562786608,
-          "error": -0.41512540051763014
+          "measured": 8.616049069254263,
+          "error": -0.0433041978698866
         },
         {
           "key": "itlb_pki",
-          "measured": 0.018569502369502403,
-          "error": 0.08710265455160449
+          "measured": 0.00843937704696258,
+          "error": -0.5244224051783009
         }
       ],
-      "accesses_per_s": 1711.265456415488,
-      "instructions_per_access": 593316.9534041026
+      "accesses_per_s": 11322.1278377357,
+      "instructions_per_access": 216705.1195854698
+    },
+    {
+      "end_s": 2.30784852,
+      "seconds": 0.100104491,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
+        },
+        {
+          "key": "ipc",
+          "measured": 1.048183439672091,
+          "error": 0.013284388164854534
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.012806483446790062,
+          "error": -0.32176384023083976
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.615496520297466,
+          "error": -0.04336555096376877
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.007709298719774781,
+          "error": -0.5655639364718206
+        }
+      ],
+      "accesses_per_s": 11268.225718264728,
+      "instructions_per_access": 218455.57941862367
+    },
+    {
+      "end_s": 2.408173724,
+      "seconds": 0.100099364,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0479294233449217,
+          "error": 0.013038829258924653
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.014319269964033585,
+          "error": -0.24164609969192682
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.61847522188561,
+          "error": -0.04303480640994012
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.0076661793021223145,
+          "error": -0.5679938111916202
+        }
+      ],
+      "accesses_per_s": 11278.792940182917,
+      "instructions_per_access": 220235.1836581908
+    },
+    {
+      "end_s": 2.5084933,
+      "seconds": 0.100096801,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0474364789232364,
+          "error": 0.012562297320123117
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.016422427867570352,
+          "error": -0.13026206942244084
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.618275082492207,
+          "error": -0.043057029184667896
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.007721752319754986,
+          "error": -0.5648621485208262
+        }
+      ],
+      "accesses_per_s": 11279.081736088649,
+      "instructions_per_access": 221618.63517959687
+    },
+    {
+      "end_s": 2.608791143,
+      "seconds": 0.100071061,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0481005650418427,
+          "error": 0.013204272828333025
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.014337004184692609,
+          "error": -0.24070688872380658
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.618212257926885,
+          "error": -0.04306400500356488
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.007715784473472778,
+          "error": -0.5651984498811474
+        }
+      ],
+      "accesses_per_s": 11281.982910124236,
+      "instructions_per_access": 221627.99484618343
+    },
+    {
+      "end_s": 2.709441187,
+      "seconds": 0.100439657,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0486646236240096,
+          "error": 0.013749551196305457
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.012222026787367272,
+          "error": -0.35271688381110394
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.618055694011307,
+          "error": -0.043081389310408356
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.007780116427992801,
+          "error": -0.5615732017105111
+        }
+      ],
+      "accesses_per_s": 11290.36113693618,
+      "instructions_per_access": 221623.1919336612
+    },
+    {
+      "end_s": 2.809724287,
+      "seconds": 0.100062248,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3401104348453661,
+          "error": 0.31491302359326123
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3431597404751088,
+          "error": -0.4802168446725498
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0485509548358407,
+          "error": 0.013639666987002197
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.011911553783884888,
+          "error": -0.36915965035734655
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.620057726475604,
+          "error": -0.04285909066297424
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.007871104621521206,
+          "error": -0.5564458154123738
+        }
+      ],
+      "accesses_per_s": 10113.704421271847,
+      "instructions_per_access": 231958.81373824325
+    },
+    {
+      "end_s": 2.909933987,
+      "seconds": 0.100089268,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0470563042784868,
+          "error": 0.012194780511785255
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.016590202672436667,
+          "error": -0.12137665291982777
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.616417815374074,
+          "error": -0.043263253596932776
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008809948308010842,
+          "error": -0.5035398935831108
+        }
+      ],
+      "accesses_per_s": 10220.87602838698,
+      "instructions_per_access": 221695.25772841202
+    },
+    {
+      "end_s": 3.010214594,
+      "seconds": 0.10006241,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0428861637206417,
+          "error": 0.008163483924005293
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.027957114097638285,
+          "error": 0.4806192334214228
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.614889667655643,
+          "error": -0.04343293374795179
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011985683480644417,
+          "error": -0.3245801804683466
+        }
+      ],
+      "accesses_per_s": 3967.5238683537605,
+      "instructions_per_access": 212962.81294545118
+    },
+    {
+      "end_s": 3.110539538,
+      "seconds": 0.100075157,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0393647058054987,
+          "error": 0.004759272224085426
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.041193134425319994,
+          "error": 1.1816038272775529
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.604605975054127,
+          "error": -0.04457479882592279
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.014331478244509348,
+          "error": -0.19238944819791928
+        }
+      ],
+      "accesses_per_s": 3907.0635682340226,
+      "instructions_per_access": 236373.53433524334
+    },
+    {
+      "end_s": 3.210885163,
+      "seconds": 0.1001034,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0400991270326683,
+          "error": 0.005469241047920915
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.04276997101687194,
+          "error": 1.2651136837405887
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.588422482091524,
+          "error": -0.04637175699743253
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.014246069987525364,
+          "error": -0.1972023927089097
+        }
+      ],
+      "accesses_per_s": 4325.527404663578,
+      "instructions_per_access": 222594.131339961
+    },
+    {
+      "end_s": 3.3112047479999998,
+      "seconds": 0.100100545,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0409781274434105,
+          "error": 0.006318975321221571
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.04028744102662486,
+          "error": 1.1336379656722555
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.591686621720838,
+          "error": -0.04600931840686383
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.014047769351387717,
+          "error": -0.20837707290878263
+        }
+      ],
+      "accesses_per_s": 4435.540286019422,
+      "instructions_per_access": 220421.42918955468
+    },
+    {
+      "end_s": 3.411469762,
+      "seconds": 0.100072023,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.040466102343951,
+          "error": 0.005823997991878205
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.042478438027355195,
+          "error": 1.249673987427592
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.599387667792199,
+          "error": -0.045154221321266653
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.014330014627287547,
+          "error": -0.192471926271148
+        }
+      ],
+      "accesses_per_s": 4436.804480309147,
+      "instructions_per_access": 221811.0210431984
+    },
+    {
+      "end_s": 3.511813033,
+      "seconds": 0.100106965,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0397960095162948,
+          "error": 0.005176215766757705
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.04115354017774313,
+          "error": 1.1795069010966024
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.600881676947672,
+          "error": -0.044988331796277044
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01433427440672827,
+          "error": -0.19223187826172541
+        }
+      ],
+      "accesses_per_s": 4365.330624097934,
+      "instructions_per_access": 221860.60581073983
+    },
+    {
+      "end_s": 3.612155452,
+      "seconds": 0.100094746,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.039829008904464,
+          "error": 0.0052081164471016374
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.040809961368140205,
+          "error": 1.16131083865906
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.598958233868398,
+          "error": -0.04520190415465002
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.014186333129024752,
+          "error": -0.20056869703798932
+        }
+      ],
+      "accesses_per_s": 4395.835122055258,
+      "instructions_per_access": 221827.2286367606
+    },
+    {
+      "end_s": 3.7124839830000003,
+      "seconds": 0.100081999,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0398586280593842,
+          "error": 0.005236749438365785
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.043830587431009524,
+          "error": 1.321284326267216
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.603257851334455,
+          "error": -0.04472448974492711
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.014063736939885784,
+          "error": -0.20747726391923804
+        }
+      ],
+      "accesses_per_s": 4006.7145341491428,
+      "instructions_per_access": 229777.36078395075
+    },
+    {
+      "end_s": 3.812854806,
+      "seconds": 0.100107977,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3839658723602422,
+          "error": 0.4844640871174057
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.2961208524873338,
+          "error": -0.551466524450046
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0396662045360932,
+          "error": 0.005050732616608405
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.0456920778846976,
+          "error": 1.4198695578807237
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.59618364668171,
+          "error": -0.04550998456282921
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.014069727379741326,
+          "error": -0.2071396893610012
+        }
+      ],
+      "accesses_per_s": 4325.329638815896,
+      "instructions_per_access": 221788.05201024818
+    },
+    {
+      "end_s": 3.9130924179999997,
+      "seconds": 0.100107757,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0407964995483292,
+          "error": 0.006143394689458635
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.04319862126931549,
+          "error": 1.2878151616528777
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.591049484708726,
+          "error": -0.04608006386107017
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.013675199675391134,
+          "error": -0.22937219961398486
+        }
+      ],
+      "accesses_per_s": 5174.424195719418,
+      "instructions_per_access": 214709.0655492067
+    },
+    {
+      "end_s": 4.013447968,
+      "seconds": 0.100102729,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0430302814294068,
+          "error": 0.00830280326337155
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03405421705299529,
+          "error": 0.8035240894922
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.605669664254783,
+          "error": -0.04445669051608621
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011437771427545255,
+          "error": -0.3554562386106359
+        }
+      ],
+      "accesses_per_s": 7292.508478964644,
+      "instructions_per_access": 221796.6373931807
+    },
+    {
+      "end_s": 4.113941394,
+      "seconds": 0.100252014,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0445195650034984,
+          "error": 0.009742501447927375
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.02763720373767206,
+          "error": 0.463676660941212
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.612184403363079,
+          "error": -0.043733316785646355
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.009899269607157268,
+          "error": -0.44215422488348094
+        }
+      ],
+      "accesses_per_s": 7391.37270598873,
+      "instructions_per_access": 221732.45571788884
+    },
+    {
+      "end_s": 4.214254721,
+      "seconds": 0.100090932,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0450990422736082,
+          "error": 0.010302685141806664
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.025089054347691132,
+          "error": 0.3287257148864636
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.611207744760074,
+          "error": -0.043841761523843475
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.010116223912089817,
+          "error": -0.42992836911807575
+        }
+      ],
+      "accesses_per_s": 7363.304400042954,
+      "instructions_per_access": 221666.45232772245
+    },
+    {
+      "end_s": 4.314546184,
+      "seconds": 0.100079223,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0445059971184032,
+          "error": 0.009729385302768954
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.02712044336866199,
+          "error": 0.43630883825557587
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.611107975730786,
+          "error": -0.04385283952615474
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01033395298869999,
+          "error": -0.41765885325205776
+        }
+      ],
+      "accesses_per_s": 6484.862497383698,
+      "instructions_per_access": 223907.97613277272
+    },
+    {
+      "end_s": 4.414848083,
+      "seconds": 0.100064613,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0453496830852012,
+          "error": 0.010544980919255304
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.02381397772284254,
+          "error": 0.261197179278549
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.610065073791382,
+          "error": -0.043968639691571706
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01008734513026199,
+          "error": -0.43155575245770295
+        }
+      ],
+      "accesses_per_s": 7195.350867943695,
+      "instructions_per_access": 221732.2972184625
+    },
+    {
+      "end_s": 4.515191945,
+      "seconds": 0.100101527,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0459312626023864,
+          "error": 0.01110719686632719
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.021307616731293604,
+          "error": 0.12845936245581652
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.610517860175321,
+          "error": -0.04391836388310151
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.00995612025178269,
+          "error": -0.4389505651009437
+        }
+      ],
+      "accesses_per_s": 7382.504764387861,
+      "instructions_per_access": 219577.11167805432
+    },
+    {
+      "end_s": 4.615518221,
+      "seconds": 0.100094647,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.044464179845089,
+          "error": 0.00968896032694788
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.027490358064256218,
+          "error": 0.45589965907882785
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.609758092380243,
+          "error": -0.044002725828385485
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.010677643264429736,
+          "error": -0.39829114473689115
+        }
+      ],
+      "accesses_per_s": 7073.30532870554,
+      "instructions_per_access": 221654.08930144174
+    },
+    {
+      "end_s": 4.715872258,
+      "seconds": 0.100087876,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0445586950666828,
+          "error": 0.009780328683725916
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.027363730624072255,
+          "error": 0.44919342242076254
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.609492818938815,
+          "error": -0.044032180858851445
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.010636010984817059,
+          "error": -0.40063721593325596
+        }
+      ],
+      "accesses_per_s": 7323.564344596542,
+      "instructions_per_access": 221681.59902712304
+    },
+    {
+      "end_s": 4.816197663,
+      "seconds": 0.100077461,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3391762509172888,
+          "error": 0.31130134195221176
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.36958982350813885,
+          "error": -0.44018326749518466
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0444168621247698,
+          "error": 0.009643218040370551
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.027846695314070004,
+          "error": 0.4747714132883711
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.616206003546514,
+          "error": -0.043286772437719244
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01028436147526056,
+          "error": -0.42045344490898345
+        }
+      ],
+      "accesses_per_s": 6514.953451906618,
+      "instructions_per_access": 226628.84277503795
+    },
+    {
+      "end_s": 4.91661746,
+      "seconds": 0.100312675,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.044344968953916,
+          "error": 0.00957371853781717
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.028212403424527847,
+          "error": 0.49413945178730295
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.60809658612111,
+          "error": -0.04418721364299154
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.010556671756423486,
+          "error": -0.4051081572366789
+        }
+      ],
+      "accesses_per_s": 6828.64852322999,
+      "instructions_per_access": 221708.96258125152
+    },
+    {
+      "end_s": 5.01712657,
+      "seconds": 0.100264311,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0436287713407362,
+          "error": 0.008881366576501116
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.030565763093749775,
+          "error": 0.6187742612758337
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.601979578099993,
+          "error": -0.04486642471158704
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01095237100975211,
+          "error": -0.38280962760308485
+        }
+      ],
+      "accesses_per_s": 5734.842181282232,
+      "instructions_per_access": 216342.20276076076
+    },
+    {
+      "end_s": 5.117496992,
+      "seconds": 0.100131923,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.042514461661113,
+          "error": 0.00780415760791036
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03510925341972007,
+          "error": 0.8593992106179433
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.607044902374835,
+          "error": -0.04430398890937448
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011364832244273537,
+          "error": -0.3595665231915467
+        }
+      ],
+      "accesses_per_s": 5762.398071592013,
+      "instructions_per_access": 221790.74650265978
+    },
+    {
+      "end_s": 5.217816128,
+      "seconds": 0.100099064,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0423286704817234,
+          "error": 0.007624552307531666
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03601861805142326,
+          "error": 0.9075595020983385
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.605152520065392,
+          "error": -0.044514112389047934
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011449649230615422,
+          "error": -0.3547868980912538
+        }
+      ],
+      "accesses_per_s": 5684.368836855458,
+      "instructions_per_access": 221721.06070083965
+    },
+    {
+      "end_s": 5.318098136,
+      "seconds": 0.100078591,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0421231413301382,
+          "error": 0.00742586620667204
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.035369524217044736,
+          "error": 0.8731832495237823
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.608927993153719,
+          "error": -0.04409489712859328
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01174575243910912,
+          "error": -0.3381008262484151
+        }
+      ],
+      "accesses_per_s": 5135.9635948511705,
+      "instructions_per_access": 229109.29776542875
+    },
+    {
+      "end_s": 5.418363481,
+      "seconds": 0.100075669,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0422104945111434,
+          "error": 0.007510310981526409
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03450275957494641,
+          "error": 0.8272790694478843
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.604992126106321,
+          "error": -0.044531921970457786
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011670433058900805,
+          "error": -0.342345240200251
+        }
+      ],
+      "accesses_per_s": 5795.614516451546,
+      "instructions_per_access": 221791.3246298491
+    },
+    {
+      "end_s": 5.518721364,
+      "seconds": 0.100146696,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0422915700195001,
+          "error": 0.007588687097548667
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03456862594891595,
+          "error": 0.8307673772823209
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.601345178102305,
+          "error": -0.0449368662573328
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011363482597312779,
+          "error": -0.35964257878805395
+        }
+      ],
+      "accesses_per_s": 5891.357614034517,
+      "instructions_per_access": 214996.50989912797
+    },
+    {
+      "end_s": 5.61902833,
+      "seconds": 0.100070419,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0425000394488273,
+          "error": 0.007790215580209054
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.034107665590202854,
+          "error": 0.8063547440408553
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.6055955427307,
+          "error": -0.04446492070957369
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011423671262236729,
+          "error": -0.356250814166
+        }
+      ],
+      "accesses_per_s": 5845.883387377443,
+      "instructions_per_access": 221786.76859779606
+    },
+    {
+      "end_s": 5.719325883,
+      "seconds": 0.100090521,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0429119912188214,
+          "error": 0.008188451500958266
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03389364829641857,
+          "error": 0.7950203080058933
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.605591063147767,
+          "error": -0.044465418106716365
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011627920572595419,
+          "error": -0.34474091299392984
+        }
+      ],
+      "accesses_per_s": 5754.790705905108,
+      "instructions_per_access": 221745.86780708027
+    },
+    {
+      "end_s": 5.819681112,
+      "seconds": 0.100126203,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.33472391453041545,
+          "error": 0.29408800622148146
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3360230267949445,
+          "error": -0.49102680609229116
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0423619320332271,
+          "error": 0.007656706422536023
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.0353393269425218,
+          "error": 0.8715839905552273
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.612730671055495,
+          "error": -0.04367266114128166
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.012077237714714098,
+          "error": -0.31942089653159295
+        }
+      ],
+      "accesses_per_s": 5173.470924489167,
+      "instructions_per_access": 227846.34812466783
+    },
+    {
+      "end_s": 5.919891564,
+      "seconds": 0.100091684,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.043018354196873,
+          "error": 0.008291273145585734
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.032453304583537776,
+          "error": 0.7187391655181185
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.60831587626712,
+          "error": -0.044162864436011647
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011185731686921427,
+          "error": -0.36965923641229304
+        }
+      ],
+      "accesses_per_s": 7193.404798744319,
+      "instructions_per_access": 221782.33217231891
+    },
+    {
+      "end_s": 6.020230228,
+      "seconds": 0.100098963,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0454779367146427,
+          "error": 0.010668964370548225
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.02422209537235756,
+          "error": 0.28281124284964304
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.607725841161216,
+          "error": -0.044228379860122076
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008986180173434747,
+          "error": -0.4936088375083728
+        }
+      ],
+      "accesses_per_s": 10329.777342448593,
+      "instructions_per_access": 217981.6276553862
+    },
+    {
+      "end_s": 6.120478848,
+      "seconds": 0.100067376,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0466588544240438,
+          "error": 0.011810563668298886
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.015015487662888991,
+          "error": -0.20477414960531898
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.61771378642488,
+          "error": -0.04311935352695621
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.00792453411037592,
+          "error": -0.553434945337405
+        }
+      ],
+      "accesses_per_s": 10293.064944562951,
+      "instructions_per_access": 221721.5540720582
+    },
+    {
+      "end_s": 6.22076997,
+      "seconds": 0.100062919,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0467813551014264,
+          "error": 0.011928985710885498
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.01391127247193696,
+          "error": -0.2632537996811399
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.621211045519676,
+          "error": -0.04273103017038521
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.007924458577647113,
+          "error": -0.5534392017740232
+        }
+      ],
+      "accesses_per_s": 9334.127060594745,
+      "instructions_per_access": 232200.53222612425
+    },
+    {
+      "end_s": 6.3211041869999995,
+      "seconds": 0.1000645,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0464004306275618,
+          "error": 0.011560744038838399
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.01923302736524427,
+          "error": 0.018588332631472592
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.615877409830674,
+          "error": -0.04332325832887703
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008895282476141358,
+          "error": -0.4987311241431641
+        }
+      ],
+      "accesses_per_s": 10293.36078229542,
+      "instructions_per_access": 222411.40333941588
+    },
+    {
+      "end_s": 6.42161407,
+      "seconds": 0.100260257,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0465015725225033,
+          "error": 0.01165851843524145
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.01682248701214676,
+          "error": -0.10907478729105702
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.611064437759602,
+          "error": -0.04385767382943343
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008758911214060555,
+          "error": -0.5064159469046415
+        }
+      ],
+      "accesses_per_s": 10512.640118207555,
+      "instructions_per_access": 211672.07274018935
+    },
+    {
+      "end_s": 6.521932905,
+      "seconds": 0.100104412,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0469675601389055,
+          "error": 0.01210899109003379
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.016532160306487638,
+          "error": -0.12445059835916326
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.616669104499096,
+          "error": -0.04323535133580399
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.007879424620728808,
+          "error": -0.5559769650232927
+        }
+      ],
+      "accesses_per_s": 10419.121187186034,
+      "instructions_per_access": 220889.2989640349
+    },
+    {
+      "end_s": 6.6222133119999995,
+      "seconds": 0.10006998,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.046960423855933,
+          "error": 0.012102092408131435
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.01908520917119296,
+          "error": 0.010759825711995009
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.617083834268293,
+          "error": -0.04318930120006077
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.0080018168970948,
+          "error": -0.549079889078589
+        }
+      ],
+      "accesses_per_s": 10462.678217783196,
+      "instructions_per_access": 221638.08895741552
+    },
+    {
+      "end_s": 6.722494459,
+      "seconds": 0.100061817,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0465737635050203,
+          "error": 0.011728305833880018
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.019528134240522924,
+          "error": 0.03421730327295181
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.619176292653389,
+          "error": -0.04295696197623984
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008209105372998323,
+          "error": -0.5373987241945133
+        }
+      ],
+      "accesses_per_s": 9364.211325484925,
+      "instructions_per_access": 227989.2435332798
+    },
+    {
+      "end_s": 6.822903149,
+      "seconds": 0.100152295,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3214974736743635,
+          "error": 0.24295279378580314
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.33235022911234097,
+          "error": -0.4965899830713269
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0465457739417119,
+          "error": 0.01170124817731102
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.01927115207017965,
+          "error": 0.020607431283740527
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.617305574437207,
+          "error": -0.043164679951149705
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008498825503602403,
+          "error": -0.5210723529330579
+        }
+      ],
+      "accesses_per_s": 10234.413499960236,
+      "instructions_per_access": 221681.72350038894
+    },
+    {
+      "end_s": 6.923143714,
+      "seconds": 0.100101516,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0460335657087376,
+          "error": 0.011206093811845471
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.021532888872261412,
+          "error": 0.14038985941290896
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.612601586069399,
+          "error": -0.04368699428438742
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.009015877375254187,
+          "error": -0.4919353343889326
+        }
+      ],
+      "accesses_per_s": 8341.532010364359,
+      "instructions_per_access": 214915.5505151762
+    },
+    {
+      "end_s": 7.023435349,
+      "seconds": 0.100070952,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.043568144217907,
+          "error": 0.008822758021226316
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.031202654723540602,
+          "error": 0.6525042805253196
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.608778829418112,
+          "error": -0.04411145974546536
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.011039245530985016,
+          "error": -0.37791405585302273
+        }
+      ],
+      "accesses_per_s": 4966.476185816639,
+      "instructions_per_access": 221724.1648895075
+    },
+    {
+      "end_s": 7.123730648,
+      "seconds": 0.100064401,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0410472091431797,
+          "error": 0.006385756960040431
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.039968702161094945,
+          "error": 1.1167574359761525
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.606733560887818,
+          "error": -0.04433855917368743
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.012954237520420468,
+          "error": -0.2700000144053411
+        }
+      ],
+      "accesses_per_s": 4457.129563989495,
+      "instructions_per_access": 229361.74150545013
+    },
+    {
+      "end_s": 7.224082061,
+      "seconds": 0.10008392,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0403541241837604,
+          "error": 0.005715748121443265
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.041317679365510174,
+          "error": 1.1881997739559864
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.603212458780707,
+          "error": -0.04472952997453461
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.013170923320541279,
+          "error": -0.25778928948097485
+        }
+      ],
+      "accesses_per_s": 4995.807518330616,
+      "instructions_per_access": 221797.51488430687
+    },
+    {
+      "end_s": 7.324414707,
+      "seconds": 0.100102659,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0410329668634457,
+          "error": 0.006371988874073661
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03899070621595378,
+          "error": 1.0649624044315165
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.600161003930824,
+          "error": -0.04506835279480965
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.012875738114293718,
+          "error": -0.2744236298633242
+        }
+      ],
+      "accesses_per_s": 5034.831292543388,
+      "instructions_per_access": 214681.87806529307
+    },
+    {
+      "end_s": 7.424715144,
+      "seconds": 0.100083951,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.041067016945272,
+          "error": 0.0064049052654461015
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03915560603076251,
+          "error": 1.0736955603839065
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.601990476621166,
+          "error": -0.04486521457810564
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.012613235351280377,
+          "error": -0.28921624215843034
+        }
+      ],
+      "accesses_per_s": 5125.696926173508,
+      "instructions_per_access": 221734.1970979482
+    },
+    {
+      "end_s": 7.52500857,
+      "seconds": 0.100060947,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0418293043605835,
+          "error": 0.0071418124784347935
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03543736274579385,
+          "error": 0.8767760034139787
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.603027265093445,
+          "error": -0.04475009323058856
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01278077630028104,
+          "error": -0.27977493847967627
+        }
+      ],
+      "accesses_per_s": 4517.246873547979,
+      "instructions_per_access": 229328.97267352778
+    },
+    {
+      "end_s": 7.625356369,
+      "seconds": 0.10010344,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0418816189586528,
+          "error": 0.007192385272747722
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.035761400487066074,
+          "error": 0.8939371635539881
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.603675915200427,
+          "error": -0.04467806940279782
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01281434778425193,
+          "error": -0.2778831109771692
+        }
+      ],
+      "accesses_per_s": 4934.895344255901,
+      "instructions_per_access": 221788.2641797678
+    },
+    {
+      "end_s": 7.725687942,
+      "seconds": 0.100100164,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0411800134584865,
+          "error": 0.006514139583050984
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.03917695903603215,
+          "error": 1.0748264235403522
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.602286359990575,
+          "error": -0.04483236072883452
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.012925981907952536,
+          "error": -0.27159228077084846
+        }
+      ],
+      "accesses_per_s": 4945.046843279897,
+      "instructions_per_access": 214376.98967880468
+    },
+    {
+      "end_s": 7.825989421,
+      "seconds": 0.100098773,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3376169930988766,
+          "error": 0.3052730399581785
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3154833735701414,
+          "error": -0.5221381647491619
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0432102917089165,
+          "error": 0.008476820137739923
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.030007646180684508,
+          "error": 0.5892161805277197
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.601623849304472,
+          "error": -0.04490592358660923
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.013051246291487278,
+          "error": -0.2645333552237648
+        }
+      ],
+      "accesses_per_s": 5074.987282811149,
+      "instructions_per_access": 221766.05413699968
+    },
+    {
+      "end_s": 7.926197457,
+      "seconds": 0.100099502,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0410313924144554,
+          "error": 0.006370466846037876
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.038527327452413704,
+          "error": 1.0404216915646458
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.593376440287564,
+          "error": -0.045821686893144004
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01470274892082348,
+          "error": -0.17146752300287793
+        }
+      ],
+      "accesses_per_s": 3696.3220855983877,
+      "instructions_per_access": 221921.42242879927
+    },
+    {
+      "end_s": 8.026490283,
+      "seconds": 0.100061388,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0334368676442467,
+          "error": -0.0009711997878016885
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.07086505431412254,
+          "error": 2.7530398176472453
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.587222607490514,
+          "error": -0.046504986855415244
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.01924496134498471,
+          "error": 0.08449621079300768
+        }
+      ],
+      "accesses_per_s": 2138.687102761357,
+      "instructions_per_access": 227231.5658636255
+    },
+    {
+      "end_s": 8.126925392,
+      "seconds": 0.100194787,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.033397381328863,
+          "error": -0.001009371414456002
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.06997822031810214,
+          "error": 2.706072757071035
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.562676387624652,
+          "error": -0.049230512826202805
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.023020188763827384,
+          "error": 0.29723864021252494
+        }
+      ],
+      "accesses_per_s": 2235.645253679715,
+      "instructions_per_access": 222109.4196693088
+    },
+    {
+      "end_s": 8.227456095,
+      "seconds": 0.100293076,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0337053624682948,
+          "error": -0.0007116444435614327
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.07009566272729623,
+          "error": 2.7122925510477964
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.550326548407114,
+          "error": -0.05060179556164613
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.02325395785198629,
+          "error": 0.31041204626745256
+        }
+      ],
+      "accesses_per_s": 2313.220505870216,
+      "instructions_per_access": 215482.29276317597
+    },
+    {
+      "end_s": 8.327895472,
+      "seconds": 0.100191283,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.033261893910456,
+          "error": -0.0011403478072021858
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.07286153130276923,
+          "error": 2.858773986708825
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.565820056204458,
+          "error": -0.04888145091750022
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.02235653272205525,
+          "error": 0.2598401518669337
+        }
+      ],
+      "accesses_per_s": 2295.608890446088,
+      "instructions_per_access": 222045.7987167118
+    },
+    {
+      "end_s": 8.428226766,
+      "seconds": 0.100100135,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0330826395953054,
+          "error": -0.0013136338868889187
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.07239175458143905,
+          "error": 2.8338944356011564
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.566397493291351,
+          "error": -0.04881733433313723
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.022357518350392798,
+          "error": 0.25989569420750586
+        }
+      ],
+      "accesses_per_s": 2347.649181492113,
+      "instructions_per_access": 222040.35077255737
+    },
+    {
+      "end_s": 8.528589978,
+      "seconds": 0.100103711,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0294884946073724,
+          "error": -0.004788112558497079
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.08807436226384428,
+          "error": 3.6644512120866555
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.564925902754648,
+          "error": -0.04898073457350281
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.022616673950830606,
+          "error": 0.27449968647553047
+        }
+      ],
+      "accesses_per_s": 2097.82432541387,
+      "instructions_per_access": 222077.804842593
+    },
+    {
+      "end_s": 8.628950224,
+      "seconds": 0.10009643,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0295868988181374,
+          "error": -0.004692984695640302
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.08707518385890672,
+          "error": 3.61153434953771
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.56617467228996,
+          "error": -0.04884207559388715
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.0220309343163417,
+          "error": 0.24149196031140172
+        }
+      ],
+      "accesses_per_s": 2407.678275838609,
+      "instructions_per_access": 222031.6477320854
+    },
+    {
+      "end_s": 8.729275948,
+      "seconds": 0.100093966,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0303048767000105,
+          "error": -0.003998911739309981
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.08464238662955018,
+          "error": 3.482692497112608
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.56905296950168,
+          "error": -0.0485224795890825
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.021291102993807084,
+          "error": 0.19980082612141983
+        }
+      ],
+      "accesses_per_s": 2407.7375453381474,
+      "instructions_per_access": 221974.39077036778
+    },
+    {
+      "end_s": 8.829607181,
+      "seconds": 0.100065012,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3234966792859272,
+          "error": 0.25068199355787435
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3289282334505185,
+          "error": -0.5017732708898697
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0296071606044046,
+          "error": -0.004673397521369214
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.08878014400407408,
+          "error": 3.701829677386482
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.572475694726215,
+          "error": -0.048142432211469195
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.021920112835517244,
+          "error": 0.23524692433163788
+        }
+      ],
+      "accesses_per_s": 2138.6096470962298,
+      "instructions_per_access": 224323.12693069028
+    },
+    {
+      "end_s": 8.929846908,
+      "seconds": 0.100118464,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0356927961419518,
+          "error": 0.0012096180357043219
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.06339307803818905,
+          "error": 2.3573211555858316
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.585152174836107,
+          "error": -0.04673488041952363
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.017288686166608547,
+          "error": -0.025744229818230557
+        }
+      ],
+      "accesses_per_s": 5783.149050309042,
+      "instructions_per_access": 221848.70854824458
+    },
+    {
+      "end_s": 9.030189929,
+      "seconds": 0.10008378,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0441298779485852,
+          "error": 0.009365788943161063
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.02850423643322486,
+          "error": 0.5095950372284535
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.607447169238277,
+          "error": -0.044259322610877526
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.010532686313601705,
+          "error": -0.4064597900816674
+        }
+      ],
+      "accesses_per_s": 8323.026968006205,
+      "instructions_per_access": 232306.54278839298
+    },
+    {
+      "end_s": 9.130531027,
+      "seconds": 0.100085023,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0457167577308648,
+          "error": 0.010899833890275806
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.023421027734668042,
+          "error": 0.24038640073281095
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.619763579715839,
+          "error": -0.04289175168521493
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.00903945730176112,
+          "error": -0.490606553286745
+        }
+      ],
+      "accesses_per_s": 9162.210014179644,
+      "instructions_per_access": 221726.23813876754
+    },
+    {
+      "end_s": 9.231494983,
+      "seconds": 0.100726118,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0459110394827327,
+          "error": 0.011087647071272645
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.0225557221793843,
+          "error": 0.19455949444108667
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.614191603930553,
+          "error": -0.04351044429020196
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.00893756084297018,
+          "error": -0.49634864450070315
+        }
+      ],
+      "accesses_per_s": 9113.822891496722,
+      "instructions_per_access": 212924.14471318494
+    },
+    {
+      "end_s": 9.332018986,
+      "seconds": 0.100280927,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0470289938767918,
+          "error": 0.012168379404283763
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.017688529455792357,
+          "error": -0.06320885511570128
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.61260027261114,
+          "error": -0.043687140126175576
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008787160683729336,
+          "error": -0.5048240266994762
+        }
+      ],
+      "accesses_per_s": 9343.750880962638,
+      "instructions_per_access": 221591.97877006768
+    },
+    {
+      "end_s": 9.432396328,
+      "seconds": 0.100147456,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0468533978548356,
+          "error": 0.011998629815673774
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.018623433712811853,
+          "error": -0.013695975513168663
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.617480602752167,
+          "error": -0.0431452454223036
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008898080398588866,
+          "error": -0.4985734550141894
+        }
+      ],
+      "accesses_per_s": 8357.676105122431,
+      "instructions_per_access": 229200.38174500453
+    },
+    {
+      "end_s": 9.532723076,
+      "seconds": 0.100094207,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0459943599457842,
+          "error": 0.011168193396686016
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.022409870014931946,
+          "error": 0.18683510918550905
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.61515417720157,
+          "error": -0.04340356353775712
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008802298371732287,
+          "error": -0.5039709844415532
+        }
+      ],
+      "accesses_per_s": 9221.312877777233,
+      "instructions_per_access": 221639.12749108666
+    },
+    {
+      "end_s": 9.633027298,
+      "seconds": 0.100071723,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0460282765446483,
+          "error": 0.011200980749383924
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.022151967040456057,
+          "error": 0.17317647106456457
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.613650006504464,
+          "error": -0.04357058136461034
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008700944635881516,
+          "error": -0.5096824920153796
+        }
+      ],
+      "accesses_per_s": 9223.384711783168,
+      "instructions_per_access": 214374.89046556872
+    },
+    {
+      "end_s": 9.733367094,
+      "seconds": 0.100084852,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.0455686483755062,
+          "error": 0.01075665580536639
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.02280841766940629,
+          "error": 0.20794234223498734
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.616359617150081,
+          "error": -0.043269715723150706
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008710216423324195,
+          "error": -0.5091600062504766
+        }
+      ],
+      "accesses_per_s": 8342.92086478781,
+      "instructions_per_access": 229059.81982377204
+    },
+    {
+      "end_s": 9.833943016,
+      "seconds": 0.100337103,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.3007079665656414,
+          "error": 0.1625777424770362
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.39654291352850934,
+          "error": -0.3993574930112189
+        },
+        {
+          "key": "ipc",
+          "measured": 1.045787694431079,
+          "error": 0.010968408767682344
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.022474370909331423,
+          "error": 0.19025110071050044
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.615480052248447,
+          "error": -0.043367379518044494
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.008633220775424395,
+          "error": -0.5134988816006547
+        }
+      ],
+      "accesses_per_s": 9198.989928979712,
+      "instructions_per_access": 221637.0716905632
+    },
+    {
+      "end_s": 9.934191934,
+      "seconds": 0.100085362,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.309499348969161,
+          "error": 0.19656641801718042
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.37531004751788366,
+          "error": -0.4315188592494841
+        },
+        {
+          "key": "ipc",
+          "measured": 1.044934035644824,
+          "error": 0.010143172374706463
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.025660848341478398,
+          "error": 0.35900813895210754
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.610706535604736,
+          "error": -0.04389741402663763
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.009727403162570668,
+          "error": -0.4518392798220406
+        }
+      ],
+      "accesses_per_s": 6914.09798767576,
+      "instructions_per_access": 213596.0437584049
+    },
+    {
+      "end_s": 10.000285038,
+      "seconds": 0.065967824,
+      "pass": 11,
+      "knobs": {
+        "duty": 0.2620091736316681,
+        "cv": 0.7082140445709229,
+        "ops": 46863,
+        "chains": 1.0,
+        "lines": 0.03125,
+        "seq": 0.0,
+        "dep": 0.0,
+        "wset": 1.0,
+        "wfrac": 0.25,
+        "ntlines": 0.0,
+        "tlbvisits": 1909.1390158083955,
+        "sparse_pages": 256,
+        "codevisits": 7.170594745748937,
+        "code_pages": 103,
+        "period_ms": 10
+      },
+      "values": [
+        {
+          "key": "cpu_usage_cores",
+          "measured": 0.29932035006492863,
+          "error": 0.1572130290733745
+        },
+        {
+          "key": "cpu_usage_cv_1s",
+          "measured": 0.3853240650164446,
+          "error": -0.4163506533122148
+        },
+        {
+          "key": "ipc",
+          "measured": 1.040797307941514,
+          "error": 0.006144176167359058
+        },
+        {
+          "key": "l3_mpki",
+          "measured": 0.04026702391645947,
+          "error": 1.1325566678710521
+        },
+        {
+          "key": "dtlb_pki",
+          "measured": 8.604473559834174,
+          "error": -0.04458950174648989
+        },
+        {
+          "key": "itlb_pki",
+          "measured": 0.013222181875106393,
+          "error": -0.25490075636313203
+        }
+      ],
+      "accesses_per_s": 4047.4277277965093,
+      "instructions_per_access": 230888.978902848
     }
   ],
   "notes": [
-    "kernel memory: 7885 empty files, open-loop at 1100 bytes each",
+    "sparse stream on the page-cache file: 16384 pages, which the anonymous footprint could not spare",
+    "kernel memory: 9335 empty files, open-loop at 1100 bytes each",
     "DRAM bandwidth modelled: resctrl is not mounted with mbm_total_bytes",
     "kernel mode is not permitted: counters cover user mode only",
-    "L3 misses from the DRAM-fill proxy: the L3 PMU needs CAP_PERFMON",
-    "not within tolerance after 15 passes; holding"
+    "L3 misses from the DRAM-fill proxy: the L3 PMU needs CAP_PERFMON"
   ]
 }
