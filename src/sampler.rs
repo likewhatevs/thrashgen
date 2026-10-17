@@ -106,11 +106,14 @@ impl CounterSource for LiveCounters {
     }
 }
 
-/// Cumulative bytes from a bandwidth monitor, such as resctrl.
+/// Cumulative bytes from a bandwidth monitor, such as resctrl, per
+/// domain in a fixed order, `None` where a domain has no reading yet.
+/// A domain counts towards an interval only with a reading at both
+/// ends: a domain the scope's tasks never ran on stays without one,
+/// and a first reading after none is the domain's whole history.
 pub trait BandwidthSource {
-    /// Total bytes so far, or `None` when the monitor has no reading
-    /// yet; an interval with no reading at either end has no rate.
-    fn read_bytes(&mut self) -> io::Result<Option<u64>>;
+    /// Total bytes so far, per domain.
+    fn read_bytes(&mut self) -> io::Result<Vec<Option<u64>>>;
 }
 
 /// Sum scaled readings by counter name.
@@ -128,7 +131,7 @@ struct Mark {
     t: f64,
     busy: BusyTime,
     counters: BTreeMap<String, f64>,
-    bytes: Option<u64>,
+    bytes: Option<Vec<Option<u64>>>,
 }
 
 /// Builds [`CpuSample`]s and [`Sample`]s for one scope.
@@ -194,7 +197,7 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
             None => BTreeMap::new(),
         };
         let bytes = match &mut self.bandwidth {
-            Some(b) => b.read_bytes()?,
+            Some(b) => Some(b.read_bytes()?),
             None => None,
         };
         Ok(Mark {
@@ -283,11 +286,18 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
                 .sum();
             values.insert(key.clone(), delta.max(0.0) / dt);
         }
-        if let (Some(a), Some(b)) = (prev.bytes, now.bytes) {
-            values.insert(
-                "dram_bytes_per_sec".to_string(),
-                b.saturating_sub(a) as f64 / dt,
-            );
+        if let (Some(a), Some(b)) = (&prev.bytes, &now.bytes) {
+            let mut sum = 0.0;
+            let mut any = false;
+            for (x, y) in a.iter().zip(b) {
+                if let (Some(x), Some(y)) = (x, y) {
+                    sum += y.saturating_sub(*x) as f64;
+                    any = true;
+                }
+            }
+            if any {
+                values.insert("dram_bytes_per_sec".to_string(), sum / dt);
+            }
         }
         // A window shorter than a CPU tick has no memory reads yet; take
         // one now so memory is never missing from a sample.
@@ -402,15 +412,21 @@ mod tests {
 
     struct Bytes(u64);
     impl BandwidthSource for Bytes {
-        fn read_bytes(&mut self) -> io::Result<Option<u64>> {
+        fn read_bytes(&mut self) -> io::Result<Vec<Option<u64>>> {
             self.0 += 1000;
-            Ok(Some(self.0))
+            // A second domain that gets its first reading now: its
+            // history must not count, nor a third that never reads.
+            Ok(vec![
+                Some(self.0),
+                if self.0 > 1000 { Some(1 << 40) } else { None },
+                None,
+            ])
         }
     }
 
     struct NoBw;
     impl BandwidthSource for NoBw {
-        fn read_bytes(&mut self) -> io::Result<Option<u64>> {
+        fn read_bytes(&mut self) -> io::Result<Vec<Option<u64>>> {
             unreachable!()
         }
     }
@@ -692,7 +708,7 @@ mod hw_tests {
 
     struct NoBw;
     impl BandwidthSource for NoBw {
-        fn read_bytes(&mut self) -> io::Result<Option<u64>> {
+        fn read_bytes(&mut self) -> io::Result<Vec<Option<u64>>> {
             unreachable!()
         }
     }

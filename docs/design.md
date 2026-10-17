@@ -150,7 +150,7 @@ PRNG, not from loaded data, so misses overlap.
 | `seq` | dTLB rate down and IPC up at equal MPKI | share of visits that continue where the worker's last one ended, inside the worker's own slice of the working set, never crossing a page within a visit; a walk changes page once per 64 lines and lets the prefetcher stream |
 | `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value loaded before it, and whose further lines each land in a page of their own, each waiting for the line before, so no miss can issue until the previous one completes; lines scattered within one page would be fetched together by the region prefetcher |
 | `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
-| `wfrac` | write share | fraction of main-stream lines stored to |
+| `wfrac` | write share, so DRAM bandwidth at equal misses | fraction of main-stream lines stored to; a dirtied line is written back |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
 | `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks) |
 | `codevisits`, code page count | iTLB rate | calls through a function pointer into one-instruction stubs placed one per executable page at varying offsets; `codevisits` may be below one per access |
@@ -179,9 +179,10 @@ a fitter to stand on.
 
 Knobs depend on the hardware, so they are fit per CPU model and
 cached. Order: footprint first and let it settle; threads and duty for
-busy cores; chains, then ops and lines for IPC and MPKI; ntlines for
-bandwidth; tlbvisits; codevisits; repeat until every verified target is
-within tolerance or the pass limit is hit.
+busy cores; chains, then ops and lines for IPC and MPKI; the write share and then
+non-temporal lines for bandwidth, only while IPC and MPKI are within
+twice their tolerance, since both change them; tlbvisits; codevisits; repeat until
+every verified target is within tolerance or the pass limit is hit.
 
 Busy cores and burstiness are not fitted within the budget: the duty
 and burstiness knobs are solved from the clipped-lognormal model,

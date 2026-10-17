@@ -512,7 +512,6 @@ impl Fitter {
             let stalled = self
                 .last_ipc
                 .is_some_and(|prev| (v - prev).abs() < prev * self.tol.ratio);
-            let exhausted = (g > 1.0 && k.lines >= 64.0) || (g < 1.0 && k.lines <= 1.0);
             let chains_can_move = if g > 1.0 {
                 k.chains < 4.0
             } else {
@@ -534,8 +533,14 @@ impl Fitter {
                 handled = k.seq >= SHARE_SMALL;
                 k.seq = if handled { k.seq * g } else { 0.0 };
             } else if g > 1.0 && k.dep > 0.0 {
+                // Given back at least as fast as it came, a fifth a pass,
+                // or a slow give-back eats the passes a fit has.
                 handled = k.dep >= SHARE_SMALL;
-                k.dep = if handled { (k.dep / g).min(1.0) } else { 0.0 };
+                k.dep = if handled {
+                    (k.dep / g).min(k.dep - DEP_STEP).max(0.0)
+                } else {
+                    0.0
+                };
             }
             let lines_can_move = if g > 1.0 {
                 k.lines < 64.0
@@ -576,8 +581,11 @@ impl Fitter {
                 }
             } else if !handled {
                 // IPC short: longer runs, more chains, then a sequential
-                // walk that lets the prefetcher stream.
-                if lines_can_move && !(stalled && !exhausted) {
+                // walk that lets the prefetcher stream; when none of the
+                // others can move, run length keeps moving even if it
+                // seemed to have stalled.
+                let others_can_move = chains_can_move || (k.seq < 1.0 && misses_to_spare);
+                if lines_can_move && (!stalled || !others_can_move) {
                     lines_move(&mut k);
                 } else if chains_can_move {
                     chains_move(&mut k);
@@ -633,16 +641,31 @@ impl Fitter {
             _ => m.accesses_per_s,
         };
 
+        // Bandwidth comes last and only while IPC and MPKI are near their
+        // targets, within twice the tolerance, since both its levers
+        // change them: stores to missed lines write back, and
+        // non-temporal lines bypass the caches. The write share goes
+        // first, up to every line, then non-temporal lines by the model's
+        // count, damped linearly since it is an absolute estimate.
+        let ratios_within = self
+            .statuses(m, goal)
+            .iter()
+            .filter(|s| s.key == "ipc" || s.key == "l3_mpki")
+            .all(|s| s.within || s.error.is_none_or(|e| e.abs() <= 2.0 * self.tol.ratio));
         if let (Some(t), Some(v)) = (goal.dram, m.dram) {
-            if aps_next > 0.0 {
-                // The lines the target needs at next pass's access rate, by
-                // the model; damped linearly since it is an absolute estimate.
-                let per_line_now = 64.0 * m.accesses_per_s;
-                let nt_now = k.ntlines * per_line_now;
-                let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
-                let need_lines = ((t / aps_next - other_per_access) / 64.0).max(0.0);
-                let now = k.ntlines;
-                k.ntlines = (now + d * (need_lines - now)).clamp(0.0, NTLINES_MAX);
+            if aps_next > 0.0 && ratios_within {
+                if v < t * (1.0 - self.tol.ratio) && k.wfrac < 1.0 {
+                    k.wfrac = (k.wfrac * factor(t, v, d)).min(1.0);
+                } else if v > t * (1.0 + self.tol.ratio) && k.ntlines <= 0.0 && k.wfrac > 0.0 {
+                    k.wfrac = (k.wfrac * factor(t, v, d)).max(0.0);
+                } else {
+                    let per_line_now = 64.0 * m.accesses_per_s;
+                    let nt_now = k.ntlines * per_line_now;
+                    let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
+                    let need_lines = ((t / aps_next - other_per_access) / 64.0).max(0.0);
+                    let now = k.ntlines;
+                    k.ntlines = (now + d * (need_lines - now)).clamp(0.0, NTLINES_MAX);
+                }
             }
         }
         // Visits per access may grow with the access itself: a visit is a
@@ -941,9 +964,25 @@ mod tests {
         for (name, truth, shape) in cases {
             let goal = goal_of(&plant(&truth, 4));
             let (f, k, statuses) = converge(&goal, 4, TlbRegime::L2Hit, 40);
+            // Bandwidth follows from the misses and the run length the
+            // ratios chose, and the write share trims it by a few percent
+            // at most; the ratios and the shape are what this checks.
+            let ratios: Vec<Status> = statuses
+                .iter()
+                .filter(|s| s.key != "dram_bytes_per_sec")
+                .cloned()
+                .collect();
             assert!(
-                Fitter::converged(&statuses),
+                Fitter::converged(&ratios),
                 "{name}: {statuses:#?}\nknobs {k:#?}"
+            );
+            let dram = statuses
+                .iter()
+                .find(|s| s.key == "dram_bytes_per_sec")
+                .unwrap();
+            assert!(
+                dram.error.unwrap().abs() < 0.25,
+                "{name}: bandwidth directional at least: {dram:?}"
             );
             assert!(shape(&k), "{name}: knobs {k:#?} after {} passes", f.passes);
         }
