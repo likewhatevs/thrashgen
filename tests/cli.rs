@@ -200,6 +200,44 @@ fn run_starts_from_its_cached_fit() {
 }
 
 #[test]
+#[serial_test::serial]
+fn run_takes_a_page_cache_target_below_one_page() {
+    let dir = tempfile::tempdir().unwrap();
+    Command::cargo_bin("thrashgen")
+        .unwrap()
+        .args([
+            "run",
+            "--set",
+            "cpu_usage_cores=0.3",
+            "--set",
+            "pagecache_bytes=100",
+        ])
+        .args([
+            "--duration",
+            "0.6",
+            "--window",
+            "0.2",
+            "--pin",
+            "no",
+            "--threads",
+            "1",
+        ])
+        .args([
+            "--sparse-pages",
+            "64",
+            "--code-pages",
+            "64",
+            "--no-huge",
+            "--no-cache",
+        ])
+        .arg("--scratch-dir")
+        .arg(dir.path())
+        .env("XDG_CACHE_HOME", dir.path())
+        .assert()
+        .success();
+}
+
+#[test]
 fn run_rejects_bad_arguments() {
     Command::cargo_bin("thrashgen")
         .unwrap()

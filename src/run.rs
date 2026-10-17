@@ -500,8 +500,10 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             settings.huge,
             sparse,
             code_capacity,
+            // A page-cache target below a page leaves nothing to read.
             cache
                 .as_ref()
+                .filter(|c| c.len() >= PAGE as u64)
                 .map(|c| CacheRead::new(c.file()))
                 .transpose()
                 .context("open the page-cache file for reads")?,
