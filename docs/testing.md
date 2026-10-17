@@ -61,6 +61,9 @@ its dependency files at all.
 
 End-to-end evidence: record a known benchmark, replay the profile,
 record the replay the same way, and plot both. Each experiment writes
-its raw data and plots to `experiments/out/<name>/` and is described in
-`docs/experiments.md`. The plotting code is covered by `tests/plot.rs`
-against fixture recordings, so a broken chart fails `cargo test`.
+its raw data and plots to `experiments/out/<mode>/<name>/` and is
+described in `docs/experiments.md`. The per-experiment plotting code is
+covered by `tests/plot.rs` against fixture recordings, so a broken
+chart fails `cargo test`; the figures across modes come from
+`experiments/plot.py`, which needs Python with seaborn, pandas and
+matplotlib and is run by hand after `experiments/publish.sh`.

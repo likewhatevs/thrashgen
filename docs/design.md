@@ -218,10 +218,10 @@ non-temporal lines) are then set from their measured events per visit
 against the instructions per access the next pass will have, with only
 the measured error damped, so a change in ops never drags them off
 target. All per-access rates are fractional, carried over an
-accumulator, so low targets are reachable. The burstiness knob only
-moves on windows with at least thirty one-second samples and stays
-within twice its target, since clipping at full duty keeps the measured
-value below the knob; the one-second busy-cores ticks sit on wall-clock
+accumulator, so low targets are reachable. The burstiness knob moves
+once three one-second samples are in and stays within twice its
+target, since clipping at full duty keeps the measured value below the
+knob; the one-second busy-cores ticks sit on wall-clock
 second boundaries, where the workers redraw their factor. Worker
 threads are the CPU limit when given, else the busy cores with headroom
 of one plus the CV, so the clipped per-second factor keeps its mean.

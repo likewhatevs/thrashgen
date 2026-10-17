@@ -51,7 +51,11 @@ restore them on exit. Each `<name>` directory holds:
 
 `experiments/out/<mode>/summary.svg` puts every experiment's ratios on
 one chart. `experiments/publish.sh` copies the small files of every
-mode into `docs/experiments/<mode>/`.
+mode into `docs/experiments/<mode>/`, and `experiments/plot.py` draws
+the figures under `docs/experiments/plots/` from them with seaborn:
+the error of every field in every mode as a heatmap, the fields within
+tolerance, the seconds to the last knob move, and the first seconds of
+the user-mode fits against their targets.
 
 ## The set
 

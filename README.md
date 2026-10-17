@@ -15,8 +15,9 @@ recorder did, and reports how close it got to every target.
 Every measurement that needs a privilege the process lacks degrades to
 the next best source and is labelled as such in the report. Nothing
 fails for lack of a counter. See `docs/design.md` for the observables
-and their definitions, `docs/privileges.md` for what each privilege
-level buys, and `docs/testing.md` for how correctness is checked.
+and their definitions, `docs/architecture.md` for how the pieces fit,
+`docs/privileges.md` for what each privilege level buys, and
+`docs/testing.md` for how correctness is checked.
 
 ```sh
 thrashgen caps                                   # what this process can measure
@@ -30,9 +31,12 @@ thrashgen run --cpu-usage-cores 2 --ipc 1.2 --l3-mpki 5 --duration 300   # targe
 `run` fits its knobs in a few seconds, a tenth of a second a pass and
 thirty-six passes at most, until every ratio it can measure is within
 tolerance, then holds; busy cores and burstiness are set from a model
-at the first window and verified over the following minute. `calibrate` does the same and
-saves the knobs for the CPU model, so a host without counters can
-start from them. Hardware-dependent behaviour is checked by the tests
+at the first window and judged from the third second on, each second
+against what the model intended for it. A fit that converged is kept
+in the user's cache directory, so the next run of the same profile on
+the same CPU model starts from it. `calibrate` does the same and saves
+the knobs for the CPU model, so a host without counters can start from
+them. Hardware-dependent behaviour is checked by the tests
 and experiments described in `docs/testing.md`; `docs/experiments.md`
 describes the benchmark comparisons and their plots.
 
