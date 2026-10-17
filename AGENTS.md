@@ -97,8 +97,10 @@ re-fits only after a second out. The rule order within a pass is in
   test binary with sudo as in `docs/testing.md`. Never pass filters to
   skip tests; load-generating tests are serialized with `serial_test`.
 - lints: `cargo fmt --check`, `cargo clippy --all-targets --
-  -D warnings`, with and without the features. Coverage: `cargo
-  llvm-cov --summary-only`.
+  -D warnings`, with and without the features. Clippy's pedantic group
+  is on in `src/lib.rs`; the lints allowed there each carry a reason,
+  and a new allow needs one too. Coverage: `cargo llvm-cov
+  --summary-only`.
 - commits: one feature per commit, tests and design text included;
   imperative subject, body says why, not what.
 - status: `docs/status.md` lists what is verified and what is open;
