@@ -89,7 +89,7 @@ impl Default for Settings {
             pin: Pin::Auto,
             seed: 1,
             adaptive: false,
-            max_passes: 15,
+            max_passes: 40,
             threads: None,
             main_bytes: None,
             sparse_capacity: 16384,
@@ -112,11 +112,15 @@ pub const DEFAULT_MAIN_BYTES: u64 = 1 << 30;
 /// Smallest main buffer the streams make sense on.
 pub const MIN_MAIN_BYTES: u64 = 1 << 20;
 
-/// Fit window length: the workers take new knobs within a period and
-/// the ratios are read over the whole window, so 2 s is enough and
-/// fifteen passes fit in thirty seconds; an explicit request overrides.
+/// Fit window length. The workers take new knobs within a 10 ms
+/// period and the ratios are read over the whole window; measured at
+/// fixed knobs on Zen 4, IPC and MPKI vary 0.3 to 0.5 percent from one
+/// 100 ms window to the next and the TLB rates about one percent, far
+/// inside the five percent tolerance, so 200 ms costs nothing
+/// measurable and forty passes fit in eight seconds. An explicit
+/// request overrides.
 pub fn window_seconds(requested: Option<f64>) -> f64 {
-    requested.map(|r| r.max(0.1)).unwrap_or(2.0)
+    requested.map(|r| r.max(0.05)).unwrap_or(0.2)
 }
 
 /// Two consecutive windows at the same knobs are one longer window:
@@ -838,9 +842,9 @@ mod tests {
     #[test]
     fn window_lengths() {
         let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
-        assert!(close(window_seconds(None), 2.0));
+        assert!(close(window_seconds(None), 0.2));
         assert!(close(window_seconds(Some(2.0)), 2.0));
-        assert!(close(window_seconds(Some(0.0)), 0.1));
+        assert!(close(window_seconds(Some(0.0)), 0.05));
         assert!(close(long_window_seconds(None, 0.05), 30.0));
         assert!(close(long_window_seconds(Some(0.3), 0.05), 36.0));
         assert!(close(long_window_seconds(Some(0.73), 0.05), 213.16));

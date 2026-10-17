@@ -257,10 +257,12 @@ far from where the model said; ops stop at 80k and visits at 10k per
 access, some 200k instructions, so an access never outlasts the busy
 part of a period.
 
-The fit has a budget of about thirty seconds. Ratios are read over
-the whole fit window and the workers take new knobs within a period,
-so a 2 s window is enough and fifteen passes fit the budget;
-`--window` changes it. Two consecutive windows at the same knobs are
+The fit has a budget of about ten seconds. Ratios are read over the
+whole fit window and the workers take new knobs within a 10 ms
+period; measured at fixed knobs on Zen 4, IPC and MPKI vary 0.3 to
+0.5 percent from one 100 ms window to the next and the TLB rates about
+one percent, far inside the tolerance, so a 200 ms window costs nothing
+measurable and forty passes fit the budget; `--window` changes it. Two consecutive windows at the same knobs are
 averaged for the fitter, so a single noisy window, a neighbour's burst
 or a page-cache refill, moves nothing on its own. Busy cores and burstiness do not: with independent
 per-second jitter a window's mean has standard error

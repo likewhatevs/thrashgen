@@ -15,7 +15,7 @@ Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 | coverage | `cargo llvm-cov --summary-only` | 96% lines, 94% regions |
 | counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | pass |
 | per-CPU, uncore, resctrl, L3 filters | root tests as in `docs/testing.md`, resctrl mounted | pass |
-| the fit lands in thirty seconds | every converged replay in `docs/experiments.md` converged between 8 and 28 s | yes |
+| the fit lands in seconds | see the convergence times in `docs/experiments.md` | see there |
 | end-to-end replays, four modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy` | `docs/experiments.md`: compute-bound profiles within tolerance on every field in every mode; TaoBench 8 to 10 of 10; stress-ng 7 to 8; fio 5 to 8 |
 
 Not verified anywhere:

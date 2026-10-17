@@ -27,10 +27,10 @@ thrashgen compare app.json replay.json --pick p80
 thrashgen run --cpu-usage-cores 2 --ipc 1.2 --l3-mpki 5 --duration 300   # targets without a profile
 ```
 
-`run` fits its knobs in about thirty seconds, two seconds a pass,
-until every ratio it can measure is within tolerance, then holds;
-busy cores and burstiness are set from a model and verified over the
-following minute. `calibrate` does the same and
+`run` fits its knobs in a few seconds, a fifth of a second a pass and
+forty passes at most, until every ratio it can measure is within
+tolerance, then holds; busy cores and burstiness are set from a model
+at the first window and verified over the following minute. `calibrate` does the same and
 saves the knobs for the CPU model, so a host without counters can
 start from them. Hardware-dependent behaviour is checked by the tests
 and experiments described in `docs/testing.md`; `docs/experiments.md`
