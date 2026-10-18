@@ -9,6 +9,10 @@
 #            user, so bandwidth is measured, not modelled
 #   noisy    three profiles from a finished user-mode set replayed at
 #            once, each in its own scope, as several containers would
+#   crowd    the same three profiles, four copies of each at once, so
+#            twelve instances fill the host
+#   disturbed  each of the three profiles fitted live while stress-ng
+#            starts beside it and stops again, recorded in phases
 #   perfmon  a copy of the binary carrying the CAP_PERFMON file
 #            capability, so both sides count kernel mode, the recorder
 #            attaches per cgroup, and L3 misses come from the L3 PMU
@@ -28,6 +32,16 @@ case $mode in
   noisy)
     "$root/experiments/noisy.sh" schbench stress-ng taobench
     cargo run --release -q --manifest-path "$root/Cargo.toml" --example experiment_plot -- "$OUT_DIR"
+    exit 0
+    ;;
+  crowd)
+    COPIES=${COPIES:-4} "$root/experiments/noisy.sh" schbench stress-ng taobench
+    cargo run --release -q --manifest-path "$root/Cargo.toml" --example experiment_plot -- "$OUT_DIR"
+    exit 0
+    ;;
+  disturbed)
+    "$root/experiments/disturb.sh" schbench stress-ng taobench -- \
+      stress-ng --vm 4 --vm-bytes 1G --vm-keep --vm-method write64 -t 600
     exit 0
     ;;
   kernel)
@@ -63,7 +77,7 @@ case $mode in
     # shellcheck disable=SC2064
     trap "rm -f $cap_bin" EXIT
     ;;
-  *) echo "MODE must be user, kernel, resctrl, noisy or perfmon" >&2; exit 2 ;;
+  *) echo "MODE must be user, kernel, resctrl, noisy, crowd, disturbed or perfmon" >&2; exit 2 ;;
 esac
 
 fio_dir=${SCRATCH_DIR:-/var/tmp}/thrashgen-fio

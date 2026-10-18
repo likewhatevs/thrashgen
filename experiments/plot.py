@@ -6,10 +6,15 @@ writes SVGs to docs/experiments/plots/:
 
   errors.svg        signed relative error of the replay against the
                     original, every field, every benchmark, every mode
-  within.svg        fields within tolerance per benchmark and mode
+  within.svg        fields within tolerance per benchmark and mode; the
+                    crowd mode's copies of a profile are one bar with
+                    their range
   convergence.svg   seconds to the last knob move, per benchmark and mode
   trajectories.svg  the user-mode fits: IPC, MPKI and dTLB rate against
                     their targets over the first seconds
+  disturbed.svg     the disturbed mode: IPC, MPKI and dTLB rate of each
+                    live fit over its hundred seconds, the neighbour's
+                    span shaded, with the fields within per phase
 
 Usage: experiments/plot.py [docs/experiments [svg|png]]
 """
@@ -25,8 +30,21 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
 
-MODES = ["user", "kernel", "resctrl", "noisy", "perfmon"]
+MODES = ["user", "kernel", "resctrl", "noisy", "crowd", "perfmon"]
 BENCHES = ["schbench", "sysbench", "taobench", "stress-ng", "fio"]
+PHASES = ["alone", "beside", "after"]
+
+
+def base_name(benchmark: str) -> str:
+    """The profile behind a directory name: `taobench-2` is `taobench`."""
+    head, _, tail = benchmark.rpartition("-")
+    return head if head and tail.isdigit() else benchmark
+
+
+def bench_order(benchmark: str):
+    """Sort key: the set's order, copies after one another."""
+    base = base_name(benchmark)
+    return (BENCHES.index(base) if base in BENCHES else len(BENCHES), benchmark)
 FIELDS = [
     ("cpu_usage_cores", "busy cores"),
     ("cpu_usage_cv_1s", "burstiness"),
@@ -66,10 +84,14 @@ def tolerance(key: str, target: float) -> float:
 def load(root: Path):
     rows, fits = [], []
     for mode in MODES:
-        for bench in BENCHES:
+        if not (root / mode).is_dir():
+            continue
+        benches = sorted(
+            (d.name for d in (root / mode).iterdir() if (d / "compare.json").exists()),
+            key=bench_order,
+        )
+        for bench in benches:
             d = root / mode / bench
-            if not (d / "compare.json").exists():
-                continue
             compare = json.loads((d / "compare.json").read_text())
             report = json.loads((d / "report.json").read_text())
             for r in compare["rows"]:
@@ -119,8 +141,10 @@ def errors(df: pd.DataFrame, out: Path):
     df = df[df.field.isin(keys)].copy()
     df["field"] = pd.Categorical(df.field.map(labels), [labels[k] for k in keys])
     df["row"] = df["mode"] + " / " + df["benchmark"]
-    order = [f"{m} / {b}" for m in MODES for b in BENCHES]
-    order = [r for r in order if r in set(df.row)]
+    order = sorted(
+        set(df.row),
+        key=lambda r: (MODES.index(r.split(" / ")[0]), bench_order(r.split(" / ")[1])),
+    )
     pivot = df.pivot_table(index="row", columns="field", values="error", observed=False)
     pivot = pivot.reindex(order)
     within = df.pivot_table(index="row", columns="field", values="within", observed=False)
@@ -163,31 +187,36 @@ def within(df: pd.DataFrame, out: Path):
         .agg(within=("within", "sum"), measured=("within", "size"))
         .reset_index()
     )
+    # Copies of one profile, the crowd mode's, share a bar: its height
+    # is their mean and the line their range.
+    counts["profile"] = counts["benchmark"].map(base_name)
     counts["mode"] = pd.Categorical(counts["mode"], MODES)
-    counts["benchmark"] = pd.Categorical(counts["benchmark"], BENCHES)
-    counts = counts.sort_values(["benchmark", "mode"])
+    counts["profile"] = pd.Categorical(counts["profile"], BENCHES)
+    counts = counts.sort_values(["profile", "mode"])
     fig, ax = plt.subplots(figsize=(9, 4.2))
     sns.barplot(
         counts,
-        x="benchmark",
+        x="profile",
         y="measured",
         hue="mode",
         palette=["#e6e6e6"] * len(MODES),
+        errorbar=None,
         ax=ax,
         legend=False,
     )
-    sns.barplot(counts, x="benchmark", y="within", hue="mode", ax=ax)
+    sns.barplot(counts, x="profile", y="within", hue="mode", errorbar=("pi", 100), ax=ax)
     ax.set_ylabel("fields within tolerance (of fields measured, grey)")
     ax.set_xlabel("")
-    ax.legend(title="mode", ncols=5, loc="lower center", bbox_to_anchor=(0.5, 1.02))
+    ax.legend(title="mode", ncols=6, loc="lower center", bbox_to_anchor=(0.5, 1.02))
     fig.tight_layout()
     save(fig, out, "within")
 
 
 def convergence(fits: pd.DataFrame, out: Path):
     fits = fits.copy()
+    fits["profile"] = fits["benchmark"].map(base_name)
     fits["mode"] = pd.Categorical(fits["mode"], MODES)
-    fits["benchmark"] = pd.Categorical(fits["benchmark"], BENCHES)
+    fits["profile"] = pd.Categorical(fits["profile"], BENCHES)
     fits["outcome"] = fits.apply(
         lambda r: "converged" if r.converged else ("held closest" if r.held else "not converged"),
         axis=1,
@@ -195,7 +224,7 @@ def convergence(fits: pd.DataFrame, out: Path):
     fig, ax = plt.subplots(figsize=(9, 4.2))
     sns.stripplot(
         fits,
-        x="benchmark",
+        x="profile",
         y="last_move_s",
         hue="mode",
         dodge=True,
@@ -206,7 +235,7 @@ def convergence(fits: pd.DataFrame, out: Path):
     for _, r in fits[fits.outcome != "converged"].iterrows():
         ax.annotate(
             "×",
-            (BENCHES.index(r.benchmark), r.last_move_s),
+            (BENCHES.index(r.profile), r.last_move_s),
             ha="center",
             va="center",
             fontsize=8,
@@ -215,9 +244,81 @@ def convergence(fits: pd.DataFrame, out: Path):
     ax.set_ylabel("seconds to the last knob move (× not converged)")
     ax.set_xlabel("")
     ax.set_ylim(bottom=0)
-    ax.legend(title="mode", ncols=5, loc="lower center", bbox_to_anchor=(0.5, 1.02))
+    ax.legend(title="mode", ncols=6, loc="lower center", bbox_to_anchor=(0.5, 1.02))
     fig.tight_layout()
     save(fig, out, "convergence")
+
+
+def disturbed(root: Path, out: Path):
+    """Each live fit's IPC, MPKI and dTLB rate over the run, the
+    neighbour's span shaded, the tolerance band drawn, and the fields
+    within per recorded phase in the title."""
+    mode = root / "disturbed"
+    if not mode.is_dir():
+        return
+    benches = sorted(
+        (d.name for d in mode.iterdir() if (d / "phases.json").exists()), key=bench_order
+    )
+    if not benches:
+        return
+    fig, axes = plt.subplots(
+        len(TRAJECTORY_FIELDS),
+        len(benches),
+        figsize=(3.4 * len(benches) + 1, 2.2 * len(TRAJECTORY_FIELDS) + 1.0),
+        sharex=True,
+        squeeze=False,
+    )
+    for j, bench in enumerate(benches):
+        d = mode / bench
+        report = json.loads((d / "report.json").read_text())
+        phases = json.loads((d / "phases.json").read_text())
+        targets = {t["key"]: t for t in report["targets"]}
+        rows = [
+            dict(t=w["end_s"], field=v["key"], value=v["measured"])
+            for w in report["windows"]
+            for v in w["values"]
+            if v["measured"] is not None
+        ]
+        series_all = pd.DataFrame(rows)
+        within = []
+        for ph in PHASES:
+            c = json.loads((d / f"compare-{ph}.json").read_text())["rows"]
+            measured = [r for r in c if r.get("actual") is not None]
+            within.append(f"{ph} {sum(r['within'] for r in measured)}/{len(measured)}")
+        for i, (key, label) in enumerate(TRAJECTORY_FIELDS):
+            ax = axes[i][j]
+            series = series_all[series_all.field == key]
+            if not series.empty:
+                sns.lineplot(series, x="t", y="value", ax=ax, drawstyle="steps-post")
+            ax.axvspan(
+                phases["neighbour"]["start_s"],
+                phases["neighbour"]["stop_s"],
+                color="tab:orange",
+                alpha=0.15,
+                lw=0,
+            )
+            for lo, hi in phases["phases"].values():
+                ax.axvspan(lo, hi, color="tab:grey", alpha=0.08, lw=0)
+            log = key in ("l3_mpki", "dtlb_pki") and not series.empty and series.value.max() > 0
+            if key in targets:
+                target = targets[key]["target"]
+                tol = tolerance(key, target)
+                low = target - tol
+                if log:
+                    low = max(low, min(series.value.min(), target) / 3)
+                ax.axhspan(low, target + tol, color="tab:green", alpha=0.2, lw=0)
+                ax.axhline(target, color="tab:green", lw=1)
+            if log:
+                ax.set_yscale("log")
+            ax.set_ylabel(label if j == 0 else "")
+            ax.set_xlabel("seconds" if i == len(TRAJECTORY_FIELDS) - 1 else "")
+            if i == 0:
+                ax.set_title(f"{bench}: " + ", ".join(within), fontsize=9)
+    fig.suptitle(
+        "disturbed mode: a live fit with a neighbour over the orange span; grey spans are the recorded phases, the title their fields within"
+    )
+    fig.tight_layout()
+    save(fig, out, "disturbed")
 
 
 def trajectories(fits: pd.DataFrame, out: Path, mode="user", seconds=4.0):
@@ -284,6 +385,7 @@ def main():
     within(df, out)
     convergence(fits, out)
     trajectories(fits, out)
+    disturbed(root, out)
     print(f"plots written to {out}")
 
 

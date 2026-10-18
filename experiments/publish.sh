@@ -11,9 +11,12 @@ for mode_dir in "$out"/*/; do
   mode=$(basename "$mode_dir")
   for dir in "$mode_dir"*/; do
     name=$(basename "$dir")
-    [ -f "$dir/compare.json" ] || continue
+    [ -f "$dir/compare.json" ] || [ -f "$dir/compare-beside.json" ] || continue
     mkdir -p "$dest/$mode/$name"
-    for f in ratio.svg cores.svg compare.txt compare.json orig.json replay.json report.json; do
+    for f in ratio.svg cores.svg compare.txt compare.json orig.json replay.json report.json \
+             phases.json alone.json beside.json after.json \
+             compare-alone.json compare-beside.json compare-after.json \
+             compare-alone.txt compare-beside.txt compare-after.txt; do
       [ -f "$dir/$f" ] && cp "$dir/$f" "$dest/$mode/$name/$f"
     done
   done

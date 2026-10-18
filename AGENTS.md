@@ -145,14 +145,18 @@ The method that has worked, and the mistakes it replaced:
 
 `experiments/all.sh` with `MODE=user|kernel|resctrl|noisy|perfmon`
 records each benchmark, fits, holds the fitted knobs without counters,
-records the hold and compares; `experiments/publish.sh` copies the
-small outputs into `docs/experiments/<mode>/`, `experiments/plot.py`
-draws the figures. A full five-mode chain takes about two hours on the
-reference host and must not overlap with builds, tests or other load,
-since the recordings are the evidence. Never edit a script while the
-chain is executing it, and never rebuild while it runs: each mode
-builds from the working tree. `docs/experiments.md` is rewritten from
-the published results, not edited by hand to match expectations.
+records the hold and compares; `MODE=crowd` replays four copies of
+three profiles at once and `MODE=disturbed` fits each live while a
+stress-ng starts and stops beside it, both from a finished user set;
+`experiments/publish.sh` copies the small outputs into
+`docs/experiments/<mode>/`, `experiments/plot.py` draws the figures.
+A full chain of the five privilege modes takes about two hours on the
+reference host, the two neighbour modes ten minutes, and none of it
+may overlap with builds, tests or other load, since the recordings
+are the evidence. Never edit a script while the chain is executing
+it, and never rebuild while it runs: each mode builds from the
+working tree. `docs/experiments.md` is rewritten from the published
+results, not edited by hand to match expectations.
 
 ## Style
 

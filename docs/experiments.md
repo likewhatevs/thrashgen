@@ -34,6 +34,8 @@ writes under its own directory, `experiments/out/<mode>/<name>/`:
 | `kernel` | `perf_event_paranoid` set to 1 for the run | both recordings count kernel mode, so kernel-bound work is in the ratios |
 | `resctrl` | resctrl mounted, two monitoring groups chowned to the user | DRAM bandwidth measured for both, instead of modelled for the replay and absent for the original |
 | `noisy` | the schbench, stress-ng and TaoBench profiles of a finished `user` set, fitted and held at the same time, each in its own scope | several containers on one host: each instance measures only its own scope and sees the others through the caches and the memory bus |
+| `crowd` | the same three profiles, four copies of each at once (`COPIES`), twelve instances | a host filled with instances: about sixty busy cores of this host's sixty-four, so the caches and the memory bus are contended for real |
+| `disturbed` | each of the three profiles fitted live for 100 s while `stress-ng --vm 4` starts beside it at 35 s and is stopped at 65 s; the replay is recorded in three 25 s phases, alone, beside the neighbour and alone again, and each phase is compared with the profile | a neighbour that arrives and leaves: whether the fit follows the change, and how soon, from the report's windows |
 | `perfmon` | a copy of the binary carrying the `CAP_PERFMON` file capability | what a container with `--cap-add=PERFMON` gets: kernel mode on both sides, per-cgroup counters, and L3 misses from the L3 PMU rather than the proxy, which does not count prefetched lines |
 
 The two privileged modes use `sudo` for exactly those settings and

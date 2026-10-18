@@ -3,7 +3,9 @@
 # only on its own scope, the way several containers on one host would
 # run the tool: they share the caches and the memory bus and see each
 # other only through them. Usage: experiments/noisy.sh NAME... with the
-# profiles taken from a finished user-mode set under SRC_DIR.
+# profiles taken from a finished user-mode set under SRC_DIR. COPIES
+# replays each profile that many times at once, as copies of one
+# container would, each under NAME-1, NAME-2 and so on.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 bin=${THRASHGEN:-$root/target/release/thrashgen}
@@ -12,7 +14,15 @@ out=${OUT_DIR:-$root/experiments/out/noisy}
 scratch=${SCRATCH_DIR:-/var/tmp}
 interval=${INTERVAL:-5}
 fit_secs=${FIT_SECS:-10} hold_secs=${HOLD_SECS:-150}
-names=("$@")
+copies=${COPIES:-1}
+names=() srcs=()
+for n in "$@"; do
+  if [ "$copies" -gt 1 ]; then
+    for i in $(seq 1 "$copies"); do names+=("$n-$i"); srcs+=("$n"); done
+  else
+    names+=("$n"); srcs+=("$n")
+  fi
+done
 
 user_svc=user.slice/user-$(id -u).slice/user@$(id -u).service
 run_in_scope() { local unit=$1; shift; systemd-run --user --scope --quiet --unit="$unit" --collect "$@"; }
@@ -23,9 +33,9 @@ wait_for_scope() {
   echo "scope $1 did not appear" >&2; return 1
 }
 
-for n in "${names[@]}"; do
-  mkdir -p "$out/$n"
-  cp "$src/$n/orig.json" "$src/$n/orig.jsonl" "$out/$n/"
+for i in "${!names[@]}"; do
+  mkdir -p "$out/${names[$i]}"
+  cp "$src/${srcs[$i]}/orig.json" "$src/${srcs[$i]}/orig.jsonl" "$out/${names[$i]}/"
 done
 
 echo "== noisy: fitting ${names[*]} at once for ${fit_secs}s"

@@ -66,4 +66,9 @@ described in `docs/experiments.md`. The per-experiment plotting code is
 covered by `tests/plot.rs` against fixture recordings, so a broken
 chart fails `cargo test`; the figures across modes come from
 `experiments/plot.py`, which needs Python with seaborn, pandas and
-matplotlib and is run by hand after `experiments/publish.sh`.
+matplotlib and is run by hand after `experiments/publish.sh`. The
+privilege modes record their own benchmarks; the neighbour modes,
+`noisy`, `crowd` and `disturbed`, replay the profiles of a finished
+user set, so they run after it: `experiments/noisy.sh` with `COPIES`
+for the first two, `experiments/disturb.sh` for the third, which
+records a live fit in phases around a neighbour it starts and stops.
