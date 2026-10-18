@@ -40,6 +40,8 @@ them. Hardware-dependent behaviour is checked by the tests
 and experiments described in `docs/testing.md`; `docs/experiments.md`
 describes the benchmark comparisons and their plots.
 
+![Fields within tolerance per benchmark and privilege mode on the reference host](docs/experiments/plots/within.png)
+
 Implemented for Linux on x86-64, with event tables for AMD Zen 3 to 5,
 Intel Skylake-SP through Granite Rapids and Sierra Forest, and Arm
 Neoverse. The AArch64 paths, the code stream's stubs and the

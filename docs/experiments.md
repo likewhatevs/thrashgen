@@ -50,16 +50,17 @@ restore them on exit. Each `<name>` directory holds:
 | `hold-report.json`, `hold.log` | the fixed-knob run that was recorded |
 | `replay.jsonl`, `replay.json` | recording and profile of the replay |
 | `compare.txt`, `compare.json` | field-by-field comparison |
-| `ratio.svg` | replay over original per observable |
+| `ratio.svg` | replay over original per observable; `docs/experiments/<mode>/<name>/ratio.svg` once published |
 | `cores.svg` | busy cores at 1 Hz, benchmark and replay |
 
 `experiments/out/<mode>/summary.svg` puts every experiment's ratios on
 one chart. `experiments/publish.sh` copies the small files of every
 mode into `docs/experiments/<mode>/`, and `experiments/plot.py` draws
-the figures under `docs/experiments/plots/` from them with seaborn:
-the error of every field in every mode as a heatmap, the fields within
-tolerance, the seconds to the last knob move, and the first seconds of
-the user-mode fits against their targets.
+the figures under `docs/experiments/plots/` from them with seaborn,
+inlined below: the error of every field in every mode as a heatmap,
+the fields within tolerance, the seconds to the last knob move, the
+first seconds of each mode's fits against their targets, and the
+disturbed mode's live fits around their neighbour.
 
 ## The set
 
@@ -95,6 +96,12 @@ fit stopped on the closest pass it saw, out of passes or with a lever
 frozen. Plots and data are under `docs/experiments/<mode>/`, the
 figures under `docs/experiments/plots/`.
 
+![Fields within tolerance per benchmark and mode; grey is the fields measured](experiments/plots/within.png)
+
+![Replay error by field, benchmark and mode; a frame marks a field outside tolerance](experiments/plots/errors.png)
+
+![Seconds to the last knob move per benchmark and mode](experiments/plots/convergence.png)
+
 ### `user`: unprivileged, as in a container
 
 | benchmark | within | fit | what missed |
@@ -104,6 +111,10 @@ figures under `docs/experiments/plots/`.
 | taobench | 10 of 10 | 6 passes, 0.7 s | nothing |
 | stress-ng | 9 of 10 | 9 passes, 1.0 s | dTLB 0.17 vs 0.0058 |
 | fio | 9 of 10 | 13 passes, 1.4 s | iTLB 0.070 vs 0.025 |
+
+![user mode: replay over original per observable, every benchmark](experiments/user/summary.svg)
+
+![user mode: the fits' first seconds against their targets](experiments/plots/trajectories-user.png)
 
 ### `kernel`: both recordings count kernel mode
 
@@ -115,6 +126,10 @@ figures under `docs/experiments/plots/`.
 | stress-ng | 9 of 10 | 9 passes, 1.0 s | dTLB 0.22 vs 0.011 |
 | fio | 7 of 10 | 45 passes, 8.3 s | IPC 2.12 vs 1.42, MPKI 0.39 vs 2.17, iTLB 0.010 vs 0.063 |
 
+![kernel mode: replay over original per observable, every benchmark](experiments/kernel/summary.svg)
+
+![kernel mode: the fits' first seconds against their targets](experiments/plots/trajectories-kernel.png)
+
 ### `resctrl`: DRAM bandwidth measured on both sides
 
 | benchmark | within | fit | what missed |
@@ -125,6 +140,10 @@ figures under `docs/experiments/plots/`.
 | stress-ng | 9 of 11 | 11 passes, 1.2 s | dTLB 0.18 vs 0.0033, bandwidth 16 vs 70 GB/s |
 | fio | 8 of 10 | held, 36 passes by 9.5 s | dTLB 8.2 vs 8.7, iTLB 0.016 vs 0.053; the replay's bandwidth had no reading |
 
+![resctrl mode: replay over original per observable, every benchmark](experiments/resctrl/summary.svg)
+
+![resctrl mode: the fits' first seconds against their targets](experiments/plots/trajectories-resctrl.png)
+
 ### `noisy`: three profiles at once, each in its own scope
 
 | benchmark | within | fit | what missed |
@@ -132,6 +151,10 @@ figures under `docs/experiments/plots/`.
 | schbench | 10 of 10 | 5 passes, 0.6 s | nothing |
 | taobench | 10 of 10 | 6 passes, 0.7 s | nothing |
 | stress-ng | 9 of 10 | 15 passes, 3.8 s | dTLB 0.19 vs 0.0058 |
+
+![noisy mode: replay over original per observable, every benchmark](experiments/noisy/summary.svg)
+
+![noisy mode: the fits' first seconds against their targets](experiments/plots/trajectories-noisy.png)
 
 ### `perfmon`: `CAP_PERFMON`, L3 misses from the L3 PMU
 
@@ -143,6 +166,10 @@ figures under `docs/experiments/plots/`.
 | stress-ng | 8 of 10 | held, 9 passes by 1.2 s | MPKI 38 vs 95, dTLB |
 | fio | 6 of 10 | held, 36 passes by 3.9 s | burstiness 1.1 vs 1.6, MPKI 17.6 vs 15.2, dTLB 5.4 vs 6.2, iTLB 0.24 vs 0.056 |
 
+![perfmon mode: replay over original per observable, every benchmark](experiments/perfmon/summary.svg)
+
+![perfmon mode: the fits' first seconds against their targets](experiments/plots/trajectories-perfmon.png)
+
 ### `crowd`: four copies of three profiles at once, twelve instances
 
 | profile | copies within | fit | what missed |
@@ -150,6 +177,8 @@ figures under `docs/experiments/plots/`.
 | schbench | 9 of 10, all four | 7 to 8 passes, 3.0 to 6.3 s | IPC 2.83 to 2.87 vs 3.71 |
 | stress-ng | 7 to 8 of 10 | 27 to 49 passes, still moving at 10 s | dTLB; IPC 0.25 to 0.27 vs 0.22 on three copies; MPKI 15 to 22 vs 20.5 on three |
 | taobench | 9 to 10 of 10 | 7 to 22 passes, 0.9 to 10 s | MPKI 6.4 vs 6.1 on two copies, IPC 0.66 vs 0.70 on one |
+
+![crowd mode: replay over original per observable, every benchmark](experiments/crowd/summary.svg)
 
 ### `disturbed`: a live fit while stress-ng comes and goes
 
@@ -164,6 +193,8 @@ of its departure.
 | schbench | 10 of 10 | 9 of 10: IPC 3.2 vs 3.71 | 10 of 10 | 6 passes from 1.3 s after; 2 passes from 1.3 s after |
 | stress-ng | 9 of 10: dTLB floor | 7 of 10: IPC 0.06 vs 0.22, MPKI 24.8 vs 20.5, dTLB | 9 of 10: dTLB floor | 61 passes over 8 s, two budgets, then the closest pass held; none needed after |
 | taobench | 10 of 10 | 8 of 10: cores 2.93 vs 3.09, IPC 0.66 vs 0.70 | 10 of 10 | 31 passes from 0.9 s after; 43 passes from 0.8 s after |
+
+![disturbed mode: each live fit's IPC, MPKI and dTLB rate over its hundred seconds, the neighbour's span shaded](experiments/plots/disturbed.png)
 
 ## Reading the results
 

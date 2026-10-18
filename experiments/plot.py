@@ -2,21 +2,22 @@
 """Plots of the published experiment results, with seaborn.
 
 Reads docs/experiments/<mode>/<benchmark>/{compare.json,report.json} and
-writes SVGs to docs/experiments/plots/:
+writes PNGs, inlined by docs/experiments.md, to docs/experiments/plots/:
 
-  errors.svg        signed relative error of the replay against the
+  errors.png        signed relative error of the replay against the
                     original, every field, every benchmark, every mode
-  within.svg        fields within tolerance per benchmark and mode; the
+  within.png        fields within tolerance per benchmark and mode; the
                     crowd mode's copies of a profile are one bar with
                     their range
-  convergence.svg   seconds to the last knob move, per benchmark and mode
-  trajectories.svg  the user-mode fits: IPC, MPKI and dTLB rate against
+  convergence.png   seconds to the last knob move, per benchmark and mode
+  trajectories-<mode>.png
+                    each mode's fits: IPC, MPKI and dTLB rate against
                     their targets over the first seconds
-  disturbed.svg     the disturbed mode: IPC, MPKI and dTLB rate of each
+  disturbed.png     the disturbed mode: IPC, MPKI and dTLB rate of each
                     live fit over its hundred seconds, the neighbour's
                     span shaded, with the fields within per phase
 
-Usage: experiments/plot.py [docs/experiments [svg|png]]
+Usage: experiments/plot.py [docs/experiments [png|svg]]
 """
 
 import json
@@ -127,7 +128,7 @@ def load(root: Path):
     return pd.DataFrame(rows), pd.DataFrame(fits)
 
 
-FORMAT = "svg"
+FORMAT = "png"
 
 
 def save(fig, out: Path, name: str):
@@ -325,12 +326,13 @@ def trajectories(fits: pd.DataFrame, out: Path, mode="user", seconds=4.0):
     sub = fits[fits["mode"] == mode]
     if sub.empty:
         return
-    benches = [b for b in BENCHES if b in set(sub.benchmark)]
+    benches = sorted(set(sub.benchmark), key=bench_order)
     fig, axes = plt.subplots(
         len(TRAJECTORY_FIELDS),
         len(benches),
         figsize=(2.6 * len(benches) + 1, 2.2 * len(TRAJECTORY_FIELDS) + 0.8),
         sharex=True,
+        squeeze=False,
     )
     for j, bench in enumerate(benches):
         report = sub[sub.benchmark == bench].iloc[0].report
@@ -367,7 +369,7 @@ def trajectories(fits: pd.DataFrame, out: Path, mode="user", seconds=4.0):
         f"{mode} mode: the fit's first {seconds:.0f} seconds; the band is the tolerance, 5 percent or the field's floor"
     )
     fig.tight_layout()
-    save(fig, out, "trajectories")
+    save(fig, out, f"trajectories-{mode}")
 
 
 def main():
@@ -384,7 +386,11 @@ def main():
     errors(df, out)
     within(df, out)
     convergence(fits, out)
-    trajectories(fits, out)
+    # The crowd's twelve copies would make a figure too wide to read;
+    # its within bars carry their range.
+    for mode in MODES:
+        if mode != "crowd":
+            trajectories(fits, out, mode)
     disturbed(root, out)
     print(f"plots written to {out}")
 
