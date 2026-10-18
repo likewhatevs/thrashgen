@@ -8,6 +8,12 @@
 // since the alternative, local allows at hundreds of sites, would hide
 // the signal.
 #![warn(clippy::pedantic)]
+// Lints added by a newer clippy are allowed by name below, and an older
+// one, the reference host's, must not fail on the name.
+#![allow(unknown_lints)]
+// A newer clippy's `assert_is_empty` would have `assert!(!v.is_empty())`
+// written `assert_ne!(v, [] as [T; 0])`, which says less.
+#![allow(clippy::assert_is_empty)]
 #![allow(
     // Counts become f64 for ratios and come back as knob values; the
     // precision and sign of a measurement tool's arithmetic are its
