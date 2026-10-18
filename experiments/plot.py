@@ -4,8 +4,9 @@
 Reads docs/experiments/<mode>/<benchmark>/{compare.json,report.json} and
 writes PNGs, inlined by docs/experiments.md, to docs/experiments/plots/:
 
-  errors.png        signed relative error of the replay against the
-                    original, every field, every benchmark, every mode
+  errors.png        signed error of the replay against the original in
+                    units of each field's tolerance, every field,
+                    benchmark and mode
   within.png        fields within tolerance per benchmark and mode; the
                     crowd mode's copies of a profile are one bar with
                     their range
@@ -82,6 +83,14 @@ def tolerance(key: str, target: float) -> float:
     return max(RATIO * abs(target), FLOORS.get(key, 0.0))
 
 
+# What "within tolerance" means, for the figures that count it.
+TOLERANCE_NOTE = (
+    f"within tolerance: {RATIO:.0%} of the target, or the field's absolute floor if that is wider: "
+    "busy cores 0.05, burstiness 0.02, IPC 0.02, L3 MPKI 0.05, DRAM 100 MB/s, "
+    "dTLB 0.02 and iTLB 0.01 per thousand instructions, memory 8 MiB"
+)
+
+
 def load(root: Path):
     rows, fits = [], []
     for mode in MODES:
@@ -98,13 +107,15 @@ def load(root: Path):
             for r in compare["rows"]:
                 if r.get("actual") is None:
                     continue
-                scale = max(abs(r["expected"]), FLOORS.get(r["key"], 0.0))
+                tol = tolerance(r["key"], r["expected"])
                 rows.append(
                     dict(
                         mode=mode,
                         benchmark=bench,
                         field=r["key"],
-                        error=(r["actual"] - r["expected"]) / scale if scale > 0 else 0.0,
+                        # The error in units of the field's tolerance: the
+                        # band is one either way, whatever the field.
+                        error=(r["actual"] - r["expected"]) / tol if tol > 0 else 0.0,
                         within=r["within"],
                     )
                 )
@@ -150,20 +161,21 @@ def errors(df: pd.DataFrame, out: Path):
     pivot = pivot.reindex(order)
     within = df.pivot_table(index="row", columns="field", values="within", observed=False)
     within = within.reindex(order)
-    shown = (pivot * 100).clip(-100, 100)
-    annot = pivot.map(lambda e: "" if pd.isna(e) else f"{e * 100:+.0f}%")
-    fig, ax = plt.subplots(figsize=(11, 0.42 * len(order) + 1.6))
+    shown = pivot.clip(-4, 4)
+    annot = pivot.map(lambda e: "" if pd.isna(e) else (f"{e:+.1f}" if abs(e) < 10 else f"{e:+.0f}"))
+    fig, ax = plt.subplots(figsize=(11, 0.42 * len(order) + 1.8))
     sns.heatmap(
         shown,
         cmap="vlag",
         center=0,
-        vmin=-100,
-        vmax=100,
+        vmin=-4,
+        vmax=4,
         annot=annot,
         fmt="",
+        annot_kws=dict(size=7),
         linewidths=0.5,
         cbar_kws=dict(
-            label="replay less original, percent of the target or of its absolute floor, whichever is larger (clipped at ±100)"
+            label="replay less original, in tolerances of the field (±1 is the band; colour clipped at ±4)"
         ),
         ax=ax,
     )
@@ -177,8 +189,9 @@ def errors(df: pd.DataFrame, out: Path):
             )
     ax.set_xlabel("")
     ax.set_ylabel("")
-    ax.set_title("Replay error by field; a frame marks a field outside tolerance")
-    fig.tight_layout()
+    ax.set_title("Replay error by field, in tolerances; a frame marks a field outside its band")
+    fig.text(0.5, 0.005, TOLERANCE_NOTE, ha="center", va="bottom", fontsize=7, wrap=True)
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     save(fig, out, "errors")
 
 
@@ -209,7 +222,8 @@ def within(df: pd.DataFrame, out: Path):
     ax.set_ylabel("fields within tolerance (of fields measured, grey)")
     ax.set_xlabel("")
     ax.legend(title="mode", ncols=6, loc="lower center", bbox_to_anchor=(0.5, 1.02))
-    fig.tight_layout()
+    fig.text(0.5, 0.005, TOLERANCE_NOTE, ha="center", va="bottom", fontsize=7, wrap=True)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
     save(fig, out, "within")
 
 

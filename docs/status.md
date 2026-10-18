@@ -21,10 +21,6 @@ Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 
 Not verified anywhere:
 
-- the Pages workflow in `.github/workflows/pages.yml` has not deployed
-  the book: the repository's Pages site has to be enabled once by its
-  owner, which neither the workflow's token nor the `gh` token could
-  do; the lint workflow runs and passes;
 - the Intel and Arm event tables come from the kernel's `pmu-events`
   at v7.1 and are checked only against fixtures, never on that
   hardware;

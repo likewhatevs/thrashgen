@@ -64,13 +64,18 @@ inlined below. How to read them:
   with the fields within tolerance over the fields the recorder
   measured, the latter in grey behind it; the crowd mode's four
   copies of a profile are one bar at their mean with a line for
-  their range.
+  their range. Tolerance is 5 percent of the target or, where that is
+  wider, the field's absolute floor: 0.05 busy cores, 0.02 of
+  burstiness, 0.02 IPC, 0.05 L3 MPKI, 100 MB/s of bandwidth, 0.02
+  dTLB and 0.01 iTLB events per thousand instructions, 8 MiB of
+  memory, as `docs/design.md` section 6 defines them.
 - **error heatmap** (`errors.png`): replay less original, per field,
-  as a percentage of the target or of the field's absolute floor,
-  whichever is larger, so a dTLB rate of 0.17 against 0.003 reads as
-  hundreds of percent of a floor of 0.02 rather than thousands of
-  the target; red is over, blue under, a black frame marks a field
-  outside tolerance, and the colour is clipped at a hundred percent.
+  in units of that field's tolerance, so every cell reads the same
+  way: between -1 and +1 is within the band, +2 is twice the
+  tolerance over, and a dTLB rate of 0.17 against 0.003 reads as
+  eight floors over rather than thousands of percent; red is over,
+  blue under, a black frame marks a field outside its band, and the
+  colour is clipped at four tolerances.
 - **convergence** (`convergence.png`): the second of the last knob
   move of each fit, a cross marking a fit that did not converge,
   because a target was out of reach or the fit held a compromise.
@@ -155,7 +160,7 @@ figures under `docs/experiments/plots/`.
 
 ![Fields within tolerance per benchmark and mode; grey is the fields measured](experiments/plots/within.png)
 
-![Replay error by field, benchmark and mode; a frame marks a field outside tolerance](experiments/plots/errors.png)
+![Replay error by field, benchmark and mode, in units of each field's tolerance; a frame marks a field outside its band](experiments/plots/errors.png)
 
 ![Seconds to the last knob move per benchmark and mode](experiments/plots/convergence.png)
 
