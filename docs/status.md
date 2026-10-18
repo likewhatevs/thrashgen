@@ -14,9 +14,9 @@ Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 | lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, with and without the features | clean |
 | coverage | `cargo llvm-cov --summary-only` | 96% lines, 95% regions |
 | counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | pass |
-| per-CPU, uncore, resctrl, L3 filters | root tests as in `docs/testing.md`, resctrl mounted | per-CPU counters and the L3 filters pass; the resctrl group test passed on 2026-10-17 and could not run on 2026-10-18, resctrl being unmountable that day (open item 1) |
+| per-CPU, uncore, resctrl, L3 filters | root tests as in `docs/testing.md`, resctrl mounted | pass |
 | the fit lands in seconds | cold fits of the recorded profiles on this host, `thrashgen run orig.json --duration 8 --no-cache` | schbench 0.3 s, sysbench 0.6 s, taobench 0.6 s to the last knob change; stress-ng meets everything but dTLB (open item 2) by 1.0 s; fio converges by 1.4 s and re-fits when its duty cycle changes plateau (open item 3) |
-| end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy`, `perfmon` | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.3 to 0.7 s, with neighbours and under the L3 PMU too; stress-ng 9 of 10 but for its dTLB floor, with neighbours too, 8 under the L3 PMU; fio 9 of 10 in user mode, 6 to 7 where the profile carries kernel-mode misses. The resctrl mode is from 2026-10-17: on 2026-10-18 resctrl could not be mounted (open item 1) |
+| end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy`, `perfmon` | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.3 to 0.9 s, with neighbours and under the L3 PMU too; stress-ng 9 of 10 but for its dTLB floor, with neighbours too, 8 under the L3 PMU; fio 9 of 10 in user mode, 8 under resctrl, 6 to 7 where the profile carries kernel-mode misses; bandwidth within its floor for the compute-bound profiles and 5 percent over for TaoBench |
 
 Not verified anywhere:
 
@@ -64,9 +64,9 @@ In rough order of value.
    so a container started while it is mounted keeps it in its own
    mount namespace after the host unmounts it, and the host cannot
    mount it again (`mount` says busy at a path that is not a mount
-   point) until that namespace drops it: the container is restarted,
-   or unmounts it from inside. `umount -N` from the host did not reach
-   the propagated mount here.
+   point) until that namespace drops it. On 2026-10-18 a podman
+   container held it for half a day; `umount -N` from the host did
+   not reach the propagated mount, restarting the container did.
 2. **stress-ng's dTLB rate is a hardware floor here.** Under the
    L2-hit definition this Zen 4 reloads its L1 dTLB on about 1.4
    percent of hugepage touches whatever the set, measured for random

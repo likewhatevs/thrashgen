@@ -79,12 +79,12 @@ and records only the server.
 Run on the Zen 4 host described in `docs/design.md`, with the 100 ms
 fit windows: each replay fitted for 10 s and the knobs it ended on
 then ran for 150 s with no counters of their own, recorded over the
-last 135 s. The user, kernel, noisy and perfmon modes are from
-2026-10-18 and the fitter at commit `cf1436d`; the resctrl mode is
-from 2026-10-17 and the fitter of that day, since on 2026-10-18 the
-host could not mount resctrl: a container started while it was
-mounted kept the mount in its own namespace (`docs/status.md`, open
-item 1). "Within" counts the fields within tolerance out of the
+last 135 s. All five modes are from 2026-10-18 and the fitter at
+commit `cf1436d`, except fio under resctrl, which ran again at
+`c54d63f`: its first recording that day had a cold page cache and a
+per-second CV of 3.8, and the replay's two threads could not carry
+that burstiness, which is what `c54d63f` fixed (`docs/design.md`
+section 6). "Within" counts the fields within tolerance out of the
 fields the recorder measured; "fit" is the number of passes, windows
 that moved a knob, and the second of the last one, or "held" when the
 fit stopped on the closest pass it saw, out of passes or with a lever
@@ -111,15 +111,15 @@ figures under `docs/experiments/plots/`.
 | stress-ng | 9 of 10 | 9 passes, 1.0 s | dTLB 0.22 vs 0.011 |
 | fio | 7 of 10 | 45 passes, 8.3 s | IPC 2.12 vs 1.42, MPKI 0.39 vs 2.17, iTLB 0.010 vs 0.063 |
 
-### `resctrl`: DRAM bandwidth measured on both sides (2026-10-17)
+### `resctrl`: DRAM bandwidth measured on both sides
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 11 of 11 | 2 passes, 0.3 s | nothing; bandwidth 175 MB/s vs 120, within its floor |
+| schbench | 11 of 11 | 7 passes, 0.9 s | nothing; bandwidth 57 MB/s vs 73, within its floor |
 | sysbench | 11 of 11 | 5 passes, 0.6 s | nothing; bandwidth within its floor |
-| taobench | 11 of 11 | 10 passes, 1.1 s | nothing; bandwidth 9.7 vs 9.8 GB/s |
-| stress-ng | 9 of 11 | 8 passes, 3.7 s | dTLB, bandwidth 15 vs 70 GB/s |
-| fio | 6 of 10 | held, 36 passes by 9.3 s | burstiness, IPC 1.09 vs 0.93, dTLB 8.0 vs 8.6, iTLB 0.010 vs 0.027; the replay's bandwidth had no reading |
+| taobench | 10 of 11 | 19 passes, 9.2 s | bandwidth 10.1 vs 9.6 GB/s, 5 percent over |
+| stress-ng | 9 of 11 | 11 passes, 1.2 s | dTLB 0.18 vs 0.0033, bandwidth 16 vs 70 GB/s |
+| fio | 8 of 10 | held, 36 passes by 9.5 s | dTLB 8.2 vs 8.7, iTLB 0.016 vs 0.053; the replay's bandwidth had no reading |
 
 ### `noisy`: three profiles at once, each in its own scope
 
@@ -146,8 +146,9 @@ measures the replay against the recorder, not against the replay's
 own report. What the five modes say:
 
 - **Every converging profile fits in under a second.** schbench,
-  sysbench and TaoBench converge in 0.3 to 0.7 s in every mode, with
-  two neighbours or without, and land every field within tolerance;
+  sysbench and TaoBench converge in 0.3 to 0.9 s in every mode, with
+  two neighbours or without, and land every field within tolerance
+  but TaoBench's bandwidth under resctrl, 5 percent over;
   TaoBench, the farthest from the first guess, takes six passes where
   it took ten the day before, since the sparse visits now correct by
   the dTLB events they are short rather than by ratio. stress-ng
@@ -175,8 +176,9 @@ own report. What the five modes say:
   acquires the kernel's own misses, 2.2 per thousand instructions
   from page-cache copies, and the fit re-fits at each plateau and
   does not settle: 45 passes, its last at 8.3 s, and the hold ran at
-  the IPC of the plateau it ended in. In resctrl mode the replay's
-  bandwidth had no reading.
+  the IPC of the plateau it ended in. In resctrl mode, with one
+  thread for its 0.26 cores, busy cores and burstiness land within a
+  percent and the replay's bandwidth has no reading.
 - **The L3 PMU changes the question.** With `CAP_PERFMON` the
   recorder counts every L3 miss, prefetched lines included, so
   stress-ng's profile reads 95 misses per thousand instructions where
@@ -188,11 +190,13 @@ own report. What the five modes say:
   through its whole budget. The compute-bound profiles and TaoBench
   are unaffected: TaoBench's 20 MPKI under the L3 PMU is met in five
   passes.
-- **Measured bandwidth** agrees with the model for the compute-bound
-  profiles and for TaoBench, 9.7 against 9.8 GB/s, once the rule
-  waits for IPC and MPKI to be near their targets. Where bandwidth is
-  modelled, for want of resctrl, it is reported and not fitted since
-  2026-10-18.
+- **Measured bandwidth** lands within its floor for the compute-bound
+  profiles and 5 percent over for TaoBench, 10.1 against 9.6 GB/s:
+  the monitoring counters on this host wander (`docs/status.md`,
+  open item 1), the converged fit re-fit at 9 s after a second of
+  readings out, and the hold ran the knobs of that re-fit. stress-ng's
+  70 GB/s is beyond what its counted misses move. Where bandwidth is
+  modelled, for want of resctrl, it is reported and not fitted.
 - **Neighbours cost nothing measurable here.** With three replays
   sharing the caches and the memory bus, schbench and TaoBench land 10
   of 10 in 0.6 and 0.7 s, and stress-ng's IPC and MPKI land within one

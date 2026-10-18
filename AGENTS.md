@@ -25,7 +25,7 @@ Directional goals, in order:
    the design says so in section 5.1 and the report says so in its
    notes; a residual the tool cannot explain is a bug.
 2. **Speed.** The fit converges in about a second on a cold start
-   (0.3 to 0.7 s on the reference host for the profiles that converge;
+   (0.3 to 0.9 s on the reference host for the profiles that converge;
    stress-ng and fio reach what they can by 1.0 to 1.4 s), so
    representative load is up by the fifth second, and a repeat run of
    the same profile on the same CPU model starts converged from the
