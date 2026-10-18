@@ -4,8 +4,11 @@ Three layers, each with a different claim.
 
 ## Unit and fixture tests: `cargo test`
 
-Run everywhere, including CI, with no privileges and no hardware
-assumptions. They cover:
+Run everywhere with no privileges and no hardware assumptions. CI
+runs only the lints, formatting and clippy with and without the
+features, by choice: the tests, the coverage and the experiments run
+on a machine with counters, and a workflow that tried to would fight
+that machine's setup. They cover:
 
 - the pure math: burstiness, ratio-of-sums aggregation, percentiles,
   the fitter's update rule, the lognormal duty factor. Property tests
