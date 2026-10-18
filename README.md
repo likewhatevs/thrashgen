@@ -40,10 +40,13 @@ them. Hardware-dependent behaviour is checked by the tests
 and experiments described in `docs/testing.md`; `docs/experiments.md`
 describes the benchmark comparisons and their plots.
 
-Implemented for Linux on x86_64, with event tables for AMD Zen 3 to 5,
+Implemented for Linux on x86-64, with event tables for AMD Zen 3 to 5,
 Intel Skylake-SP through Granite Rapids and Sierra Forest, and Arm
-Neoverse; the code stream (iTLB) is x86_64 only and other
-architectures report it as unavailable.
+Neoverse. The AArch64 paths, the code stream's stubs and the
+non-temporal stores, compile for that target and have not run on it;
+on other architectures the run fails at the code stream.
+`docs/status.md` lists what is verified and what is open, and
+`AGENTS.md` is where work on the code starts.
 
 Licensed under the GNU General Public License, version 2 only; see
 `LICENSE`.

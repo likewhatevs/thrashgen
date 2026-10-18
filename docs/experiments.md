@@ -83,9 +83,9 @@ and records only the server.
 Run on the Zen 4 host described in `docs/design.md`, with the 100 ms
 fit windows: each replay fitted for 10 s and the knobs it ended on
 then ran for 150 s with no counters of their own, recorded over the
-last 135 s. All five modes are from 2026-10-18 and the fitter at
-commit `cf1436d`, except fio under resctrl, which ran again at
-`c54d63f`: its first recording that day had a cold page cache and a
+last 135 s. The five privilege modes are from 2026-10-18 and the
+fitter at commit `cf1436d`, except fio under resctrl, which ran again
+at `c54d63f`: its first recording that day had a cold page cache and a
 per-second CV of 3.8, and the replay's two threads could not carry
 that burstiness, which is what `c54d63f` fixed (`docs/design.md`
 section 6). "Within" counts the fields within tolerance out of the
@@ -142,6 +142,28 @@ figures under `docs/experiments/plots/`.
 | taobench | 10 of 10 | 5 passes, 0.6 s | nothing |
 | stress-ng | 8 of 10 | held, 9 passes by 1.2 s | MPKI 38 vs 95, dTLB |
 | fio | 6 of 10 | held, 36 passes by 3.9 s | burstiness 1.1 vs 1.6, MPKI 17.6 vs 15.2, dTLB 5.4 vs 6.2, iTLB 0.24 vs 0.056 |
+
+### `crowd`: four copies of three profiles at once, twelve instances
+
+| profile | copies within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 9 of 10, all four | 7 to 8 passes, 3.0 to 6.3 s | IPC 2.83 to 2.87 vs 3.71 |
+| stress-ng | 7 to 8 of 10 | 27 to 49 passes, still moving at 10 s | dTLB; IPC 0.25 to 0.27 vs 0.22 on three copies; MPKI 15 to 22 vs 20.5 on three |
+| taobench | 9 to 10 of 10 | 7 to 22 passes, 0.9 to 10 s | MPKI 6.4 vs 6.1 on two copies, IPC 0.66 vs 0.70 on one |
+
+### `disturbed`: a live fit while stress-ng comes and goes
+
+Each profile fitted live for 100 s; `stress-ng --vm 4 --vm-bytes 1G`
+ran beside it from 35 s to 65 s. The three columns are the three 25 s
+recordings: 10 to 35 s, 40 to 65 s and 70 to 95 s. "Moved" counts
+the knob moves within fifteen seconds of the neighbour's arrival and
+of its departure.
+
+| profile | alone | beside | after | moved on arrival, on departure |
+| --- | --- | --- | --- | --- |
+| schbench | 10 of 10 | 9 of 10: IPC 3.2 vs 3.71 | 10 of 10 | 6 passes from 1.3 s after; 2 passes from 1.3 s after |
+| stress-ng | 9 of 10: dTLB floor | 7 of 10: IPC 0.06 vs 0.22, MPKI 24.8 vs 20.5, dTLB | 9 of 10: dTLB floor | 61 passes over 8 s, two budgets, then the closest pass held; none needed after |
+| taobench | 10 of 10 | 8 of 10: cores 2.93 vs 3.09, IPC 0.66 vs 0.70 | 10 of 10 | 31 passes from 0.9 s after; 43 passes from 0.8 s after |
 
 ## Reading the results
 
@@ -207,6 +229,24 @@ own report. What the five modes say:
   percent over the hold, where the day before they had drifted 20
   percent: the run-length rule no longer chases a pooled MPKI short
   by noise to its cap.
+
+- **A full host costs what the host costs.** With twelve instances
+  on sixty-four hardware threads, schbench's replays sit at IPC 2.85
+  against 3.71 on every copy: eight threads at that IPC need cores to
+  themselves, and with sixty busy threads each shares a core with a
+  sibling. stress-ng's four copies want sixteen gigabytes a second
+  each from a bus the other eight instances use too, and their IPC
+  and MPKI land ten to twenty percent off; TaoBench's copies are
+  within or a few percent out. Memory is within on every instance,
+  now that the generator measures its own cgroup.
+- **A neighbour arriving moves the fit within about a second, and a
+  neighbour leaving within about a second too**, after which every
+  profile is back within tolerance on every field it can reach.
+  While a memory-bound neighbour is there, what the replay cannot
+  have is what the neighbour takes: schbench's IPC on a shared core,
+  stress-ng's IPC on a saturated bus, and TaoBench's IPC by five
+  percent; stress-ng's fit spent two budgets of passes against that
+  before holding, which is work left to do.
 
 What the plots cannot show is anything outside the observables: the
 replay has no syscalls, no I/O and no wakeups, however close the

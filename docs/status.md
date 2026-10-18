@@ -10,12 +10,13 @@ Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 
 | claim | how | result |
 | --- | --- | --- |
-| unit, fixture, CLI and plot tests | `cargo test` | 180 pass |
+| unit, fixture, CLI and plot tests | `cargo test` | 183 pass |
 | lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, with and without the features | clean |
 | coverage | `cargo llvm-cov --summary-only` | 96% lines, 95% regions |
 | counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | pass |
 | per-CPU, uncore, resctrl, L3 filters | root tests as in `docs/testing.md`, resctrl mounted | pass |
 | the fit lands in seconds | cold fits of the recorded profiles on this host, `thrashgen run orig.json --duration 8 --no-cache` | schbench 0.3 s, sysbench 0.6 s, taobench 0.6 s to the last knob change; stress-ng meets everything but dTLB (open item 2) by 1.0 s; fio converges by 1.4 s and re-fits when its duty cycle changes plateau (open item 3) |
+| neighbours: three profiles at once, twelve instances, a neighbour coming and going | `MODE=noisy`, `MODE=crowd`, `MODE=disturbed` | `docs/experiments.md`: with neighbours every profile keeps every field it can reach; a full host takes schbench's IPC to 2.85 from 3.71, a sibling sharing each core, and ten to twenty percent of stress-ng's ratios on a saturated bus; a fit follows a neighbour's arrival and departure within about a second and is back within on every reachable field once it has left |
 | end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy`, `perfmon` | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.3 to 0.9 s, with neighbours and under the L3 PMU too; stress-ng 9 of 10 but for its dTLB floor, with neighbours too, 8 under the L3 PMU; fio 9 of 10 in user mode, 8 under resctrl, 6 to 7 where the profile carries kernel-mode misses; bandwidth within its floor for the compute-bound profiles and 5 percent over for TaoBench |
 
 Not verified anywhere:
@@ -100,6 +101,18 @@ In rough order of value.
    and the two targets meet nowhere, so the fit now freezes the lever
    they fight over and holds the closest pass as the compromise, by
    1.6 s, where it used to cycle through its whole budget.
+
+4. **What a neighbour takes.** Beside a memory-bound neighbour a
+   replay cannot have the IPC its profile recorded alone: schbench's
+   on a core shared with a sibling thread, stress-ng's on a saturated
+   bus. The fit tries anyway: stress-ng's live fit spent two budgets
+   of passes, sixty-one moves over eight seconds, before holding its
+   closest pass, which was the right one once the neighbour left. A
+   fit that knew which targets a neighbour makes unreachable, from
+   the IPC's response to its own levers, could hold sooner; the
+   comparison itself is against a profile recorded alone, which is
+   the question asked, and a profile recorded beside the same
+   neighbour would be the other question.
 
 Closed since 2026-10-16: the fast fit closed the pass-budget item and
 fio's TLB rate; busy cores and burstiness are judged from the third
