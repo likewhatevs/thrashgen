@@ -1,0 +1,17 @@
+# The docs as an mdBook; `mdbook build` writes target/book, and the pages
+# workflow publishes it. The chapters are the files under docs/, with the
+# README and AGENTS.md included from the root.
+[book]
+title = "thrashgen"
+description = "Record a container's resource footprint and replay it as synthetic load"
+authors = []
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "target/book"
+
+[output.html]
+git-repository-url = "https://github.com/likewhatevs/thrashgen"
+site-url = "/thrashgen/"
+additional-js = ["docs/mermaid-init.js"]
