@@ -5,6 +5,15 @@ edition = "2024"
 rust-version = "1.85"
 description = "Record a container's resource footprint and replay it as synthetic load"
 license = "GPL-2.0-only"
+repository = "https://github.com/likewhatevs/thrashgen"
+homepage = "https://likewhatevs.github.io/thrashgen/"
+documentation = "https://likewhatevs.github.io/thrashgen/"
+readme = "README.md"
+keywords = ["perf", "benchmark", "load-generator", "cgroup", "replay"]
+categories = ["command-line-utilities", "development-tools::profiling"]
+# The published experiment data is thirteen megabytes of JSON that a
+# crate does not need; the README's figure is served from the repository.
+exclude = ["/docs/experiments", "/experiments/out"]
 
 [lib]
 name = "thrashgen"
