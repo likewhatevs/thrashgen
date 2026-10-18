@@ -45,22 +45,47 @@ restore them on exit. Each `<name>` directory holds:
 
 | file | what |
 | --- | --- |
-| `orig.jsonl`, `orig.json` | recording and profile of the benchmark |
-| `report.json`, `run.log`, `knobs.json` | the fitting run's report and log, and the knobs it ended on |
-| `hold-report.json`, `hold.log` | the fixed-knob run that was recorded |
-| `replay.jsonl`, `replay.json` | recording and profile of the replay |
-| `compare.txt`, `compare.json` | field-by-field comparison |
-| `ratio.svg` | replay over original per observable; `docs/experiments/<mode>/<name>/ratio.svg` once published |
-| `cores.svg` | busy cores at 1 Hz, benchmark and replay |
+| `orig.jsonl`, `orig.json` | the recording of the benchmark, one JSON line per sample with its provenance, and the profile aggregated from it: per field the average, the percentiles where they exist, and the scope, mode and method it was measured with |
+| `report.json`, `run.log`, `knobs.json` | the fitting run's report: the CPU, the thread count, every target with the tier it was checked at, its measured value and whether it was within; the knobs the run ended on; every 100 ms window with its measurements, its knobs and the pass count; and the notes, which name every fallback and every hold. The log is the same, line by line, as the run printed it; `knobs.json` is the report's knobs on their own, for the hold |
+| `hold-report.json`, `hold.log` | the same for the fixed-knob run that was recorded, which has no counters and so no measured targets |
+| `replay.jsonl`, `replay.json` | the recording and the profile of the replay, taken as the benchmark's were |
+| `compare.txt`, `compare.json` | the two profiles field by field: expected, actual, relative error and whether it is within tolerance, as text and as rows |
+| `ratio.svg` | replay over original per observable, a bar at 1.0 being a match; `docs/experiments/<mode>/<name>/ratio.svg` once published |
+| `cores.svg` | busy cores at 1 Hz over the two recordings, benchmark and replay, which is where burstiness is visible |
+| `phases.json`, `alone.json`, `beside.json`, `after.json`, `compare-<phase>.json` | the disturbed mode only: when the neighbour started and stopped and which seconds each phase covers, the three phases' profiles, and each one's comparison with the benchmark's |
 
 `experiments/out/<mode>/summary.svg` puts every experiment's ratios on
 one chart. `experiments/publish.sh` copies the small files of every
 mode into `docs/experiments/<mode>/`, and `experiments/plot.py` draws
 the figures under `docs/experiments/plots/` from them with seaborn,
-inlined below: the error of every field in every mode as a heatmap,
-the fields within tolerance, the seconds to the last knob move, the
-first seconds of each mode's fits against their targets, and the
-disturbed mode's live fits around their neighbour.
+inlined below. How to read them:
+
+- **fields within** (`within.png`): per benchmark, one bar per mode
+  with the fields within tolerance over the fields the recorder
+  measured, the latter in grey behind it; the crowd mode's four
+  copies of a profile are one bar at their mean with a line for
+  their range.
+- **error heatmap** (`errors.png`): replay less original, per field,
+  as a percentage of the target or of the field's absolute floor,
+  whichever is larger, so a dTLB rate of 0.17 against 0.003 reads as
+  hundreds of percent of a floor of 0.02 rather than thousands of
+  the target; red is over, blue under, a black frame marks a field
+  outside tolerance, and the colour is clipped at a hundred percent.
+- **convergence** (`convergence.png`): the second of the last knob
+  move of each fit, a cross marking a fit that did not converge,
+  because a target was out of reach or the fit held a compromise.
+- **trajectories** (`trajectories-<mode>.png`): each fit's IPC, MPKI
+  and dTLB rate over its first four seconds against the target line
+  and the tolerance band, MPKI and the dTLB rate on a log scale; a
+  band that fills the panel is an absolute floor wider than the
+  values.
+- **the disturbed mode** (`disturbed.png`): the same three ratios over
+  a live fit's hundred seconds, the neighbour's presence in orange,
+  the three recorded phases in grey, and each phase's fields within
+  in the title.
+- **per mode** (`<mode>/summary.svg`): every benchmark's ratio of
+  replay to original per field, 1.0 a match, drawn by the harness
+  from the comparisons.
 
 ## The set
 
@@ -78,6 +103,38 @@ DCPerf's sources without the rest of DCPerf and installs them under
 `~/.local/share/taobench`; the wrapper sizes the server like DCPerf's
 own runner does, scaled down to a small container's worth of threads,
 and records only the server.
+
+What each benchmark is, and why it is in the set:
+
+- **schbench** is the scheduler latency benchmark: message threads
+  wake worker threads that spin for a while and sleep. Eight threads
+  busy nearly all the time at a high IPC, a few megabytes of cache
+  footprint each, almost no misses and a dTLB rate near zero. It
+  stands for a compute-bound service and checks that the fit does
+  not invent memory traffic where there is none.
+- **stress-ng's vm stressor** runs four workers that each keep
+  writing a gigabyte with 64-bit stores. Memory-bound: a miss every
+  fifty instructions, an IPC of 0.22, sixteen gigabytes a second of
+  streaming stores, and the page faults of a gigabyte per worker.
+  It stands for the bandwidth-bound end and is where the generator's
+  floors show, the dTLB floor and the misses per instruction a run
+  can make.
+- **sysbench's cpu test** computes primes on four threads: no
+  memory, an IPC of 1.45, a cache-resident profile that checks the
+  rates can be diluted to almost nothing.
+- **fio** reads 4 KiB blocks at random from a gigabyte that sits in
+  the page cache, two jobs with synchronous reads. Its time goes into
+  the kernel's page-cache copies, so in user mode it looks like a
+  bursty process of modest IPC with a high dTLB rate, and with the
+  kernel counted it acquires the kernel's misses. It stands for a
+  kernel-bound, bursty service, and its burstiness is what the
+  thread sizing and the plateau handling were measured on.
+- **TaoBench** is the memcached-derived key-value server of Meta's
+  DCPerf, with its client driving it from a scope of its own; only
+  the server is recorded. Eight threads, TLS, a cache that misses the
+  L3 by design, a dTLB rate of six per thousand and an IPC of 0.7:
+  the profile farthest from the fitter's first guess, and the one
+  every lever has to work for.
 
 ## Results
 

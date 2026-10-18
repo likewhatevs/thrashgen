@@ -42,6 +42,26 @@ describes the benchmark comparisons and their plots.
 
 ![Fields within tolerance per benchmark and privilege mode on the reference host](docs/experiments/plots/within.png)
 
+## Documentation
+
+The docs are published as a book at
+<https://likewhatevs.github.io/thrashgen/> and live under `docs/`:
+
+- [AGENTS.md](AGENTS.md): where work on the code starts, the goals,
+  the rules and the method
+- [Design](docs/design.md): the contract, every observable and knob
+  and what the hardware cannot do
+- [Architecture](docs/architecture.md): the data flow, the modules,
+  the run loop and the fitter's pass, as diagrams
+- [Privileges](docs/privileges.md): what each privilege level buys and
+  how measurement degrades without it
+- [Testing](docs/testing.md): the three layers of tests and how to run
+  them
+- [Experiments](docs/experiments.md): the benchmark replays in every
+  mode, their data and figures
+- [Status](docs/status.md): what is verified, as of when, and what is
+  open
+
 Implemented for Linux on x86-64, with event tables for AMD Zen 3 to 5,
 Intel Skylake-SP through Granite Rapids and Sierra Forest, and Arm
 Neoverse. The AArch64 paths, the code stream's stubs and the

@@ -12,7 +12,7 @@ and a report. Everything else is in memory.
 ```mermaid
 flowchart LR
     subgraph target["what is measured"]
-        C[cgroup / process / command / host]
+        C["cgroup / process / command / host"]
     end
     R[record] -->|"recording.jsonl: header + samples"| A[aggregate]
     C --> R
@@ -103,7 +103,7 @@ sequenceDiagram
             R->>R: hold
         end
     end
-    R->>R: report; cache the fit if it converged
+    R->>R: report, cache the fit if it converged
 ```
 
 Convergence is two consecutive windows with every judged target
@@ -122,21 +122,21 @@ share; each rule is quiet while its observable is within tolerance.
 
 ```mermaid
 flowchart TD
-    A[statuses: every judged target within?] -->|yes| Z[return knobs unchanged]
-    A -->|no| B[busy cores, burstiness: duty and cv knobs by target / predicted]
-    B --> C{working-set shrink that cost misses compute cannot buy back?}
-    C -->|yes| C1[undo it, block shrinks, return]
-    C -->|no| D[IPC ladder: shares back, then dep / lines / chains / seq by regime]
-    D --> E[dilution: past 4096 ops, halve the run length]
+    A["statuses: every judged target within?"] -->|yes| Z[return knobs unchanged]
+    A -->|no| B["busy cores, burstiness: duty and cv knobs by target / predicted"]
+    B --> C{"working-set shrink that cost misses compute cannot buy back?"}
+    C -->|yes| C1["undo it, block shrinks, return"]
+    C -->|no| D["IPC ladder: shares back, then dep / lines / chains / seq by regime"]
+    D --> E["dilution: past 4096 ops, halve the run length"]
     E --> F[page-cache reads back if misses run high]
-    F --> G[ops: model-based, from misses per access and the measured slope]
+    F --> G["ops: model-based, from misses per access and the measured slope"]
     G --> H[sparse set halves once compute and dilution are spent]
-    H --> I[at one op, misses short: run length by its measured response, then page-cache reads if the kernel counts]
-    I --> J[bandwidth: write share, non-temporal lines, page-cache reads within the MPKI band]
-    J --> K[visit rates: compensate the change in instructions per access, correct the error]
-    K --> L[dTLB excess from the main stream: working set, then walk, then dilution]
-    L --> M{at one op, a lever turned twice within three passes?}
-    M -->|yes| M1[freeze it; the run adopts the closest pass]
+    H --> I["at one op, misses short: run length by its measured response, then page-cache reads if the kernel counts"]
+    I --> J["bandwidth: write share, non-temporal lines, page-cache reads within the MPKI band"]
+    J --> K["visit rates: compensate the change in instructions per access, correct the error"]
+    K --> L["dTLB excess from the main stream: working set, then walk, then dilution"]
+    L --> M{"at one op, a lever turned twice within three passes?"}
+    M -->|yes| M1["freeze it; the run adopts the closest pass"]
     M --> N[clamp and return]
 ```
 
