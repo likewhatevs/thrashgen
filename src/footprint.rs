@@ -208,6 +208,14 @@ impl CacheFile {
         })
     }
 
+    /// Whether the bytes are in place: the writer has finished, or was
+    /// waited for.
+    pub fn written(&self) -> bool {
+        self.writer
+            .as_ref()
+            .is_none_or(std::thread::JoinHandle::is_finished)
+    }
+
     /// Wait for the bytes to be in place.
     pub fn settle(&mut self) -> io::Result<()> {
         match self.writer.take() {
@@ -496,6 +504,7 @@ mod tests {
         // The bytes are written by a thread; residency is a property of
         // the written file.
         f.settle().unwrap();
+        assert!(f.written(), "settled is written");
         assert_eq!(f.len(), 4 << 20);
         assert!(!f.is_empty());
         let path = f.path.clone();

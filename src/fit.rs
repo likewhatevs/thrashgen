@@ -421,11 +421,19 @@ impl Fitter {
     /// Worker count for a target set: the CPU limit if given; otherwise
     /// the busy cores with headroom for burstiness, since the
     /// per-second factor is clipped at full duty and clipping would pull
-    /// the mean below the target. At least one, at most `max`.
+    /// the mean below the target. Per-second busy cores between zero
+    /// and the thread count with mean `m` have a CV of at most
+    /// `sqrt((n - m) / m)`, all or nothing, so a CV needs
+    /// `m (1 + cv^2)` threads: fio at 0.27 cores and a CV of 3.8 needs
+    /// five, where `m (1 + cv)` gave two and the fit cut duty to no
+    /// effect. At least one, at most `max`.
     pub fn threads_for(t: &Targets, max: usize) -> usize {
         let wanted = match (t.get("cpu_limit_cores"), t.get("cpu_usage_cores")) {
             (Some(limit), _) => limit,
-            (None, Some(cores)) => cores * (1.0 + t.get("cpu_usage_cv_1s").unwrap_or(0.0)),
+            (None, Some(cores)) => {
+                let cv = t.get("cpu_usage_cv_1s").unwrap_or(0.0).max(0.0);
+                cores * (1.0 + cv * cv)
+            }
             (None, None) => 1.0,
         };
         (wanted.ceil().max(1.0) as usize).min(max.max(1))
@@ -2385,8 +2393,22 @@ mod tests {
         t.set("cpu_usage_cv_1s", 0.5).unwrap();
         assert_eq!(
             Fitter::threads_for(&t, 64),
-            4,
-            "headroom for bursts: 2.3 * 1.5"
+            3,
+            "headroom for bursts: 2.3 * (1 + 0.25)"
+        );
+        t.set("cpu_usage_cv_1s", 1.5).unwrap();
+        assert_eq!(
+            Fitter::threads_for(&t, 64),
+            8,
+            "a CV of 1.5 at 2.3 cores needs 2.3 * 3.25 threads"
+        );
+        let mut bursty = Targets::new();
+        bursty.set("cpu_usage_cores", 0.27).unwrap();
+        bursty.set("cpu_usage_cv_1s", 3.8).unwrap();
+        assert_eq!(
+            Fitter::threads_for(&bursty, 64),
+            5,
+            "fio: 0.27 * (1 + 3.8^2)"
         );
         t.set("cpu_limit_cores", 8.0).unwrap();
         assert_eq!(Fitter::threads_for(&t, 64), 8);

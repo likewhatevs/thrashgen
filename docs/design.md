@@ -245,7 +245,11 @@ target, since clipping at full duty keeps the measured value below the
 knob; the one-second busy-cores ticks sit on wall-clock
 second boundaries, where the workers redraw their factor. Worker
 threads are the CPU limit when given, else the busy cores with headroom
-of one plus the CV, so the clipped per-second factor keeps its mean.
+of one plus the CV squared, so the clipped per-second factor keeps its
+mean: per-second busy cores between zero and the thread count with a
+given mean have a CV of at most the all-or-nothing series', and fio
+at 0.27 cores with a CV of 3.8 needs five threads, where one plus the
+CV gave two and the fit cut duty to no effect.
 
 The IPC ladder gives the shares back first: the sequential walk when
 IPC is high, dependent visits when it is short; a share under a tenth
@@ -337,7 +341,11 @@ period; measured at fixed knobs on Zen 4, IPC and MPKI vary 0.3 to
 one percent, far inside the tolerance, so a 100 ms window costs nothing
 measurable and thirty-six passes fit the budget; `--window` changes
 it. The page-cache file is written by a thread while the first windows
-run, so a gigabyte of it does not hold the workers back. Consecutive
+run, so a gigabyte of it does not hold the workers back, and the
+seconds it is still being written do not count toward busy cores,
+since its CPU is the writer's and no knob intended it: a gigabyte
+took two seconds and read as a core where a bursty profile intended a
+few hundredths. Consecutive
 windows at the same knobs are pooled for the fitter, the newest two
 at least and then as many as hold the instructions of 0.4 s at the
 run's mean rate, plus two seconds per unit of the burstiness target:

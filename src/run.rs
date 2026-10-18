@@ -911,7 +911,14 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             let intended = threads as f64
                 * (knobs.duty * crate::loadgen::duty_factor(settings.seed, ended, knobs.cv))
                     .min(1.0);
-            cores_window.tick(c.cores, intended);
+            // While the page-cache file is being written its writer's
+            // CPU is in the busy cores and the workers' knobs did not
+            // intend it: a gigabyte took the first two seconds and
+            // read as a core where a bursty profile intended a few
+            // hundredths, and the fit cut duty by tens.
+            if cache.as_ref().is_none_or(CacheFile::written) {
+                cores_window.tick(c.cores, intended);
+            }
             next_cpu =
                 Instant::now() + Duration::from_secs_f64((1.0 - unix_now().fract()).max(0.05));
         }
