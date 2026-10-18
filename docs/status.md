@@ -14,9 +14,9 @@ Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 | lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, with and without the features | clean |
 | coverage | `cargo llvm-cov --summary-only` | 96% lines, 95% regions |
 | counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | pass |
-| per-CPU, uncore, resctrl, L3 filters | root tests as in `docs/testing.md`, resctrl mounted | pass |
-| the fit lands in seconds | cold fits of the recorded profiles on this host, `thrashgen run orig.json --duration 8` | schbench 0.3 s, sysbench 0.6 s, taobench 1.0 s, fio 1.3 s to the last knob change; stress-ng meets everything but dTLB (open item 2) |
-| end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy`, `perfmon` | `docs/experiments.md`: compute-bound profiles within tolerance on every field in every mode, fits converged in 0.3 to 1.8 s; TaoBench 10 of 10 in user, kernel and resctrl modes, 9 with neighbours and under the L3 PMU; stress-ng 9 of 10 but for its dTLB floor, 7 with neighbours and under the L3 PMU; fio 9 of 10 in user mode, 5 to 7 where the profile carries kernel-mode misses |
+| per-CPU, uncore, resctrl, L3 filters | root tests as in `docs/testing.md`, resctrl mounted | per-CPU counters and the L3 filters pass; the resctrl group test passed on 2026-10-17 and could not run on 2026-10-18, resctrl being unmountable that day (open item 1) |
+| the fit lands in seconds | cold fits of the recorded profiles on this host, `thrashgen run orig.json --duration 8 --no-cache` | schbench 0.3 s, sysbench 0.6 s, taobench 0.6 s to the last knob change; stress-ng meets everything but dTLB (open item 2) by 1.0 s; fio converges by 1.4 s and re-fits when its duty cycle changes plateau (open item 3) |
+| end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy`, `perfmon` | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.3 to 0.7 s, with neighbours and under the L3 PMU too; stress-ng 9 of 10 but for its dTLB floor, with neighbours too, 8 under the L3 PMU; fio 9 of 10 in user mode, 6 to 7 where the profile carries kernel-mode misses. The resctrl mode is from 2026-10-17: on 2026-10-18 resctrl could not be mounted (open item 1) |
 
 Not verified anywhere:
 
@@ -81,12 +81,16 @@ In rough order of value.
    percent duty with a CV of one the quiet seconds carry the misses of
    cold caches and the kernel's wakeups, the pooled windows span them
    only in part, and the fit moves again. The same shows in user mode:
-   fio's fit converged by 1.6 s inside a quiet four-second plateau and
-   moved again at the first busy one, where MPKI and the iTLB rate per
-   instruction were five to twenty times lower, settling by 4.4 s; the
-   hold's average over the plateaus landed within on every field. A
-   fit that judged a bursty profile over whole plateaus, or corrected
-   the rates by the duty of the second, would not chase them. Under `CAP_PERFMON` the L3
+   fio's rates per instruction differ several times over between a
+   quiet four-second plateau, where every wakeup refetches a cold cache
+   and TLB, and a busy one. In the chain of 2026-10-18 the fit
+   converged in 1.4 s inside one plateau and the hold's iTLB rate
+   averaged three times the target over all of them; in an earlier
+   run the fit moved again at the first busy plateau, where MPKI and
+   the iTLB rate were five to twenty times lower, and settled by 4.4 s
+   with every field of the hold within. A fit that judged a bursty
+   profile over whole plateaus, or corrected the rates by the duty of
+   the second, would not depend on which plateau it saw. Under `CAP_PERFMON` the L3
    PMU counts prefetched lines too, so stress-ng reads 95 MPKI; a miss
    every ten instructions needs the prefetched walk, which lifts IPC,
    and the two targets meet nowhere, so the fit now freezes the lever
