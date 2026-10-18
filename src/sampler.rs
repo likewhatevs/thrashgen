@@ -116,11 +116,22 @@ pub trait BandwidthSource {
     fn read_bytes(&mut self) -> io::Result<Vec<Option<u64>>>;
 }
 
-/// Sum scaled readings by counter name.
-fn sum_by_name(readings: &[Reading]) -> BTreeMap<String, f64> {
+/// Counts gained between two reads, by counter name, each scaled by
+/// the enabled over the running time gained in the same interval. The
+/// kernel's cumulative counts could be scaled once and differenced,
+/// but the ratio then belongs to the whole history: when a recorder
+/// attached to or left the same PMU, the share of time the replay's
+/// counters ran changed, and the differenced cumulative readings put
+/// IPC at a hundredth of itself for five seconds and at five times for
+/// three. Readings pair up by position, as a source reads them in a
+/// fixed order; a count that went backwards, a reset, gains nothing.
+fn gained_by_name(prev: &[Reading], now: &[Reading]) -> BTreeMap<String, f64> {
     let mut out = BTreeMap::new();
-    for r in readings {
-        *out.entry(r.name.clone()).or_insert(0.0) += r.scaled;
+    for (p, n) in prev.iter().zip(now) {
+        let raw = n.raw.saturating_sub(p.raw);
+        let enabled = n.time_enabled.saturating_sub(p.time_enabled);
+        let running = n.time_running.saturating_sub(p.time_running);
+        *out.entry(n.name.clone()).or_insert(0.0) += crate::perf::scale(raw, enabled, running);
     }
     out
 }
@@ -130,7 +141,7 @@ fn sum_by_name(readings: &[Reading]) -> BTreeMap<String, f64> {
 struct Mark {
     t: f64,
     busy: BusyTime,
-    counters: BTreeMap<String, f64>,
+    readings: Vec<Reading>,
     bytes: Option<Vec<Option<u64>>>,
 }
 
@@ -192,9 +203,9 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
 
     fn mark(&mut self, t: f64) -> io::Result<Mark> {
         let busy = measure::busy_time(&self.scope, &self.root)?;
-        let counters = match &mut self.counters {
-            Some(c) => sum_by_name(&c.read()?),
-            None => BTreeMap::new(),
+        let readings = match &mut self.counters {
+            Some(c) => c.read()?,
+            None => Vec::new(),
         };
         let bytes = match &mut self.bandwidth {
             Some(b) => Some(b.read_bytes()?),
@@ -203,7 +214,7 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
         Ok(Mark {
             t,
             busy,
-            counters,
+            readings,
             bytes,
         })
     }
@@ -248,7 +259,7 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
         self.cpu_mark = Some(Mark {
             t,
             busy,
-            counters: BTreeMap::new(),
+            readings: Vec::new(),
             bytes: None,
         });
         let files: Vec<&File> = self.cache_files.iter().collect();
@@ -275,16 +286,14 @@ impl<C: CounterSource, B: BandwidthSource> Sampler<C, B> {
             "cpu_usage_cores".to_string(),
             now.busy.total.saturating_sub(prev.busy.total).as_secs_f64() / dt,
         );
+        let gained = gained_by_name(&prev.readings, &now.readings);
         for (key, src) in &self.fields {
             let delta: f64 = src
                 .counters
                 .iter()
-                .map(|n| {
-                    now.counters.get(n).copied().unwrap_or(0.0)
-                        - prev.counters.get(n).copied().unwrap_or(0.0)
-                })
+                .map(|n| gained.get(n).copied().unwrap_or(0.0))
                 .sum();
-            values.insert(key.clone(), delta.max(0.0) / dt);
+            values.insert(key.clone(), delta / dt);
         }
         if let (Some(a), Some(b)) = (&prev.bytes, &now.bytes) {
             let mut sum = 0.0;
@@ -401,13 +410,45 @@ mod tests {
                 .iter()
                 .map(|(n, step)| Reading {
                     name: (*n).into(),
-                    raw: 0,
+                    raw: (step * f64::from(self.calls)) as u64,
                     scaled: step * f64::from(self.calls),
-                    time_enabled: Duration::from_secs(1),
-                    time_running: Duration::from_secs(1),
+                    time_enabled: Duration::from_secs(u64::from(self.calls)),
+                    time_running: Duration::from_secs(u64::from(self.calls)),
                 })
                 .collect())
         }
+    }
+
+    #[test]
+    fn counts_gained_scale_by_the_interval_not_the_history() {
+        // Times in milliseconds.
+        let r = |raw: u64, enabled: u64, running: u64| Reading {
+            name: "instructions".into(),
+            raw,
+            scaled: crate::perf::scale(
+                raw,
+                Duration::from_millis(enabled),
+                Duration::from_millis(running),
+            ),
+            time_enabled: Duration::from_millis(enabled),
+            time_running: Duration::from_millis(running),
+        };
+        // Two seconds on the PMU the whole time, then one second on it
+        // half the time, a recorder having attached: 500 counted in
+        // that second means 1000 gained. The differenced cumulative
+        // scaling would say 1500 * 3 / 2.5 - 1000 = 800.
+        let prev = [r(1000, 2000, 2000)];
+        let now = [r(1500, 3000, 2500)];
+        let g = gained_by_name(&prev, &now);
+        assert!((g["instructions"] - 1000.0).abs() < 1e-9, "{g:?}");
+        // Back to the whole time: the two seconds it ran count as is.
+        let later = [r(3500, 5000, 4500)];
+        let g = gained_by_name(&now, &later);
+        assert!((g["instructions"] - 2000.0).abs() < 1e-9, "{g:?}");
+        // A reset gains nothing; readings of one name add up.
+        let two = [r(10, 1000, 1000), r(20, 1000, 1000)];
+        let after = [r(5, 2000, 2000), r(50, 2000, 2000)];
+        assert_eq!(gained_by_name(&two, &after)["instructions"], 30.0);
     }
 
     struct Bytes(u64);

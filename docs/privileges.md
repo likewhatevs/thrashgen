@@ -35,7 +35,7 @@ namespace, so the tool is back to the first row.
 | IPC, dTLB, iTLB | verified, user mode only | verified, all modes | same |
 | L3 misses on Intel and ARM | verified from core events | same | same |
 | L3 misses on AMD | proxy from the core-side count of line fills sourced from DRAM; calibrated against the L3 PMU once | verified from the L3 PMU with core filters | same |
-| DRAM bandwidth | modelled from counted fills and the bytes the generator wrote with non-temporal stores; calibrated once | same | verified |
+| DRAM bandwidth | modelled from counted fills and the bytes the generator wrote non-temporally or dirtied; reported, not fitted | same | verified, and fitted |
 
 The report names the tier each target was checked at. "verified" means
 measured with the same definition the recorder uses; "proxy" means a

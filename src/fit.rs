@@ -197,6 +197,8 @@ pub fn absolute_tolerance(key: &str) -> f64 {
         _ => 0.0,
     }
 }
+/// Tolerances a target's error counts for at most in a window's distance.
+const DISTANCE_CAP: f64 = 10.0;
 const NTLINES_MAX: f64 = 512.0;
 const VISITS_RANGE: (f64, f64) = (1.0e-4, 64.0);
 /// Smallest working set, in pages, so a shrunken set still spans
@@ -488,10 +490,14 @@ impl Fitter {
         (0.5 * ((measured - target) / target).abs()).clamp(0.05, DEP_STEP)
     }
 
-    /// How far the distance between two windows' statuses is from
-    /// tolerance: the largest relative error over the measured targets,
-    /// each divided by its tolerance, so one is the edge of tolerance.
-    /// The pass with the smallest distance is the one worth holding.
+    /// How far a window is from tolerance: the sum over the measured
+    /// targets of the relative error over its tolerance, each capped at
+    /// [`DISTANCE_CAP`] tolerances, so a target out of reach by a
+    /// hundred tolerances does not pick the pass by its noise alone. By
+    /// the largest error, a fit held after a neighbour left picked a
+    /// pass at three times its IPC because the dTLB floor read a little
+    /// lower there. The pass with the smallest distance is the one worth
+    /// holding.
     pub fn distance(&self, statuses: &[Status]) -> f64 {
         statuses
             .iter()
@@ -506,9 +512,9 @@ impl Fitter {
                 if (measured - s.target).abs() <= abs {
                     return Some(0.0);
                 }
-                s.error.map(|e| e.abs() / tol)
+                s.error.map(|e| (e.abs() / tol).min(DISTANCE_CAP))
             })
-            .fold(0.0, f64::max)
+            .sum()
     }
 
     /// A first guess from the goal alone: compute from the MPKI target
@@ -960,12 +966,17 @@ impl Fitter {
             // walk that lets the prefetcher stream; when none of the
             // others can move, run length keeps moving even if it
             // seemed to have stalled.
-            let others_can_move = chains_can_move || (k.seq < 1.0 && p.misses_to_spare);
+            // A visit share has nothing to walk either: beside a
+            // neighbour on its sibling threads, schbench's replay, a
+            // visit on a fifth of its accesses, walked its share from a
+            // fiftieth to all in forty passes with IPC where it was.
+            let seq_can_move = k.seq < 1.0 && p.misses_to_spare && k.lines >= 1.0;
+            let others_can_move = chains_can_move || seq_can_move;
             if lines_can_move && (!stalled || !others_can_move) {
                 lines_move(k);
             } else if chains_can_move {
                 chains_move(k);
-            } else if k.seq < 1.0 && p.misses_to_spare {
+            } else if seq_can_move {
                 k.seq = (k.seq.max(SHARE_SEED) * g).clamp(0.0, 1.0);
             }
         }
@@ -1879,6 +1890,40 @@ mod tests {
     }
 
     #[test]
+    fn a_visit_share_has_no_walk_to_take() {
+        // schbench beside a neighbour: compute at its ceiling, the run a
+        // visit share, IPC short: the share does not walk. With a run
+        // at its range it does.
+        let goal = Goal {
+            ipc: Some(3.71),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 16382,
+            chains: 4.0,
+            lines: 0.181,
+            seq: 0.1,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(2.89),
+            accesses_per_s: 1.0e4,
+            instructions_per_s: Some(1.0e9),
+            ..Measured::default()
+        };
+        let mut f = Fitter::new(8, LIMITS);
+        let next = f.step(&k, &m, &goal);
+        assert_eq!(next.seq, 0.1, "a share has nothing to walk: {next:?}");
+        let run = Knobs {
+            lines: 64.0,
+            ..k.clone()
+        };
+        let mut g = Fitter::new(8, LIMITS);
+        let next = g.step(&run, &m, &goal);
+        assert!(next.seq > 0.1, "a run at its range walks: {next:?}");
+    }
+
+    #[test]
     fn run_length_at_one_op_follows_its_measured_response() {
         let goal = Goal {
             mpki: Some(20.0),
@@ -2382,6 +2427,20 @@ mod tests {
             0.0,
             "within the absolute floor counts as met"
         );
+        // A target out of reach counts for ten tolerances at most, so
+        // the pass with IPC in reach wins over one where the floor read a
+        // little lower.
+        let st = |key: &'static str, error: f64| Status {
+            key,
+            target: 1.0,
+            measured: Some(1.0 + error),
+            error: Some(error),
+            within: false,
+        };
+        let floor_lower = [st("dtlb_pki", 8.0 * 0.05), st("ipc", 2.3)];
+        let ipc_near = [st("dtlb_pki", 35.0 * 0.05), st("ipc", 0.11)];
+        assert!(f.distance(&ipc_near) < f.distance(&floor_lower));
+        assert!((f.distance(&floor_lower) - 18.0).abs() < 1e-9);
     }
 
     #[test]

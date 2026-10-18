@@ -15,6 +15,7 @@ use nix::unistd::Pid;
 use crate::aggregate::pooled_cv;
 use crate::calibration::Calibration;
 use crate::caps::{Expectations, Facts, Root};
+use crate::cgroup::Cgroup;
 use crate::cpu;
 use crate::events::{Sysfs, Vendor, table_for};
 use crate::fit::{Fitter, Goal, Limits, Measured, Status, TlbRegime};
@@ -244,6 +245,14 @@ pub struct Convergence {
     pub compromise: bool,
     /// Distance, knobs and pass of the closest pass.
     pub best: Option<(f64, Knobs, u32)>,
+    /// Out of passes without converging, holding the closest pass.
+    pub out_of_passes: bool,
+    /// The targets within at that hold: a second of one of them out
+    /// says the surroundings changed, and the hold gets a fresh budget.
+    held_within: Vec<&'static str>,
+    held_out: u32,
+    /// Budgets granted after a hold saw its surroundings change.
+    pub renewals: u32,
 }
 
 impl Convergence {
@@ -259,7 +268,46 @@ impl Convergence {
             ever: false,
             compromise: false,
             best: None,
+            out_of_passes: false,
+            held_within: Vec::new(),
+            held_out: 0,
+            renewals: 0,
         }
+    }
+
+    /// Out of passes: hold, remembering which targets the hold meets.
+    pub fn hold(&mut self, judged: &[Status]) {
+        self.out_of_passes = true;
+        self.held_within = judged
+            .iter()
+            .filter(|s| s.within && s.measured.is_some())
+            .map(|s| s.key)
+            .collect();
+        self.held_out = 0;
+    }
+
+    /// Whether a held fit's surroundings have changed: a target the
+    /// hold met has been out for a second of windows in a row. A fit
+    /// held for an unreachable target, stress-ng's dTLB floor, kept its
+    /// neighbour-time knobs after the neighbour left and ran at three
+    /// times the IPC, since its budget was spent while the neighbour
+    /// was there. Grants a fresh budget and says so, once per change.
+    pub fn renew(&mut self, judged: &[Status]) -> bool {
+        if !self.out_of_passes {
+            return false;
+        }
+        let out = judged
+            .iter()
+            .any(|s| self.held_within.contains(&s.key) && s.measured.is_some() && !s.within);
+        self.held_out = if out { self.held_out + 1 } else { 0 };
+        if self.held_out < self.refit_windows {
+            return false;
+        }
+        self.out_of_passes = false;
+        self.held_within.clear();
+        self.held_out = 0;
+        self.renewals += 1;
+        true
     }
 
     /// Note a window: whether its judged targets were all within, and
@@ -423,6 +471,12 @@ pub const CORES_WINDOW_SECONDS: usize = 2 * crate::loadgen::FACTOR_BLOCK as usiz
 /// cache, which the profile asked for anyway.
 pub fn sparse_from_file(anon_cap: usize, configured: usize, pagecache_bytes: u64) -> bool {
     anon_cap < configured && pagecache_bytes >= (configured * PAGE) as u64
+}
+
+/// Whether a `cgroup.procs` listing names `pid` and nothing else.
+pub fn alone_in_cgroup(procs: &str, pid: u32) -> bool {
+    let mut pids = procs.split_whitespace().peekable();
+    pids.peek().is_some() && pids.all(|p| p.parse::<u32>().is_ok_and(|x| x == pid))
 }
 
 /// Whether page-cache reads are a lever: the file must be larger than
@@ -622,8 +676,32 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     };
     let pinned: Option<Vec<u32>> = pin.then(|| choose_cpus(&affinity, &topo, threads));
 
+    // Memory and busy time from the tool's own cgroup when it has one
+    // to itself, as in a container or a scope of its own: the cgroup
+    // charges the slab of the empty files, the page tables and the
+    // threads' stacks, which the process view does not see and which
+    // put twelve instances a fifth over their memory target, and it is
+    // what a recorder of the scope reads. Shared with other processes,
+    // a login session's scope say, it would count theirs too.
+    let scope = match &facts.cgroup {
+        Some(c) if c.memory_stat && c.cpu_stat && !c.path.is_empty() => {
+            let procs =
+                std::fs::read_to_string(root.path(&c.mount).join(&c.path).join("cgroup.procs"))
+                    .unwrap_or_default();
+            if alone_in_cgroup(&procs, std::process::id()) {
+                notes.push(format!(
+                    "memory and busy time from the cgroup {}, which this process has to itself",
+                    c.path
+                ));
+                Scope::Cgroup(Cgroup::new(&root, &c.mount, &c.path))
+            } else {
+                Scope::SelfProcess
+            }
+        }
+        _ => Scope::SelfProcess,
+    };
     // Footprint first, so its page faults do not land in a window.
-    let baseline = measure::memory(&Scope::SelfProcess, &root, &[]).context("baseline memory")?;
+    let baseline = measure::memory(&scope, &root, &[]).context("baseline memory")?;
     let (sparse_capacity, code_capacity) = stream_capacities(
         targets.get("anon_bytes"),
         settings.sparse_capacity,
@@ -694,18 +772,19 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     } else {
         None
     };
-    let mut _kernel = None;
+    let mut kernel = None;
     if mem_plan.kernel_files > 0 {
         let mut k = KernelFiles::new(&settings.scratch_dir).context("create the slab directory")?;
         k.set_count(mem_plan.kernel_files)
             .context("create slab files")?;
         notes.push(format!(
-            "kernel memory: {} empty files, open-loop at {} bytes each",
+            "kernel memory: {} empty files at {} bytes each to start; the count follows the measured total",
             mem_plan.kernel_files,
             crate::footprint::BYTES_PER_EMPTY_FILE
         ));
-        _kernel = Some(k);
+        kernel = Some(k);
     }
+    let mut last_kernel_adjust = Instant::now();
     let mut extra_anon: Vec<AnonBuffer> = Vec::new();
 
     // Bandwidth: a resctrl group with this thread in it, inherited by the workers.
@@ -759,7 +838,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     live.enable().context("enable counters")?;
     let counters = if live.is_empty() { None } else { Some(live) };
     let mut sampler: Sampler<LiveCounters, MonGroup> = Sampler::new(
-        Scope::SelfProcess,
+        scope.clone(),
         root.clone(),
         plan.fields.clone(),
         counters,
@@ -1030,12 +1109,41 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         let _ = c.reread();
                     }
                 }
+                // Kernel memory: the empty files' slab cost is an
+                // estimate, so what the measured total stands above or
+                // below the target corrects their count, damped and once
+                // a second so the slab settles between moves. Twelve
+                // instances on one host ran a fifth over the estimate.
+                if let (Some(k), Some(target), Some(total)) = (
+                    kernel.as_mut(),
+                    targets.get("memory_current_bytes"),
+                    sample.values.get("memory_current_bytes"),
+                ) {
+                    let off = total - target;
+                    let slack =
+                        crate::fit::absolute_tolerance("memory_current_bytes").max(0.05 * target);
+                    if off.abs() > slack && last_kernel_adjust.elapsed().as_secs_f64() >= 1.0 {
+                        let per_file = crate::footprint::BYTES_PER_EMPTY_FILE as f64;
+                        let files = (k.count() as f64 - 0.5 * off / per_file).max(0.0) as usize;
+                        if files != k.count() {
+                            k.set_count(files).context("adjust the slab files")?;
+                            last_kernel_adjust = Instant::now();
+                        }
+                    }
+                }
                 last_sample = Some(sample);
                 // The pass limit is for a fit that has never converged;
                 // one that has keeps following the host, since it moves
                 // only when a second of windows in a row is out.
+                if fitting && !stop && fit.renew(&judged) {
+                    notes.push(format!(
+                        "a target the hold met has been out for a second after {} passes; fitting again with a fresh budget",
+                        fitter.passes
+                    ));
+                }
+                let budget = settings.max_passes.saturating_mul(fit.renewals + 1);
                 if fitting && !stop && (settings.adaptive || fit.refit()) {
-                    if fitter.passes < settings.max_passes || fit.ever {
+                    if fitter.passes < budget || fit.ever {
                         let mut next = fitter.step(&knobs, &m, &fit_goal);
                         // A lever the IPC and MPKI rules pulled against
                         // each other has just been frozen: the two targets
@@ -1061,7 +1169,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                             knobs = next;
                             last_move = Instant::now();
                         }
-                    } else if !notes.iter().any(|n| n.starts_with("not within tolerance")) {
+                    } else if !fit.out_of_passes {
                         // Out of passes: hold the closest pass, not the last.
                         let held = match &fit.best {
                             Some((_, k, pass)) if *k != knobs => {
@@ -1075,6 +1183,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                             "not within tolerance after {} passes{held}",
                             fitter.passes
                         ));
+                        fit.hold(&judged);
                     }
                 }
             }
@@ -1248,6 +1357,48 @@ mod tests {
         c.observe(false, 1.1, &k, 3);
         c.observe(true, 0.9, &k, 3);
         assert!(!c.converged && c.holding());
+    }
+
+    #[test]
+    fn a_hold_out_of_passes_gets_a_fresh_budget_when_what_it_met_goes_out() {
+        let status = |key: &'static str, within: bool| Status {
+            key,
+            target: 1.0,
+            measured: Some(if within { 1.0 } else { 2.0 }),
+            error: Some(if within { 0.0 } else { 1.0 }),
+            within,
+        };
+        let mut c = Convergence::new(10);
+        let k = Knobs::default();
+        c.observe(false, 2.0, &k, 36);
+        assert!(!c.renew(&[status("ipc", false)]), "not holding yet");
+        c.hold(&[status("ipc", true), status("dtlb_pki", false)]);
+        assert!(c.out_of_passes);
+        for _ in 0..20 {
+            assert!(
+                !c.renew(&[status("ipc", true), status("dtlb_pki", false)]),
+                "the unreachable target stays out: no change"
+            );
+        }
+        for i in 0..9 {
+            assert!(
+                !c.renew(&[status("ipc", false), status("dtlb_pki", false)]),
+                "{i}"
+            );
+        }
+        assert!(
+            !c.renew(&[status("ipc", true), status("dtlb_pki", false)]),
+            "one within resets"
+        );
+        for _ in 0..9 {
+            c.renew(&[status("ipc", false), status("dtlb_pki", false)]);
+        }
+        assert!(
+            c.renew(&[status("ipc", false), status("dtlb_pki", false)]),
+            "a second out"
+        );
+        assert!(!c.out_of_passes && c.renewals == 1);
+        assert!(!c.renew(&[status("ipc", false)]), "once per hold");
     }
 
     #[test]

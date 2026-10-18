@@ -57,8 +57,17 @@ generator.
 
 Kernel memory is `memory_current_bytes` minus the three components; it
 is reproduced by creating empty files, whose dentry and inode slab is
-charged to the generator's cgroup, and topped up as the kernel
-reclaims it.
+charged to the generator's cgroup, at an estimated 1100 bytes each to
+start, and their count then follows what the measured total stands
+above or below the target, damped and once a second. The generator
+measures its memory and busy time from its own cgroup when it has one
+to itself, as in a container or a scope of its own, since the cgroup
+charges the slab, the page tables and the threads' stacks that the
+process view does not see, and is what a recorder of the scope reads;
+twelve instances on one host ran a fifth over their memory target
+before that, and the process view could neither see it nor correct
+it. A cgroup shared with other processes, a login session's scope
+say, would count theirs too, so there the process view stays.
 
 Each field in a profile carries provenance: the scope (`cgroup`,
 `process`, `host`), the counting mode (`user`, `all`) and the method
@@ -133,6 +142,14 @@ chain per observable. The report labels each target:
   default knobs.
 
 The probe result is also what `caps` prints.
+
+Counters are read as the kernel's cumulative counts with their enabled
+and running times, and each interval is scaled by the enabled over
+the running time gained in that interval, not by the cumulative
+ratio: a cumulative ratio belongs to the whole history, and when a
+recorder attached to or left the PMU a replay's counters shared, the
+share changed and the differenced cumulative readings put IPC at a
+hundredth of itself for five seconds and at five times for three.
 
 ## 5. Load generator
 
@@ -280,7 +297,11 @@ the kernel's copy is where a page-cache reader's misses are; they are
 the first lever given back when misses run high. IPC short: longer runs, when the
 stream has a run and not a visit share, since a run of one on every
 access would undo the dilution the share is; more
-chains, then a sequential walk that lets the prefetcher stream; under
+chains, then a sequential walk that lets the prefetcher stream, when
+the stream has a run to walk and not a visit share, which has none
+(beside a neighbour on its sibling threads schbench's replay walked
+its share from a fiftieth to all in forty passes with IPC where it
+was); under
 the L3 miss proxy, which does not count prefetched lines, only with
 misses to spare, none asked for or within the absolute floor, since
 the walk then costs counted misses. Past
@@ -321,7 +342,9 @@ share against each other, a prefetched walk or a longer run bringing
 the misses the one wants and the IPC the other does not; a lever that
 has turned twice within three passes is frozen, since the two targets
 meet nowhere along it; the fit goes back to the closest pass it saw,
-by the largest relative error over its tolerance, and continues from
+by the sum of its relative errors over tolerance, each capped at ten
+tolerances so a target out of reach does not pick the pass by its
+noise, and continues from
 there with the lever held. Ops
 follow the misses per access the run length the IPC rule chose
 implies, by the share of the misses that followed the run length last
@@ -371,7 +394,7 @@ first, on every window out, until it converges again, since a target
 left at the edge of its band by a move would otherwise neither move
 nor converge; with `--adaptive` it keeps adjusting. A fit that
 runs out of passes without ever converging holds the closest pass it
-saw, by the largest relative error over its tolerance, rather than
+saw, by that capped sum of relative errors over tolerance, rather than
 the last, which is as likely to be a swing as a settling, and says
 so; one that has converged is not limited, since it moves only after
 a second out. A fit that ends out of tolerance while still moving

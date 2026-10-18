@@ -8,7 +8,9 @@ that run the same way as the benchmark, and compares the two profiles
 field by field. The second run keeps the search for the knobs out of
 the comparison, and keeps the recorder's counters to itself: a fitting
 run and a recorder attached to it share the core's six counters, and
-the time-multiplexed readings on both sides drifted apart. Both the
+until the scaling for the time multiplexed away was done per interval
+(2026-10-18) the readings on both sides drifted apart; the disturbed
+mode records a live fit, which the two now allow. Both the
 benchmark and the replay run in a transient user scope
 (`systemd-run --user --scope`), so the recorder reads a cgroup with
 the same accounting for each: busy time and memory from the cgroup
