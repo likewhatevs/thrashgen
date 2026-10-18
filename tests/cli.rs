@@ -169,10 +169,9 @@ fn run_starts_from_its_cached_fit() {
     let dir = tempfile::tempdir().unwrap();
     let run = |extra: &[&str]| {
         let mut cmd = Command::cargo_bin("thrashgen").unwrap();
-        // Busy cores are judged from the third second, and the IPC of a
-        // compute-only target climbs a damped step a window; six seconds
-        // of 200 ms windows leave room for a loaded host.
-        cmd.args(["run", "--set", "cpu_usage_cores=0.5", "--set", "ipc=1.2"])
+        // What is under test is the cache, so the target is the one the
+        // fit meets soonest: busy cores, judged from the third second.
+        cmd.args(["run", "--set", "cpu_usage_cores=0.5"])
             .args([
                 "--duration",
                 "6",
@@ -193,7 +192,13 @@ fn run_starts_from_its_cached_fit() {
     let first = run(&[]);
     let cache = dir.path().join("thrashgen");
     let entries: Vec<_> = std::fs::read_dir(&cache)
-        .unwrap_or_else(|e| panic!("no cache written at {}: {e}", cache.display()))
+        .unwrap_or_else(|e| {
+            panic!(
+                "no cache written at {}: {e}\n{}",
+                cache.display(),
+                String::from_utf8_lossy(&first.get_output().stderr)
+            )
+        })
         .flatten()
         .collect();
     assert_eq!(entries.len(), 1, "one cached fit: {entries:?}");
