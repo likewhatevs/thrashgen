@@ -25,6 +25,10 @@ Not verified anywhere:
 - the Intel and Arm event tables come from the kernel's `pmu-events`
   at v7.1 and are checked only against fixtures, never on that
   hardware;
+- the AArch64 generator paths, the stubs with their instruction-cache
+  maintenance and the `stnp` non-temporal stores, compile for that
+  target and have never run on it; the streams assume 4 KiB pages and
+  64-byte lines, and the sparse set is sized for a 4 KiB page;
 - the replay of a container across hosts: every replay here ran on
   the host that recorded it.
 

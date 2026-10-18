@@ -266,6 +266,32 @@ pub const CODE_STRIDE: usize = 4;
 /// `lea rax, [rdi+1]; ret`
 #[cfg(target_arch = "x86_64")]
 const STUB: &[u8] = &[0x48, 0x8d, 0x47, 0x01, 0xc3];
+/// `add x0, x0, #1; ret`, little-endian.
+#[cfg(target_arch = "aarch64")]
+const STUB: &[u8] = &[0x00, 0x04, 0x00, 0x91, 0xc0, 0x03, 0x5f, 0xd6];
+
+/// Make stubs written through the data side visible to the instruction
+/// side. x86 keeps its instruction cache coherent with stores; `AArch64`
+/// does not: each stub's line is cleaned to the point of unification,
+/// the instruction cache is invalidated for it, and an `isb` follows,
+/// as the architecture requires before executing written code. Each
+/// stub lies within one line, since offsets are multiples of 32.
+#[cfg(target_arch = "x86_64")]
+fn sync_instructions(_stubs: &[*const u8]) {}
+#[cfg(target_arch = "aarch64")]
+fn sync_instructions(stubs: &[*const u8]) {
+    // SAFETY: cache maintenance on addresses inside a mapping of our own.
+    unsafe {
+        for &p in stubs {
+            std::arch::asm!("dc cvau, {0}", in(reg) p, options(nostack, preserves_flags));
+        }
+        std::arch::asm!("dsb ish", options(nostack, preserves_flags));
+        for &p in stubs {
+            std::arch::asm!("ic ivau, {0}", in(reg) p, options(nostack, preserves_flags));
+        }
+        std::arch::asm!("dsb ish", "isb", options(nostack, preserves_flags));
+    }
+}
 
 impl CodePages {
     /// Offset of the stub within page `i`, spread over cache sets.
@@ -274,16 +300,19 @@ impl CodePages {
     }
 
     /// Write stubs into `pages` fresh pages and make them executable.
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     pub fn new(pages: usize) -> std::io::Result<CodePages> {
         let buf = AnonBuffer::new_untouched(pages * CODE_STRIDE * PAGE, false)?;
+        let mut stubs = Vec::with_capacity(pages);
         for i in 0..pages {
             let dst = buf
                 .as_ptr()
                 .wrapping_add(i * CODE_STRIDE * PAGE + Self::offset(i));
             // SAFETY: inside the mapping, which is writable until mprotect.
             unsafe { std::ptr::copy_nonoverlapping(STUB.as_ptr(), dst, STUB.len()) };
+            stubs.push(dst.cast_const());
         }
+        sync_instructions(&stubs);
         let ptr = std::ptr::NonNull::new(buf.as_ptr().cast()).expect("mapped");
         // SAFETY: the whole mapping, now holding only stubs.
         unsafe {
@@ -297,11 +326,11 @@ impl CodePages {
     }
 
     /// Not implemented on this architecture.
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     pub fn new(_pages: usize) -> std::io::Result<CodePages> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "code stubs are only implemented for x86_64",
+            "code stubs are only implemented for x86_64 and aarch64",
         ))
     }
 
@@ -477,7 +506,20 @@ fn nt_store_line(p: *mut u8, v: u64) {
             std::arch::x86_64::_mm_stream_si64(p.add(k * 8).cast::<i64>(), v as i64);
         }
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: as above; `stnp` writes a non-temporal pair of 8 bytes at
+    // each 16-byte step of the line.
+    unsafe {
+        for k in 0..(LINE / 16) {
+            std::arch::asm!(
+                "stnp {v}, {v}, [{p}]",
+                v = in(reg) v,
+                p = in(reg) p.add(k * 16),
+                options(nostack, preserves_flags)
+            );
+        }
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     // SAFETY: as above, with plain stores.
     unsafe {
         for k in 0..(LINE / 8) {
