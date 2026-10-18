@@ -22,6 +22,9 @@ pub struct Cpu {
     pub siblings: Vec<u32>,
     /// All CPUs sharing this CPU's L3, ascending; `None` without an L3.
     pub l3: Option<Vec<u32>>,
+    /// Bytes in that L3, from `cache/indexN/size`; `None` without an
+    /// L3 or a readable size.
+    pub l3_bytes: Option<u64>,
 }
 
 /// The online CPUs.
@@ -78,6 +81,34 @@ fn read_cpulist(path: &Path) -> Result<Vec<u32>, TopologyError> {
     Ok(list)
 }
 
+/// A sysfs cache size, `32768K`, `2M` or plain bytes; `None` when the
+/// file is missing, as it is for some virtual CPUs.
+fn read_size(path: &Path) -> Result<Option<u64>, TopologyError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text = read_file(path)?;
+    parse_size(text.trim())
+        .map(Some)
+        .ok_or_else(|| TopologyError::Parse(path.display().to_string(), text.trim().into()))
+}
+
+fn parse_size(text: &str) -> Option<u64> {
+    let (digits, unit) = match text.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+        Some((i, _)) => text.split_at(i),
+        None => (text, ""),
+    };
+    let n: u64 = digits.parse().ok()?;
+    let scale = match unit {
+        "" => 1,
+        "K" => 1 << 10,
+        "M" => 1 << 20,
+        "G" => 1 << 30,
+        _ => return None,
+    };
+    n.checked_mul(scale)
+}
+
 impl Topology {
     /// Read the online CPUs.
     pub fn read(sysfs: &Sysfs) -> Result<Topology, TopologyError> {
@@ -86,15 +117,22 @@ impl Topology {
         let mut cpus = Vec::with_capacity(online.len());
         for id in online {
             let dir = base.join(format!("cpu{id}"));
-            let l3 = l3_dir(&dir)?
+            let l3_dir = l3_dir(&dir)?;
+            let l3 = l3_dir
+                .as_ref()
                 .map(|d| read_cpulist(&d.join("shared_cpu_list")))
                 .transpose()?;
+            let l3_bytes = match &l3_dir {
+                Some(d) => read_size(&d.join("size"))?,
+                None => None,
+            };
             cpus.push(Cpu {
                 id,
                 core_id: read_u32(&dir.join("topology/core_id"))?,
                 package: read_u32(&dir.join("topology/physical_package_id"))?,
                 siblings: read_cpulist(&dir.join("topology/thread_siblings_list"))?,
                 l3,
+                l3_bytes,
             });
         }
         Ok(Topology { cpus })
@@ -103,6 +141,11 @@ impl Topology {
     /// Look a CPU up.
     pub fn cpu(&self, id: u32) -> Option<&Cpu> {
         self.cpus.iter().find(|c| c.id == id)
+    }
+
+    /// The largest L3 any online CPU has, in bytes, when sysfs says.
+    pub fn l3_bytes(&self) -> Option<u64> {
+        self.cpus.iter().filter_map(|c| c.l3_bytes).max()
     }
 
     /// Distinct L3 domains, each the ascending list of online CPUs
@@ -181,6 +224,8 @@ mod tests {
         assert_eq!(c33.siblings, [1, 33]);
         assert_eq!(c33.package, 0);
         assert_eq!(c33.l3.as_deref().unwrap().len(), 16);
+        assert_eq!(c33.l3_bytes, Some(32 << 20));
+        assert_eq!(t.l3_bytes(), Some(32 << 20));
         assert_eq!(
             t.l3_domains(),
             [vec![0, 1, 32, 33], vec![8]],
@@ -251,11 +296,35 @@ mod tests {
             None,
             "only an L1"
         );
+        std::fs::create_dir_all(base.join("cpu0/cache/index3")).unwrap();
+        std::fs::write(base.join("cpu0/cache/index3/level"), "3\n").unwrap();
+        std::fs::write(base.join("cpu0/cache/index3/shared_cpu_list"), "0\n").unwrap();
+        let t = Topology::read(&sysfs).unwrap();
+        assert_eq!(t.cpus[0].l3.as_deref(), Some(&[0][..]));
+        assert_eq!(t.l3_bytes(), None, "an L3 without a size file");
+        std::fs::write(base.join("cpu0/cache/index3/size"), "lots\n").unwrap();
+        assert!(matches!(
+            Topology::read(&sysfs),
+            Err(TopologyError::Parse(..))
+        ));
+        std::fs::write(base.join("cpu0/cache/index3/size"), "16384K\n").unwrap();
+        assert_eq!(Topology::read(&sysfs).unwrap().l3_bytes(), Some(16 << 20));
         std::fs::write(base.join("online"), "0-x\n").unwrap();
         assert!(matches!(
             Topology::read(&sysfs),
             Err(TopologyError::Parse(..))
         ));
+    }
+
+    #[test]
+    fn cache_sizes_parse_with_their_unit() {
+        assert_eq!(parse_size("32768K"), Some(32 << 20));
+        assert_eq!(parse_size("2M"), Some(2 << 20));
+        assert_eq!(parse_size("1G"), Some(1 << 30));
+        assert_eq!(parse_size("4096"), Some(4096));
+        assert_eq!(parse_size("32768k"), None);
+        assert_eq!(parse_size("big"), None);
+        assert_eq!(parse_size(""), None);
     }
 
     #[test]

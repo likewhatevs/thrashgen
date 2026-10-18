@@ -233,6 +233,9 @@ pub struct Convergence {
     streak: u32,
     out_of_tolerance: u32,
     refit_windows: u32,
+    /// A second out after converging has set the fit moving again, and
+    /// it has not converged since.
+    refitting: bool,
     /// Whether the last [`CONVERGED_WINDOWS`] windows were within.
     pub converged: bool,
     /// Whether the fit has converged at any point.
@@ -251,6 +254,7 @@ impl Convergence {
             streak: 0,
             out_of_tolerance: 0,
             refit_windows,
+            refitting: false,
             converged: false,
             ever: false,
             compromise: false,
@@ -273,6 +277,11 @@ impl Convergence {
         }
         self.converged = self.streak >= CONVERGED_WINDOWS;
         self.ever |= self.converged;
+        if self.converged {
+            self.refitting = false;
+        } else if self.ever && self.out_of_tolerance >= self.refit_windows {
+            self.refitting = true;
+        }
     }
 
     /// Whether the fitter should move this window: out of tolerance,
@@ -281,7 +290,16 @@ impl Convergence {
     /// recorder attaching. The memory of having converged is not the
     /// current streak, which the noisy window has just reset.
     pub fn refit(&self) -> bool {
-        self.streak == 0 && (!self.ever || self.out_of_tolerance >= self.refit_windows)
+        self.streak == 0
+            && (!self.ever || self.refitting || self.out_of_tolerance >= self.refit_windows)
+    }
+
+    /// Whether the fit counts as converged: it has converged and has
+    /// not since been out for the second that sets it moving. The
+    /// streak alone flickers when a target sits at the edge of its
+    /// band, and a fit holding by design has not failed.
+    pub fn holding(&self) -> bool {
+        self.ever && !self.refitting
     }
 }
 
@@ -405,6 +423,14 @@ pub const CORES_WINDOW_SECONDS: usize = 2 * crate::loadgen::FACTOR_BLOCK as usiz
 /// cache, which the profile asked for anyway.
 pub fn sparse_from_file(anon_cap: usize, configured: usize, pagecache_bytes: u64) -> bool {
     anon_cap < configured && pagecache_bytes >= (configured * PAGE) as u64
+}
+
+/// Whether page-cache reads are a lever: the file must be larger than
+/// the L3, or the kernel copies it from cache and a read moves no DRAM
+/// bytes and misses nothing, leaving only the instructions that dilute
+/// MPKI. Without a known L3 size they are not.
+pub fn page_cache_reads_usable(file_bytes: u64, l3_bytes: Option<u64>) -> bool {
+    l3_bytes.is_some_and(|l3| file_bytes > l3)
 }
 
 /// Pages to reserve for the sparse and code streams: the configured
@@ -708,6 +734,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         notes.push("DRAM bandwidth modelled: resctrl is not mounted with mbm_total_bytes".into());
         None
     };
+    let bandwidth_measured = bandwidth.is_some();
 
     // Counters, before the workers exist so inherit covers them.
     let plan = if settings.counters {
@@ -755,11 +782,34 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
 
     // Fitter and first knobs.
     let goal = Goal::from_targets(targets);
+    // A modelled bandwidth is reported, not fitted: the model knows
+    // nothing the counted misses do not, and fitting it against a
+    // recording set non-temporal lines by formula and took IPC, MPKI
+    // and the TLB rates with them.
+    let dram_modelled = !bandwidth_measured && goal.dram.is_some();
+    let mut fit_goal = goal.clone();
+    if dram_modelled {
+        fit_goal.dram = None;
+        notes.push("DRAM bandwidth is reported from the model and not fitted".into());
+    }
     let regime = if vendor == Some(Vendor::Amd) {
         TlbRegime::L2Hit
     } else {
         TlbRegime::Walk
     };
+    let kreads_usable = cache
+        .as_ref()
+        .is_some_and(|c| page_cache_reads_usable(c.len(), topo.l3_bytes()));
+    if let (Some(c), false) = (cache.as_ref(), kreads_usable) {
+        notes.push(match topo.l3_bytes() {
+            Some(l3) => format!(
+                "page-cache reads are not a lever: the page-cache file ({} KiB) fits in the L3 ({} KiB)",
+                c.len() >> 10,
+                l3 >> 10
+            ),
+            None => "page-cache reads are not a lever: the L3 size is not in sysfs".to_string(),
+        });
+    }
     let limits = Limits {
         sparse_capacity: buffers.sparse_capacity(),
         sparse_floor: match regime {
@@ -770,7 +820,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         .max(1),
         code_capacity: buffers.code_capacity(),
         main_pages: buffers.main().len() / PAGE,
-        kreads_available: buffers.has_cache(),
+        kreads_available: buffers.has_cache() && kreads_usable,
     };
     let mut fitter = Fitter::new(threads, limits);
     fitter.proxy_misses = provenance
@@ -783,7 +833,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         .knobs
         .clone()
         .or_else(|| settings.initial_knobs.clone())
-        .unwrap_or_else(|| fitter.initial_knobs(&goal, regime));
+        .unwrap_or_else(|| fitter.initial_knobs(&fit_goal, regime));
     if let Err(e) = knobs.validate(&buffers) {
         bail!("knobs do not fit the buffers: {e}");
     }
@@ -933,6 +983,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 let judged: Vec<Status> = statuses
                     .iter()
                     .filter(|s| crate::fit::judged(s.key, cores_window.len()))
+                    .filter(|s| !(dram_modelled && s.key == "dram_bytes_per_sec"))
                     .cloned()
                     .collect();
                 fit.observe(
@@ -978,7 +1029,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 // only when a second of windows in a row is out.
                 if fitting && !stop && (settings.adaptive || fit.refit()) {
                     if fitter.passes < settings.max_passes || fit.ever {
-                        let mut next = fitter.step(&knobs, &m, &goal);
+                        let mut next = fitter.step(&knobs, &m, &fit_goal);
                         // A lever the IPC and MPKI rules pulled against
                         // each other has just been frozen: the two targets
                         // meet nowhere along it, so the fit goes back to
@@ -992,6 +1043,11 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                                     "IPC and MPKI pull a lever against each other at one op per access; holding pass {pass}, the closest, as the compromise"
                                 ));
                             }
+                        }
+                        if fitter.mpki_at_ceiling
+                            && !notes.iter().any(|n| n.starts_with("L3 MPKI short"))
+                        {
+                            notes.push("L3 MPKI short at one op per access with the run length spent: the misses per instruction are at the generator's ceiling for this profile".to_string());
                         }
                         if next != knobs {
                             generator.set_knobs(next.clone(), &buffers)?;
@@ -1076,7 +1132,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     // closest pass it saw, which is what a hold of its knobs should
     // run, since the last pass is then as likely a swing as a settling;
     // one that has stood still for a second has settled where it is.
-    if fitting && !fit.converged && last_move.elapsed().as_secs_f64() < REFIT_SECONDS {
+    if fitting && !fit.holding() && last_move.elapsed().as_secs_f64() < REFIT_SECONDS {
         if let Some((_, k, pass)) = &fit.best {
             if *k != knobs {
                 knobs = k.clone();
@@ -1095,7 +1151,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         main_bytes: mem_plan.main_bytes,
         thp_bytes,
         passes: fitter.passes,
-        converged: fit.converged,
+        converged: fit.holding(),
         targets: target_rows,
         memory: memory_rows,
         windows,
@@ -1150,22 +1206,49 @@ mod tests {
         c.observe(true, 0.5, &k, 1);
         assert!(!c.converged && !c.refit());
         c.observe(true, 0.2, &k, 1);
-        assert!(c.converged && c.ever);
+        assert!(c.converged && c.ever && c.holding());
         assert_eq!(c.best.as_ref().map(|(d, _, p)| (*d, *p)), Some((0.2, 1)));
         for i in 0..9 {
             c.observe(false, 3.0, &k, 2);
             assert!(!c.converged && c.ever);
             assert!(!c.refit(), "window {i} out: not yet");
+            assert!(c.holding(), "window {i} out: still holding by design");
         }
         c.observe(false, 3.0, &k, 2);
         assert!(c.refit(), "a second out: the fit moves");
+        assert!(!c.holding(), "a second out: no longer converged");
         c.observe(true, 0.9, &k, 3);
-        assert!(!c.refit() && !c.converged, "one within resets the count");
+        assert!(
+            !c.refit() && !c.converged,
+            "one within: nothing to move for"
+        );
+        assert!(!c.holding(), "one within is not converged again");
         assert_eq!(
             c.best.as_ref().map(|(_, _, p)| *p),
             Some(1),
             "the closest stays"
         );
+        // Moving again, the fit is as at first: a window out moves it
+        // without another second's wait, or a target left at the edge
+        // of its band would neither move nor converge.
+        c.observe(false, 1.1, &k, 3);
+        assert!(c.refit(), "out while re-fitting: moves at once");
+        c.observe(true, 0.9, &k, 3);
+        c.observe(true, 0.9, &k, 3);
+        assert!(c.converged && c.holding(), "two within: converged again");
+        // A target at the edge of its band flickers: one window out
+        // and back leaves the fit holding and counted as converged.
+        c.observe(false, 1.1, &k, 3);
+        c.observe(true, 0.9, &k, 3);
+        assert!(!c.converged && c.holding());
+    }
+
+    #[test]
+    fn page_cache_reads_need_a_file_larger_than_the_l3() {
+        assert!(page_cache_reads_usable(1 << 30, Some(32 << 20)));
+        assert!(!page_cache_reads_usable(4096, Some(32 << 20)));
+        assert!(!page_cache_reads_usable(32 << 20, Some(32 << 20)));
+        assert!(!page_cache_reads_usable(1 << 30, None));
     }
 
     #[test]

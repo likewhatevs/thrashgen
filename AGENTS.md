@@ -117,8 +117,10 @@ The method that has worked, and the mistakes it replaced:
    (`cpu/event=0x45,umask=0x0f/u`; event aliases are often missing).
    Sweep one knob at a time. Every surprising result in this project's
    history, the serialized misses, the dTLB floor, the sparse-set
-   refills, the quiet-second miss inflation, was found this way and
-   not by reasoning about the code.
+   refills, the quiet-second miss inflation, the run length that
+   stops moving MPKI at one op, the page-cache read that moves no
+   bytes from a file the L3 holds, was found this way and not by
+   reasoning about the code.
 2. **Then encode it as a rule with a model.** Steps are proportional
    to the error through a model of the lever (misses per access over
    the lines a page holds, the instruction slope against ops), damped,

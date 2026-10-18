@@ -108,8 +108,9 @@ sequenceDiagram
 
 Convergence is two consecutive windows with every judged target
 within tolerance. A converged fit moves again only after a second of
-windows out, and is then no longer bound by the pass limit; a fit that
-never converged holds the closest pass it saw when the passes run
+windows out, and is then no longer bound by the pass limit; the report
+counts it converged while it holds, through shorter excursions. A fit
+that never converged holds the closest pass it saw when the passes run
 out. Busy cores and burstiness are judged from the third one-second
 sample, each second against what the knobs intended for it.
 
@@ -130,8 +131,8 @@ flowchart TD
     E --> F[page-cache reads back if misses run high]
     F --> G[ops: model-based, from misses per access and the measured slope]
     G --> H[sparse set halves once compute and dilution are spent]
-    H --> I[at one op, misses short: run length up, then page-cache reads if the kernel counts]
-    I --> J[bandwidth: write share, non-temporal lines, page-cache reads]
+    H --> I[at one op, misses short: run length by its measured response, then page-cache reads if the kernel counts]
+    I --> J[bandwidth: write share, non-temporal lines, page-cache reads within the MPKI band]
     J --> K[visit rates: compensate the change in instructions per access, correct the error]
     K --> L[dTLB excess from the main stream: working set, then walk, then dilution]
     L --> M{at one op, a lever turned twice within three passes?}

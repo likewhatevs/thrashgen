@@ -153,7 +153,7 @@ PRNG, not from loaded data, so misses overlap.
 | `wfrac` | write share, so DRAM bandwidth at equal misses | fraction of main-stream lines stored to; a dirtied line is written back |
 | `ntlines` | DRAM bandwidth beyond L3 misses | full lines written with non-temporal stores |
 | `tlbvisits`, sparse page count | dTLB rate | one fixed line per page over a page set sized between the L1 and L2 dTLB reach (AMD definition) or beyond the L2 reach (walks), walked in a fixed cycle with a stride coprime to the count, so that every visit to a set past the TLB's reach misses, where a random draw hits whenever it repeats a page still cached (128 random pages over a 72-entry L1 dTLB missed 44 percent of the time), and no next-page prefetcher follows the order; the set is anonymous memory, capped at an eighth of the anonymous target, or a read-only mapping of the page-cache file when that cap cannot hold it and the file can, so a small process with a large page cache gets its TLB rate from pages that count as page cache |
-| `kreads` | kernel-mode misses and instructions, DRAM bandwidth | `pread` of one page of the page-cache file per read, at a random page, into a buffer of the worker's own, so the kernel copies it out of the page cache: what a page-cache reader's kernel time is made of; may be below one per access |
+| `kreads` | kernel-mode misses and instructions, DRAM bandwidth | `pread` of one page of the page-cache file per read, at a random page, into a buffer of the worker's own, so the kernel copies it out of the page cache: what a page-cache reader's kernel time is made of; may be below one per access; a lever only while the file is larger than the L3, since a resident file is copied from cache and a read then moves no DRAM bytes and misses nothing. Measured on Zen 4 over a 1 GiB file on btrfs, a read is 1785 instructions (1664 on tmpfs) and 61 misses with the kernel in the count, and 115 instructions and no misses in user mode alone |
 | `codevisits`, code page count | iTLB rate | calls through a function pointer into one-instruction stubs placed one per executable page at varying offsets; `codevisits` may be below one per access |
 | `huge` | main-stream page walks | `MADV_HUGEPAGE` on the main buffer; the report shows what THP actually backed. Without it the buffer is advised `MADV_NOHUGEPAGE`, since a THP policy of `always` would otherwise back it with hugepages anyway |
 
@@ -179,7 +179,18 @@ dependent and so in pages of their own, keeps a dTLB rate of a few
 hundredths per thousand instructions however small its set. A cache-resident target, with almost no misses, is
 still met by diluting the rates with compute rather than by a set that
 fits the cache, since the miss rate at the cache edge is too steep for
-a fitter to stand on.
+a fitter to stand on. At one op per access the misses per instruction
+have a ceiling of their own: each line of the run costs some forty
+instructions of bookkeeping on Zen 4, more when it is stored to, so a
+profile asking for more than about 22 L3 misses per thousand
+instructions at low IPC is past what the run can make, the run length
+stops moving MPKI, and the fitter holds and says so rather than
+lengthen the run to no effect; stress-ng's 21 sits just under it.
+Bandwidth beyond what the counted misses move is out of reach too:
+stress-ng's 70 GB/s at 21 MPKI and an IPC of 0.22 is several times
+the bytes its demand misses explain, hardware prefetch and streaming
+stores the miss proxy does not count, where the generator's bytes
+follow its misses, so there the bandwidth rule waits.
 
 ## 6. Fitting
 
@@ -190,7 +201,7 @@ non-temporal lines for bandwidth, only while IPC and MPKI are within
 twice their tolerance, since both change them, and non-temporal lines
 only for an IPC target of 0.6 or more, since each line is eight stores
 retiring at high IPC and 64 of them per access quadrupled IPC and
-divided MPKI by ten on Zen 4, where the write share moved neither, and page-cache reads, a page from DRAM each, where non-temporal lines cannot carry the bandwidth or are at their cap; tlbvisits; codevisits; repeat until
+divided MPKI by ten on Zen 4, where the write share moved neither, and page-cache reads, a page from DRAM each, where non-temporal lines cannot carry the bandwidth or are at their cap, as many as leave MPKI within its band by what a read costs the counts, since in user mode a read is instructions without misses and only dilutes; tlbvisits; codevisits; repeat until
 every verified target is within tolerance or the pass limit is hit.
 
 Busy cores and burstiness start from the clipped model: the duty and
@@ -213,13 +224,21 @@ within an access, with a division chain below one, moves only once the run lengt
 past half the range has stopped lifting IPC. The ops rule is
 model-based: instructions per access are measured from the counters
 and the worker tally, the slope against compute work (ops times
-chains) comes from a secant over the last two passes, and ops is set
+chains) comes from a secant over the last two passes that moved the
+work by a quarter or more, the last such secant standing in between,
+since over two ops out of fifteen the window noise in instructions
+per access gave a slope of two where the large move before had
+measured fifteen, and ops swung fourfold every pass; ops is set
 to the work that gives the MPKI target at the run length the IPC rule
-just chose. The per-access rates (sparse visits, stub calls,
-non-temporal lines) are then set from their measured events per visit
-against the instructions per access the next pass will have, with only
-the measured error damped, so a change in ops never drags them off
-target. All per-access rates are fractional, carried over an
+just chose. The per-access rates are then set against the
+instructions per access the next pass will have, so a change in ops
+never drags them off target: stub calls by their measured events per
+visit with the error damped, since they are the only source of iTLB
+events; sparse visits by the dTLB events short or over per access at
+one per visit, damped, since the set is sized past the reach and the
+rest of the events, the main stream's and the non-temporal lines'
+pages, do not follow the visit rate, where a ratio moved the events
+by a quarter of its step. All per-access rates are fractional, carried over an
 accumulator, so low targets are reachable. The burstiness knob moves
 once three one-second samples are in and stays within twice its
 target, since clipping at full duty keeps the measured value below the
@@ -243,7 +262,15 @@ both at their floors and a visit on only a share of accesses, the
 whole access scales up, compute and visit share together, so the slow
 chain carries more of the instructions at the same misses per
 instruction; dependent visits last. At one op with MPKI short, run
-length follows the shortfall undamped, and with the run at its range,
+length follows the shortfall by MPKI's measured elasticity to it,
+undamped and at most doubling per pass: the first step takes misses
+to follow the run one for one, the next knows what the last change of
+run length alone did, at one op with the working set and the reads
+unchanged. At one op the run's instructions grow with its misses, so
+the lever can be spent: eight to sixty-four lines left stress-ng's
+MPKI near 17 on Zen 4 where the first step predicted 21; below a tenth
+the run length holds and the report says MPKI is at the generator's
+ceiling. With the run spent or at its range,
 page-cache reads, when the profile's counts cover kernel mode, since
 the kernel's copy is where a page-cache reader's misses are; they are
 the first lever given back when misses run high. IPC short: longer runs, when the
@@ -329,7 +356,12 @@ with every judged target within tolerance; the generator then holds and keeps re
 moves again only after a second of consecutive windows out of
 tolerance, at least two, so a noisy window or a few, a neighbour's
 burst, a page migration or the moment a recorder attaches, does not
-undo the fit; with `--adaptive` it keeps adjusting. A fit that
+undo the fit; the report counts the fit converged while it holds so,
+through windows out for less than that second, since a target at the
+edge of its band flickers in and out. Once moving again it fits as at
+first, on every window out, until it converges again, since a target
+left at the edge of its band by a move would otherwise neither move
+nor converge; with `--adaptive` it keeps adjusting. A fit that
 runs out of passes without ever converging holds the closest pass it
 saw, by the largest relative error over its tolerance, rather than
 the last, which is as likely to be a swing as a settling, and says
@@ -353,7 +385,10 @@ replayed in many containers fits once and the rest start at its
 knobs; `--calibration` and `--knobs` take precedence, and `--no-cache`
 neither reads nor writes it. DRAM bandwidth without resctrl is modelled
 from the counted misses and the bytes the generator wrote
-non-temporally or dirtied, and fitted against that model.
+non-temporally or dirtied, reported at the modelled tier and not
+fitted: the model knows nothing the misses do not, and fitting a
+recording against it set non-temporal lines by formula and took IPC,
+MPKI and the TLB rates with them.
 
 ## 7. Commands and artifacts
 

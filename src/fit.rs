@@ -226,6 +226,35 @@ const KREADS_MAX: f64 = 64.0;
 /// larger than the L3 seldom has cached, as bytes and as lines missed.
 const KREAD_BYTES: f64 = 4096.0;
 const KREAD_LINES: f64 = 64.0;
+/// What a page-cache read costs the counts, measured on Zen 4 at four
+/// reads per access over a 1 GiB file on btrfs: with the kernel in the
+/// count, 1785 instructions (1664 on tmpfs) and 61 misses, the page's
+/// lines less what the copy found cached; in user mode alone, 115
+/// instructions of the syscall's user side and no misses, so there a
+/// read only dilutes.
+const KREAD_INSTRUCTIONS_ALL: f64 = 1780.0;
+const KREAD_INSTRUCTIONS_USER: f64 = 115.0;
+/// MPKI's elasticity to the run length at one op per access below
+/// which the lever is spent: the run's instructions then grow with its
+/// misses.
+const LINES_RESPONSE_MIN: f64 = 0.1;
+
+/// Where the last pass stood, for the comparisons the next one makes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LastSet {
+    /// Working set.
+    pub wset: f64,
+    /// Run length.
+    pub lines: f64,
+    /// Ops per access.
+    pub ops: u32,
+    /// Page-cache reads per access.
+    pub kreads: f64,
+    /// Misses per access.
+    pub mpa: f64,
+    /// Instructions per access.
+    pub ipa: f64,
+}
 
 /// The fitter: damped multiplicative updates, one pass per window.
 #[derive(Clone, Debug, PartialEq)]
@@ -243,6 +272,9 @@ pub struct Fitter {
     /// Last pass's compute work (ops times chains) and instructions per
     /// access, for the secant slope.
     pub last_work_ipa: Option<(f64, f64)>,
+    /// Instructions per unit of compute work, from the last secant over
+    /// a move of a quarter or more; a secant over a small move is noise.
+    pub slope: Option<f64>,
     /// Last pass's IPC, to notice when line length stops moving it.
     pub last_ipc: Option<f64>,
     /// Shrinking the working set cost misses once, so the dTLB rule
@@ -252,9 +284,15 @@ pub struct Fitter {
     /// not count prefetched lines, so a sequential walk and diluted
     /// visits cost counted misses.
     pub proxy_misses: bool,
-    /// Last pass's working set, run length and misses per access, to
-    /// tell a shrink that cost misses from one that did not.
-    pub last_set: Option<(f64, f64, f64)>,
+    /// Where the last pass stood, to tell a shrink that cost misses
+    /// from one that did not and to measure what the run length did.
+    pub last_set: Option<LastSet>,
+    /// MPKI's elasticity to the run length at one op per access, from
+    /// the last pass that changed the run length alone.
+    pub lines_response: Option<f64>,
+    /// MPKI is short at one op with the run length spent and no
+    /// page-cache lever: the generator's ceiling for this profile.
+    pub mpki_at_ceiling: bool,
     /// The miss and instruction counts cover kernel mode, so what the
     /// kernel does for a page-cache read is in them.
     pub kernel_counted: bool,
@@ -331,8 +369,13 @@ struct Pass<'a> {
     /// Compute work, ops times chains, and instructions per unit of it.
     work_now: f64,
     slope: f64,
+    /// A secant this pass could take, over a large enough move.
+    slope_measured: Option<f64>,
     /// The share of the misses that followed the run length last pass.
     lines_elasticity: f64,
+    /// What the last change of the run length alone, at one op, did to
+    /// MPKI, when this pass can tell.
+    lines_response: Option<f64>,
     /// The compute work the pass wants, as the rules shape it.
     work: f64,
     /// Page-cache reads were given back for MPKI, so the ops rule rests.
@@ -362,10 +405,13 @@ impl Fitter {
             limits,
             passes: 0,
             last_work_ipa: None,
+            slope: None,
             last_ipc: None,
             wset_blocked: false,
             proxy_misses: false,
             last_set: None,
+            lines_response: None,
+            mpki_at_ceiling: false,
             kernel_counted: false,
             lines_track: Reversals::default(),
             seq_track: Reversals::default(),
@@ -653,12 +699,22 @@ impl Fitter {
         // instructions, so work does not shrink with the knob there.
         let ipa = m.instructions_per_access();
         let work_now = f64::from(knobs.ops) * knobs.chains.max(1.0);
-        let mut slope = Self::INSTRUCTIONS_PER_WORK;
+        // The secant stands only over a move of a quarter or more: over
+        // two ops out of fifteen the window noise in instructions per
+        // access gave a slope of two where the last large move had
+        // measured fifteen, and ops swung fourfold every pass.
+        let mut slope = self.slope.unwrap_or(Self::INSTRUCTIONS_PER_WORK);
+        let mut slope_measured = None;
         if let (Some(ipa), Some((work_prev, ipa_prev))) = (ipa, self.last_work_ipa) {
-            if (work_now - work_prev).abs() >= 1.0 {
+            let moved = (work_now - work_prev).abs();
+            if moved >= 1.0 && moved >= 0.25 * work_now.min(work_prev) {
                 let s = (ipa - ipa_prev) / (work_now - work_prev);
-                if s.is_finite() && s > 0.1 * slope && s < 10.0 * slope {
+                if s.is_finite()
+                    && s > 0.1 * Self::INSTRUCTIONS_PER_WORK
+                    && s < 10.0 * Self::INSTRUCTIONS_PER_WORK
+                {
                     slope = s;
+                    slope_measured = Some(s);
                 }
             }
         }
@@ -669,15 +725,34 @@ impl Fitter {
         // an idle period, do not follow it, and predicting that they
         // would spiralled ops down while MPKI stood still.
         let lines_elasticity = match (self.last_set, mpa_now) {
-            (Some((_, lines_prev, mpa_prev)), Some(mpa))
-                if mpa_prev > 0.0
+            (Some(prev), Some(mpa))
+                if prev.mpa > 0.0
                     && mpa > 0.0
-                    && (knobs.lines / lines_prev.max(LINES_MIN)).ln().abs() > 0.1 =>
+                    && (knobs.lines / prev.lines.max(LINES_MIN)).ln().abs() > 0.1 =>
             {
-                ((mpa / mpa_prev).ln() / (knobs.lines / lines_prev.max(LINES_MIN)).ln())
+                ((mpa / prev.mpa).ln() / (knobs.lines / prev.lines.max(LINES_MIN)).ln())
                     .clamp(0.0, 1.0)
             }
             _ => 1.0,
+        };
+        // What the last change of run length alone did to MPKI, at one
+        // op on both sides, where the run length is MPKI's lever: the
+        // ratio of the logarithms, kept where a run that costs its own
+        // instructions can land.
+        let lines_response = match (self.last_set, mpa_now, ipa) {
+            (Some(prev), Some(mpa), Some(ipa))
+                if prev.ops <= 1
+                    && knobs.ops <= 1
+                    && prev.wset == knobs.wset
+                    && prev.kreads == knobs.kreads
+                    && prev.mpa > 0.0
+                    && mpa > 0.0
+                    && (knobs.lines / prev.lines.max(LINES_MIN)).ln().abs() > 0.1 =>
+            {
+                let ratio = (mpa / ipa) / (prev.mpa / prev.ipa);
+                Some((ratio.ln() / (knobs.lines / prev.lines.max(LINES_MIN)).ln()).clamp(-1.0, 1.0))
+            }
+            _ => None,
         };
         Some(Pass {
             knobs,
@@ -691,7 +766,9 @@ impl Fitter {
             mpa_now,
             work_now,
             slope,
+            slope_measured,
             lines_elasticity,
+            lines_response,
             work: work_now,
             mpki_handled: false,
             ipa_next: None,
@@ -733,12 +810,12 @@ impl Fitter {
     /// nothing else: the other rules would chase the misses it took
     /// away. Whether it was undone.
     fn undo_costly_shrink(&mut self, p: &Pass, k: &mut Knobs) -> bool {
-        let (Some((wset_prev, lines_prev, mpa_prev)), Some(mpa), Some(ipa), Some(t), Some(v)) =
+        let (Some(prev), Some(mpa), Some(ipa), Some(t), Some(v)) =
             (self.last_set, p.mpa_now, p.ipa, p.goal.mpki, p.m.mpki)
         else {
             return false;
         };
-        let explained = mpa_prev * (p.knobs.lines / lines_prev.max(LINES_MIN));
+        let explained = prev.mpa * (p.knobs.lines / prev.lines.max(LINES_MIN));
         // MPKI at one op per access, by the measured slope: the misses
         // stay and the instructions go. At a quarter of stress-ng's set
         // the shrink took three misses in ten per access and a pass later
@@ -746,13 +823,13 @@ impl Fitter {
         // rate twenty times higher.
         let ipa_floor = (ipa - (p.work_now - 1.0) * p.slope).max(1.0);
         let recoverable = v * ipa / ipa_floor;
-        if p.knobs.wset < wset_prev
+        if p.knobs.wset < prev.wset
             && !p.mpki_met
             && mpa < 0.75 * explained
             && recoverable < t * (1.0 - self.tol.ratio)
         {
             self.wset_blocked = true;
-            k.wset = wset_prev;
+            k.wset = prev.wset;
             return true;
         }
         false
@@ -760,8 +837,21 @@ impl Fitter {
 
     /// What the next pass compares itself with.
     fn remember(&mut self, p: &Pass) {
-        if let Some(mpa) = p.mpa_now {
-            self.last_set = Some((p.knobs.wset, p.knobs.lines, mpa));
+        if let (Some(mpa), Some(ipa)) = (p.mpa_now, p.ipa) {
+            self.last_set = Some(LastSet {
+                wset: p.knobs.wset,
+                lines: p.knobs.lines,
+                ops: p.knobs.ops,
+                kreads: p.knobs.kreads,
+                mpa,
+                ipa,
+            });
+        }
+        if let Some(response) = p.lines_response {
+            self.lines_response = Some(response);
+        }
+        if let Some(slope) = p.slope_measured {
+            self.slope = Some(slope);
         }
         if let Some(ipa) = p.ipa {
             self.last_work_ipa = Some((p.work_now, ipa));
@@ -951,29 +1041,43 @@ impl Fitter {
     }
 
     /// Compute cannot go below one op per access; past that, more lines
-    /// per access are the only way to more misses, undamped since misses
-    /// follow run length about linearly and passes are few. With the run
-    /// at its range and the kernel's misses in the count: page-cache
+    /// per access are the only way to more misses. The run length moves
+    /// by MPKI's measured elasticity to it, undamped and at most
+    /// doubling per pass: the first step takes misses to follow the run
+    /// one for one, the next knows what the last change did. At one op
+    /// the run's instructions grow with its misses, so the lever can be
+    /// spent: eight to sixty-four lines left stress-ng's MPKI near 17 on
+    /// Zen 4 where the first step predicted 21; below a tenth it holds,
+    /// and the fit knows MPKI is at the generator's ceiling. With the
+    /// run spent and the kernel's misses in the count: page-cache
     /// reads, each a page the kernel copies out of the page cache, which
     /// is where a page-cache reader's kernel-mode misses come from. By
     /// the model, the misses short per access over the lines a page
     /// holds, damped: a read is sixty-four misses, and a whole one per
     /// access swung MPKI by thirty.
-    fn misses_at_floor(&self, p: &Pass, k: &mut Knobs) {
+    fn misses_at_floor(&mut self, p: &Pass, k: &mut Knobs) {
         let (Some(t), Some(v)) = (p.goal.mpki, p.m.mpki) else {
             return;
         };
-        if k.ops <= 1 && p.knobs.ops <= 1 && v < t * (1.0 - self.tol.ratio) {
-            k.lines = (k.lines * factor(t, v, 1.0)).clamp(LINES_MIN, 64.0);
-            if let (true, true, true, Some(ipa)) = (
-                self.kernel_counted,
-                self.limits.kreads_available,
-                p.knobs.lines >= 64.0,
-                p.ipa,
-            ) {
-                let short = (t - v) / 1000.0 * ipa;
-                k.kreads = (k.kreads + p.d * short / KREAD_LINES).clamp(0.0, KREADS_MAX);
-            }
+        if !(k.ops <= 1 && p.knobs.ops <= 1 && v < t * (1.0 - self.tol.ratio)) {
+            return;
+        }
+        let spent = self.lines_response.is_some_and(|e| e < LINES_RESPONSE_MIN);
+        if !spent {
+            let response = self
+                .lines_response
+                .map_or(1.0, |e| e.max(LINES_RESPONSE_MIN));
+            let step = ((t / v).ln() / response).min(std::f64::consts::LN_2);
+            k.lines = (k.lines * step.exp()).clamp(LINES_MIN, 64.0);
+        }
+        let exhausted = spent || p.knobs.lines >= 64.0;
+        let reads = self.kernel_counted && self.limits.kreads_available;
+        if let (true, true, Some(ipa)) = (exhausted, reads, p.ipa) {
+            let short = (t - v) / 1000.0 * ipa;
+            k.kreads = (k.kreads + p.d * short / KREAD_LINES).clamp(0.0, KREADS_MAX);
+        }
+        if exhausted && !reads {
+            self.mpki_at_ceiling = true;
         }
     }
 
@@ -995,7 +1099,9 @@ impl Fitter {
     /// lines bypass the caches. The write share goes first, up to every
     /// line, then non-temporal lines by the model's count, damped
     /// linearly since it is an absolute estimate, then page-cache reads
-    /// where non-temporal lines cannot carry it.
+    /// where non-temporal lines cannot carry it, as many as leave MPKI
+    /// within its band by what a read costs the counts: under user-mode
+    /// counting a read is instructions without misses and only dilutes.
     fn bandwidth(&self, p: &Pass, k: &mut Knobs) {
         let (m, goal, d) = (p.m, p.goal, p.d);
         let ratios_within =
@@ -1025,7 +1131,8 @@ impl Fitter {
             // Non-temporal lines cannot carry it: page-cache reads,
             // a page from DRAM each, by the shortfall, damped.
             let need = (t - v) / (KREAD_BYTES * p.aps_next);
-            k.kreads = (k.kreads + d * need).clamp(0.0, KREADS_MAX);
+            let room = self.kreads_within_mpki(p);
+            k.kreads = (k.kreads + (d * need).min(room)).clamp(0.0, KREADS_MAX);
         } else if v < t * (1.0 - self.tol.ratio) && !nt_fits {
             // Bandwidth waits: the lever left would take IPC with it.
         } else {
@@ -1038,11 +1145,57 @@ impl Fitter {
         }
     }
 
+    /// The most page-cache reads per access that can be added before
+    /// the MPKI the model predicts leaves its band: a read adds
+    /// [`KREAD_INSTRUCTIONS_ALL`] instructions and [`KREAD_LINES`]
+    /// misses with the kernel in the count, [`KREAD_INSTRUCTIONS_USER`]
+    /// and none without, so MPKI moves toward what a read is made of.
+    /// Unbounded without an MPKI target or when the band is not in the
+    /// way; none when MPKI is already past the edge the reads push to.
+    fn kreads_within_mpki(&self, p: &Pass) -> f64 {
+        let (Some(t), Some(v), Some(ipa)) = (p.goal.mpki, p.m.mpki, p.ipa) else {
+            return KREADS_MAX;
+        };
+        let (instr, misses) = if self.kernel_counted {
+            (KREAD_INSTRUCTIONS_ALL, KREAD_LINES)
+        } else {
+            (KREAD_INSTRUCTIONS_USER, 0.0)
+        };
+        let toward = 1000.0 * misses / instr;
+        let misses_now = v / 1000.0 * ipa;
+        let (lo, hi) = (t * (1.0 - self.tol.ratio), t * (1.0 + self.tol.ratio));
+        // MPKI after n reads is 1000 (M + m n) / (I + i n); the edge it
+        // reaches, if the band is between it and where it is going,
+        // gives n.
+        if toward < v && toward < lo {
+            if v <= lo {
+                0.0
+            } else {
+                (1000.0 * misses_now - lo * ipa) / (lo * instr - 1000.0 * misses)
+            }
+        } else if toward > v && toward > hi {
+            if v >= hi {
+                0.0
+            } else {
+                (hi * ipa - 1000.0 * misses_now) / (1000.0 * misses - hi * instr)
+            }
+        } else {
+            KREADS_MAX
+        }
+    }
+
     /// The per-access rates of the sparse and code streams: full
     /// compensation for the change in instructions per access, which
     /// the model predicts, then a damped correction of the measured
     /// error. Visits per access may grow with the access itself: a
     /// visit is a few instructions, so a quarter of them is the ceiling.
+    /// Stub calls are the only source of iTLB events, so their rate
+    /// corrects by ratio; dTLB events are one per sparse visit, the set
+    /// being sized past the reach, plus the main stream's and the
+    /// non-temporal lines' pages, which do not follow the visit rate,
+    /// so the visits correct by the events short or over per access,
+    /// damped: by ratio, a quarter of the events from visits made a
+    /// pass of 9 percent on the rate move the events by 2.
     fn visit_rates(p: &Pass, k: &mut Knobs) {
         let (m, goal, d) = (p.m, p.goal, p.d);
         let visits_max = VISITS_RANGE
@@ -1064,7 +1217,14 @@ impl Fitter {
                 _ => VISITS_RANGE.0 * 100.0,
             }
         };
-        k.tlbvisits = rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits, p.within("dtlb_pki"));
+        k.tlbvisits = match (goal.dtlb_pki, m.dtlb_pki, p.ipa, p.ipa_next) {
+            (Some(t), Some(v), Some(ipa), Some(next))
+                if t > 0.0 && k.tlbvisits > 0.0 && v > 0.0 && !p.within("dtlb_pki") =>
+            {
+                (k.tlbvisits + d * (t * next - v * ipa) / 1000.0).clamp(VISITS_RANGE.0, visits_max)
+            }
+            _ => rate_rule(goal.dtlb_pki, m.dtlb_pki, k.tlbvisits, p.within("dtlb_pki")),
+        };
         k.codevisits = rate_rule(
             goal.itlb_pki,
             m.itlb_pki,
@@ -1166,7 +1326,7 @@ mod tests {
             + 4.0 * nt
             + 2.0 * k.tlbvisits
             + 3.0 * k.codevisits
-            + 2500.0 * k.kreads
+            + 1780.0 * k.kreads
             + 12.0;
         // The set: a 1 GiB buffer; misses need more than 32 MiB of it,
         // first-level TLB events more than 144 MiB (hugepage reach).
@@ -1182,8 +1342,9 @@ mod tests {
         // prefetcher hides more of a longer run; dependent visits pay the
         // whole latency per line; a sequential walk is mostly prefetched.
         let overlap = (1.0 - k.dep) * 0.3 / (1.0 + 0.3 * lines) + k.dep;
-        // A page-cache read is a kernel copy of 64 lines, streamed.
-        let kread_misses = 58.0 * k.kreads;
+        // A page-cache read is a kernel copy, 61 misses and 1780
+        // instructions as measured on Zen 4, streamed.
+        let kread_misses = 61.0 * k.kreads;
         let stall = misses * 250.0 * overlap * (1.0 - 0.6 * k.seq) + kread_misses * 20.0;
         let main_tlb = ((1.0 - k.seq) + k.seq * lines / 64.0) * tlb_rate * lines.min(1.0);
         let cycles = ops * 4.0 / chains_eff + stall + 10.0;
@@ -1576,6 +1737,202 @@ mod tests {
         );
         let next = without.step(&k, &m, &goal);
         assert_eq!((next.kreads, next.ntlines), (0.0, 0.0), "{next:?}");
+    }
+
+    #[test]
+    fn bandwidth_page_cache_reads_stop_where_mpki_would_leave_its_band() {
+        let goal = Goal {
+            ipc: Some(0.22),
+            mpki: Some(20.0),
+            dram: Some(7.0e10),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 1,
+            lines: 8.0,
+            wfrac: 1.0,
+            ..Knobs::default()
+        };
+        // 450 instructions per access with MPKI at target: under
+        // user-mode counting a read is 115 instructions and no misses,
+        // so a fifth of one per access takes MPKI to the edge of its
+        // band, however far bandwidth is short.
+        let m = Measured {
+            ipc: Some(0.22),
+            mpki: Some(20.0),
+            dram: Some(1.0e10),
+            accesses_per_s: 7.0e6,
+            instructions_per_s: Some(450.0 * 7.0e6),
+            ..Measured::default()
+        };
+        let mut f = Fitter::new(4, LIMITS);
+        let next = f.step(&k, &m, &goal);
+        let room = (1000.0 * 9.0 - 19.0 * 450.0) / (19.0 * KREAD_INSTRUCTIONS_USER);
+        assert!((next.kreads - room).abs() < 1e-9, "{next:?}");
+        assert!(next.kreads < 0.25, "{next:?}");
+        assert_eq!(next.lines, 8.0, "MPKI at target moves no run length");
+        // With the kernel in the count a read brings its misses, and at
+        // a target below what a read is made of the reads push MPKI up:
+        // the band above bounds them, and a compute-heavy access leaves
+        // room for the model's whole step.
+        let mut g = Fitter::new(4, LIMITS);
+        g.kernel_counted = true;
+        let heavy = Measured {
+            instructions_per_s: Some(4.0e5 * 7.0e6),
+            ..m.clone()
+        };
+        let next = g.step(&k, &heavy, &goal);
+        let need = (7.0e10 - 1.0e10) / (KREAD_BYTES * 7.0e6);
+        assert!((next.kreads - 0.5 * need).abs() < 1e-6, "{next:?}");
+    }
+
+    #[test]
+    fn the_ops_slope_stands_between_large_moves() {
+        // stress-ng-like under resctrl: instructions per access against
+        // ops as measured, with the window noise of a few instructions.
+        let goal = Goal {
+            mpki: Some(20.7),
+            ..Goal::default()
+        };
+        let at = |ops: u32, ipa: f64, mpki: f64| {
+            (
+                Knobs {
+                    ops,
+                    chains: 0.5,
+                    ..Knobs::default()
+                },
+                Measured {
+                    mpki: Some(mpki),
+                    accesses_per_s: 1.0e6,
+                    instructions_per_s: Some(ipa * 1.0e6),
+                    ..Measured::default()
+                },
+            )
+        };
+        let mut f = Fitter::new(4, LIMITS);
+        let (k, m) = at(4, 408.0, 23.5);
+        f.step(&k, &m, &goal);
+        let (k, m) = at(15, 568.0, 18.1);
+        f.step(&k, &m, &goal);
+        let slope = (568.0 - 408.0) / 11.0;
+        assert!(f.slope.is_some_and(|s| (s - slope).abs() < 1e-9), "{f:?}");
+        // Two ops out of fifteen: the secant over four instructions of
+        // noise would say two; the slope stands and ops moves by it.
+        let (k, m) = at(13, 572.0, 18.1);
+        let next = f.step(&k, &m, &goal);
+        assert!(f.slope.is_some_and(|s| (s - slope).abs() < 1e-9), "{f:?}");
+        assert!((9..=12).contains(&next.ops), "{next:?}");
+    }
+
+    #[test]
+    fn sparse_visits_correct_by_the_events_over_at_one_per_visit() {
+        // TaoBench-like: 7.36 visits per access and 7.92 events per
+        // thousand of 1900 instructions where 6.58 are asked. The
+        // excess is 2.55 events per access and half of it comes off the
+        // visits; by ratio the rate would have fallen 9 percent, most
+        // of it on events that are not the visits'.
+        let goal = Goal {
+            dtlb_pki: Some(6.58),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 288,
+            lines: 9.14,
+            tlbvisits: 7.36,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            dtlb_pki: Some(7.92),
+            accesses_per_s: 1.0e6,
+            instructions_per_s: Some(1900.0 * 1.0e6),
+            ..Measured::default()
+        };
+        let mut f = Fitter::new(4, LIMITS);
+        let next = f.step(&k, &m, &goal);
+        let want = 7.36 + 0.5 * (6.58 - 7.92) * 1900.0 / 1000.0;
+        assert!((next.tlbvisits - want).abs() < 1e-9, "{next:?}");
+        // Short by far at the start of a fit: the visits grow by the
+        // shortfall, not by a ratio of a small rate.
+        let k0 = Knobs {
+            ops: 256,
+            lines: 8.79,
+            tlbvisits: 0.656,
+            ..Knobs::default()
+        };
+        let m0 = Measured {
+            dtlb_pki: Some(1.17),
+            accesses_per_s: 1.0e6,
+            instructions_per_s: Some(1360.0 * 1.0e6),
+            ..Measured::default()
+        };
+        let next = f.step(&k0, &m0, &goal);
+        let want = 0.656 + 0.5 * (6.58 - 1.17) * 1360.0 / 1000.0;
+        assert!((next.tlbvisits - want).abs() < 1e-9, "{next:?}");
+    }
+
+    #[test]
+    fn run_length_at_one_op_follows_its_measured_response() {
+        let goal = Goal {
+            mpki: Some(20.0),
+            ..Goal::default()
+        };
+        // Instructions follow the run length one for one, as at one op.
+        let at = |lines: f64, mpki: f64| {
+            let ipa = 450.0 * lines / 8.0;
+            (
+                Knobs {
+                    ops: 1,
+                    lines,
+                    ..Knobs::default()
+                },
+                Measured {
+                    mpki: Some(mpki),
+                    accesses_per_s: 1.0e6,
+                    instructions_per_s: Some(ipa * 1.0e6),
+                    ..Measured::default()
+                },
+            )
+        };
+        let limits = Limits {
+            kreads_available: false,
+            ..LIMITS
+        };
+        // The first step takes misses to follow the run length.
+        let mut f = Fitter::new(1, limits);
+        let (k, m) = at(8.0, 17.0);
+        let first = f.step(&k, &m, &goal);
+        assert!((first.lines - 8.0 * 20.0 / 17.0).abs() < 1e-9, "{first:?}");
+        assert_eq!(first.ops, 1);
+        // Half the misses followed: the next step is twice the shortfall.
+        let grew = (first.lines / 8.0).sqrt();
+        let (k, m) = at(first.lines, 17.0 * grew);
+        let second = f.step(&k, &m, &goal);
+        let want = (20.0 / (17.0 * grew)).ln() / 0.5;
+        assert!(
+            ((second.lines / first.lines).ln() - want).abs() < 1e-6,
+            "{second:?}"
+        );
+        assert!(!f.mpki_at_ceiling);
+        // A run length that moved MPKI not at all is spent: it holds,
+        // and the fit knows MPKI is at the generator's ceiling.
+        let mut g = Fitter::new(1, limits);
+        let (k, m) = at(8.0, 17.0);
+        let first = g.step(&k, &m, &goal);
+        let (k, m) = at(first.lines, 17.0);
+        let held = g.step(&k, &m, &goal);
+        assert_eq!(held.lines, first.lines, "{held:?}");
+        assert_eq!(held.ops, 1, "{held:?}");
+        assert!(g.mpki_at_ceiling);
+        // With the kernel's misses in the count and a file to read, the
+        // spent run length hands over to page-cache reads instead.
+        let mut h = Fitter::new(1, LIMITS);
+        h.kernel_counted = true;
+        let (k, m) = at(8.0, 17.0);
+        let first = h.step(&k, &m, &goal);
+        let (k, m) = at(first.lines, 17.0);
+        let next = h.step(&k, &m, &goal);
+        assert!(next.kreads > 0.0, "{next:?}");
+        assert!(!h.mpki_at_ceiling);
     }
 
     #[test]

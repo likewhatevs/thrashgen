@@ -22,7 +22,7 @@ assumptions. They cover:
   would measure each other.
 
 Coverage is measured with `cargo llvm-cov`; the unit, CLI and plot
-tests together cover 96% of lines and 94% of regions as of the
+tests together cover 96% of lines and 95% of regions as of the
 experiment results in `docs/experiments.md`. Hardware-only code paths
 are excluded from that number by the `hw-tests` feature gate, not by
 `#[ignore]`, so no test is silently skipped.
