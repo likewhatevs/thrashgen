@@ -34,6 +34,7 @@ namespace, so the tool is back to the first row.
 | anon, page cache, shmem | verified from `/proc` and `cachestat` | same | same |
 | IPC, dTLB, iTLB | verified, user mode only | verified, all modes | same |
 | L3 misses on Intel and ARM | verified from core events | same | same |
+| L3 misses on Apple M2 | verified from a core event on the P cores; the E cores have none, so their work adds instructions but no misses | same | same |
 | L3 misses on AMD | proxy from the core-side count of line fills sourced from DRAM; calibrated against the L3 PMU once | verified from the L3 PMU with core filters | same |
 | DRAM bandwidth | modelled from counted fills and the bytes the generator wrote non-temporally or dirtied; reported, not fitted | same | verified, and fitted |
 

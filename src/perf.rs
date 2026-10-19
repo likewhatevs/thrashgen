@@ -19,6 +19,11 @@ use crate::events::Encoded;
 
 /// `PERF_TYPE_BREAKPOINT`, the last fixed type; dynamic PMUs number above it.
 const PERF_TYPE_BREAKPOINT: u32 = 5;
+/// `PERF_PMU_TYPE_SHIFT`: a `PERF_TYPE_HARDWARE` event names the PMU
+/// to open on in the high half of its config, for a host with several
+/// core PMUs, which the kernel otherwise lands on whichever PMU
+/// accepts the event first.
+const PERF_PMU_TYPE_SHIFT: u32 = 32;
 
 /// A counter to open: a name for reports and the encoded event.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,37 +32,66 @@ pub struct Spec {
     pub name: String,
     /// Event encoding.
     pub enc: Encoded,
+    /// A core PMU event, which counts a task and takes the mode asked
+    /// for; an uncore PMU counts no task in particular and rejects
+    /// any exclude bit.
+    pub core: bool,
 }
 
 impl Spec {
-    /// A raw or dynamic-PMU event.
+    /// A raw or dynamic-PMU event: a core event at one of the fixed
+    /// types, an uncore event above them.
     pub fn new(name: impl Into<String>, enc: Encoded) -> Spec {
         Spec {
             name: name.into(),
+            core: enc.type_id <= PERF_TYPE_BREAKPOINT,
             enc,
+        }
+    }
+
+    /// A core event on a core PMU with a dynamic type: one class's PMU
+    /// of a host with several.
+    pub fn on_core(name: impl Into<String>, enc: Encoded) -> Spec {
+        Spec {
+            name: name.into(),
+            enc,
+            core: true,
         }
     }
 
     /// The generic hardware event the kernel maps to the core's
     /// instruction counter.
     pub fn instructions() -> Spec {
-        Spec::hardware("instructions", Hardware::INSTRUCTIONS)
+        Spec::hardware("instructions", Hardware::INSTRUCTIONS, None)
     }
 
     /// The generic hardware event for core cycles.
     pub fn cycles() -> Spec {
-        Spec::hardware("cycles", Hardware::CPU_CYCLES)
+        Spec::hardware("cycles", Hardware::CPU_CYCLES, None)
     }
 
-    fn hardware(name: &str, hw: Hardware) -> Spec {
+    /// [`instructions`](Self::instructions) on one core PMU of a host
+    /// with several, by its `type`.
+    pub fn instructions_on(pmu_type: u32) -> Spec {
+        Spec::hardware("instructions", Hardware::INSTRUCTIONS, Some(pmu_type))
+    }
+
+    /// [`cycles`](Self::cycles) on one core PMU, by its `type`.
+    pub fn cycles_on(pmu_type: u32) -> Spec {
+        Spec::hardware("cycles", Hardware::CPU_CYCLES, Some(pmu_type))
+    }
+
+    fn hardware(name: &str, hw: Hardware, pmu_type: Option<u32>) -> Spec {
+        let on = pmu_type.map_or(0, |t| u64::from(t) << PERF_PMU_TYPE_SHIFT);
         Spec {
             name: name.into(),
             enc: Encoded {
                 type_id: 0,
-                config: u64::from(hw),
+                config: on | u64::from(hw),
                 config1: 0,
                 config2: 0,
             },
+            core: true,
         }
     }
 }
@@ -162,9 +196,9 @@ pub fn builder<'a>(spec: &Spec, target: &Target<'a>, opts: Options) -> Builder<'
     );
     b.attrs_mut().type_ = spec.enc.type_id;
     // Uncore PMUs count no task in particular, so the kernel rejects
-    // any exclude bit on them; the core PMU's events use the fixed raw
-    // type and take the mode asked for.
-    let uncore = spec.enc.type_id > PERF_TYPE_BREAKPOINT;
+    // any exclude bit on them; a core PMU's events take the mode asked
+    // for.
+    let uncore = !spec.core;
     b.enabled(false)
         .exclude_kernel(!opts.kernel && !uncore)
         .exclude_hv(!uncore)
@@ -203,6 +237,30 @@ pub fn scale(raw: u64, enabled: Duration, running: Duration) -> f64 {
     } else {
         raw as f64 * enabled.as_secs_f64() / running.as_secs_f64()
     }
+}
+
+/// Fold readings of one name into one. A name opened on several core
+/// PMUs is one counter split across classes of core: a task's event
+/// on a class's PMU is enabled for the task's whole run time but runs
+/// only while the task is on that class's CPUs, the kernel leaving it
+/// inactive elsewhere (`pmu->filter` in `kernel/events/core.c`), so
+/// the enabled times are the same and the running times add up. Scaled
+/// one by one, each would be inflated by the time the task spent on
+/// the other class as if that were multiplexing; folded, the sum is
+/// scaled by the time it was on no PMU at all, which is.
+pub fn fold_by_name(readings: Vec<Reading>) -> Vec<Reading> {
+    let mut out: Vec<Reading> = Vec::with_capacity(readings.len());
+    for r in readings {
+        if let Some(seen) = out.iter_mut().find(|s| s.name == r.name) {
+            seen.raw += r.raw;
+            seen.time_enabled = seen.time_enabled.max(r.time_enabled);
+            seen.time_running = (seen.time_running + r.time_running).min(seen.time_enabled);
+            seen.scaled = scale(seen.raw, seen.time_enabled, seen.time_running);
+        } else {
+            out.push(r);
+        }
+    }
+    out
 }
 
 /// A set of open counters on one target.
@@ -249,9 +307,11 @@ impl Counters {
         self.items.iter_mut().try_for_each(|(_, c)| c.reset())
     }
 
-    /// Read every counter.
+    /// Read every counter, one reading per name: a name opened on
+    /// several PMUs is folded by [`fold_by_name`].
     pub fn read(&mut self) -> io::Result<Vec<Reading>> {
-        self.items
+        let readings = self
+            .items
             .iter_mut()
             .map(|(name, c)| {
                 let d = c.read_full()?;
@@ -265,7 +325,8 @@ impl Counters {
                     time_running,
                 })
             })
-            .collect()
+            .collect::<io::Result<Vec<Reading>>>()?;
+        Ok(fold_by_name(readings))
     }
 
     /// Names in open order.
@@ -397,11 +458,69 @@ mod tests {
             (0, 0),
             "uncore events take no exclude bits"
         );
+        assert!(!uncore.core);
+        let class = Spec::on_core("dtlb", enc(11, 0x0b));
+        assert!(class.core && Spec::instructions_on(11).core && spec.core);
+        let b = builder(&class, &Target::Task(7), Options::default());
+        assert_eq!(
+            (b.attrs().exclude_kernel(), b.attrs().exclude_hv()),
+            (1, 1),
+            "a class's core PMU has a dynamic type but takes the mode asked for"
+        );
 
         let hw = Spec::instructions();
         assert_eq!(hw.enc.type_id, 0, "PERF_TYPE_HARDWARE");
         assert_eq!(hw.enc.config, 1, "PERF_COUNT_HW_INSTRUCTIONS");
         assert_eq!(Spec::cycles().enc.config, 0);
+        let on = Spec::instructions_on(11);
+        assert_eq!(on.enc.type_id, 0, "still PERF_TYPE_HARDWARE");
+        assert_eq!(
+            on.enc.config,
+            (11 << 32) | 1,
+            "the PMU type in the high half"
+        );
+        assert_eq!(Spec::cycles_on(10).enc.config, 10 << 32);
+        assert_eq!(
+            on.name, "instructions",
+            "named as the plain one, to be folded"
+        );
+    }
+
+    #[test]
+    fn readings_of_one_name_fold_across_pmus() {
+        let ms = Duration::from_millis;
+        let r = |name: &str, raw: u64, enabled: u64, running: u64| Reading {
+            name: name.into(),
+            raw,
+            scaled: scale(raw, ms(enabled), ms(running)),
+            time_enabled: ms(enabled),
+            time_running: ms(running),
+        };
+        // A task on the P cores 600 ms of its second and on the E cores
+        // 400 ms: each class's event is enabled the whole second.
+        let folded = fold_by_name(vec![
+            r("instructions", 600, 1000, 600),
+            r("cycles", 7, 1000, 1000),
+            r("instructions", 400, 1000, 400),
+        ]);
+        assert_eq!(folded.len(), 2);
+        assert_eq!(folded[0].name, "instructions");
+        assert_eq!(folded[0].raw, 1000);
+        assert_eq!(folded[0].time_running, ms(1000), "the running times add up");
+        assert_eq!(
+            folded[0].scaled, 1000.0,
+            "not inflated by the other class's time"
+        );
+        assert_eq!(folded[1].raw, 7, "order kept");
+        // Multiplexed as well: 200 ms on no PMU at all scales the sum.
+        let mux = fold_by_name(vec![r("i", 300, 1000, 500), r("i", 300, 1000, 300)]);
+        assert_eq!(mux[0].time_running, ms(800));
+        assert!((mux[0].scaled - 750.0).abs() < 1e-9, "{:?}", mux[0]);
+        // Running beyond enabled, from rounding, is capped.
+        let cap = fold_by_name(vec![r("i", 1, 10, 6), r("i", 1, 10, 6)]);
+        assert_eq!(cap[0].time_running, ms(10));
+        assert_eq!(cap[0].scaled, 2.0);
+        assert!(fold_by_name(vec![]).is_empty());
     }
 
     #[test]
@@ -539,32 +658,34 @@ mod hw_tests {
 
     #[test]
     fn vendor_events_open_on_this_host() {
+        use crate::plan::{Access, ScopeInfo, plan};
+        use crate::topology::Topology;
         let ident = cpu::detect().unwrap();
         let table = table_for(&ident).unwrap_or_else(|| panic!("no event table for {ident:?}"));
         let sysfs = Sysfs::default();
-        let mut specs = vec![Spec::instructions()];
-        for s in table
-            .dtlb
-            .iter()
-            .copied()
-            .chain([table.itlb])
-            .chain(table.l3_miss_proxy)
-        {
-            let def = s.def();
-            specs.push(Spec::new(
-                def.name,
-                sysfs.encode(table.vendor, &def).unwrap(),
-            ));
-        }
-        if table.l3_miss.def().pmu == crate::events::CORE {
-            let def = table.l3_miss.def();
-            specs.push(Spec::new(
-                def.name,
-                sysfs.encode(table.vendor, &def).unwrap(),
-            ));
-        }
+        let topo = Topology::read(&sysfs).unwrap();
+        // The unprivileged plan for our own threads: the table's core
+        // events, on every class's PMU where the host has several.
+        let access = Access {
+            self_user: true,
+            self_kernel: false,
+            per_cpu: false,
+            attach_same_uid: true,
+        };
+        let p = plan(
+            &ScopeInfo::SelfThreads { pinned_cpus: None },
+            &access,
+            Some(table),
+            &sysfs,
+            &topo,
+        )
+        .unwrap();
+        let specs = &p.groups[0].specs;
+        let names: std::collections::BTreeSet<&str> =
+            specs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.len() >= 4, "{names:?}");
         let mut c = Counters::open(
-            &specs,
+            specs,
             &Target::SelfThreads,
             Options {
                 inherit: true,
@@ -577,9 +698,22 @@ mod hw_tests {
         black_box(v.iter().sum::<u64>());
         c.disable().unwrap();
         let r = c.read().unwrap();
-        assert!(r[0].raw > 1_000_000);
+        assert_eq!(
+            r.len(),
+            names.len(),
+            "one reading per name, the classes folded: {r:?}"
+        );
+        assert_eq!(r[0].name, "instructions");
+        assert!(r[0].raw > 1_000_000, "{:?}", r[0]);
         for x in &r[1..] {
             assert!(!x.time_enabled.is_zero(), "{x:?}");
+        }
+        if !table.classes.is_empty() {
+            assert!(
+                r[0].time_running > Duration::ZERO && r[0].time_running <= r[0].time_enabled,
+                "{:?}",
+                r[0]
+            );
         }
     }
 
@@ -654,7 +788,7 @@ mod amd_l3_root_tests {
             .expect("another core");
         let make = |cpu: u32| {
             let f = topo.amd_l3_filter(cpu).unwrap();
-            let def = table.l3_miss.def().with_fields(&[
+            let def = table.l3_miss.expect("AMD's L3 event").def().with_fields(&[
                 ("coreid", u64::from(f.coreid)),
                 ("threadmask", u64::from(f.threadmask)),
                 ("enallslices", 1),

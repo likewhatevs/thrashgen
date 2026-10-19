@@ -32,27 +32,34 @@ pub enum Vendor {
     Intel,
     /// Arm Ltd. cores with `PMUv3`.
     Arm,
+    /// Apple silicon, implementer 0x61: its own PMU, one per class of
+    /// core, driven by `drivers/perf/apple_m1_cpu_pmu.c`.
+    Apple,
 }
 
 impl Vendor {
-    /// Vendor of an identified CPU, if it is one the tables cover.
+    /// Vendor of an identified CPU, if it is one the tables cover. The
+    /// Arm implementer, which `/proc/cpuinfo` reports as the family,
+    /// tells Apple from Arm Ltd.
     pub fn of(cpu: &CpuIdent) -> Option<Vendor> {
-        match cpu.vendor.as_str() {
-            "amd" => Some(Vendor::Amd),
-            "intel" => Some(Vendor::Intel),
-            "arm" => Some(Vendor::Arm),
+        match (cpu.vendor.as_str(), cpu.family) {
+            ("amd", _) => Some(Vendor::Amd),
+            ("intel", _) => Some(Vendor::Intel),
+            ("arm", 0x61) => Some(Vendor::Apple),
+            ("arm", _) => Some(Vendor::Arm),
             _ => None,
         }
     }
 
     /// The core PMU's format, from the kernel driver at v7.1:
     /// `arch/x86/events/amd/core.c`, `arch/x86/events/intel/core.c`,
-    /// `drivers/perf/arm_pmuv3.c`.
+    /// `drivers/perf/arm_pmuv3.c`, `drivers/perf/apple_m1_cpu_pmu.c`.
     pub fn core_format(self) -> Format {
         let text = match self {
             Vendor::Amd => "event=config:0-7,32-35\numask=config:8-15",
             Vendor::Intel => "event=config:0-7\numask=config:8-15",
             Vendor::Arm => "event=config:0-15",
+            Vendor::Apple => "event=config:0-7",
         };
         Format::parse(text).expect("built-in format parses")
     }
@@ -100,6 +107,17 @@ impl EventDef {
             fields,
         }
     }
+
+    /// A copy on another PMU: a core event on one class's PMU of a
+    /// host with several classes of core.
+    #[must_use]
+    pub fn on_pmu(&self, pmu: &'static str) -> EventDef {
+        EventDef {
+            name: self.name,
+            pmu,
+            fields: self.fields.clone(),
+        }
+    }
 }
 
 impl fmt::Display for EventDef {
@@ -141,16 +159,24 @@ impl Static {
 
 /// The events behind the profile's counter fields for one CPU model
 /// group. Encodings come from the kernel's `tools/perf/pmu-events`
-/// JSON at v7.1; `table` is the directory they were taken from.
+/// JSON at v7.1, or from the kernel driver where the kernel has no
+/// table; `table` is the directory they were taken from, or the
+/// driver's name, and is also the calibration key.
 #[derive(Clone, Copy, Debug)]
 pub struct EventTable {
     /// Kernel pmu-events directory, also the calibration key.
     pub table: &'static str,
     /// Vendor.
     pub vendor: Vendor,
+    /// Classes of core with a PMU each, where the host has several;
+    /// empty where the one core PMU is [`CORE`]. Each class opens the
+    /// table's core events on its own PMU, and the L3 miss event is
+    /// the class's.
+    pub classes: &'static [CoreClass],
     /// The L3 miss definition. On AMD this is an uncore event that
-    /// needs per-CPU access.
-    pub l3_miss: Static,
+    /// needs per-CPU access. `None` where no core PMU counts it, as
+    /// with the classes below, which then say which do.
+    pub l3_miss: Option<Static>,
     /// A per-task core event that tracks `l3_miss` for memory-bound
     /// load: data cache fills from DRAM. AMD only.
     pub l3_miss_proxy: Option<Static>,
@@ -158,6 +184,26 @@ pub struct EventTable {
     pub dtlb: &'static [Static],
     /// iTLB event.
     pub itlb: Static,
+    /// Bytes a miss fetches from memory, where that is not the line
+    /// size sysfs reports: the generator's line.
+    pub memory_line: Option<usize>,
+    /// Whether the L3 miss event counts demand fetches only, none the
+    /// prefetchers made, and a visit's further lines in a page are
+    /// fetched by the region prefetcher: the generator then lays a
+    /// run's lines out in pages of their own, and the fitter spares
+    /// counted misses as it does under AMD's proxy.
+    pub demand_misses_only: bool,
+}
+
+/// One class of core on a host with several, as `cpu_core` and
+/// `cpu_atom` or Apple's P and E cores: its PMU, whose `cpus` file in
+/// sysfs says which CPUs it covers, and what it counts that differs.
+#[derive(Clone, Copy, Debug)]
+pub struct CoreClass {
+    /// PMU directory name.
+    pub pmu: &'static str,
+    /// The L3 miss event on this class, if it has one.
+    pub l3_miss: Option<Static>,
 }
 
 const AMD_L3_ZEN4: Static = Static {
@@ -199,55 +245,111 @@ const ARM_LLC: Static = EventDef::core_event("LL_CACHE_MISS_RD", 0x37);
 const ARM_DTLB: &[Static] = &[EventDef::core_event("DTLB_WALK", 0x34)];
 const ARM_ITLB: Static = EventDef::core_event("ITLB_WALK", 0x35);
 
+/// Apple's PMU driver lists its events by name but exposes only cycles
+/// and instructions through sysfs; any 8-bit event number passes
+/// through as raw. The TLB events are the driver's: the data one an
+/// access that missed the last TLB level, the instruction one a
+/// demand fetch that missed the first, since the instruction-side L2
+/// miss and walk events count speculative fetches too and at a low
+/// stub rate came in bursts of hundreds per call where this one held
+/// at 1.2. The L3 miss event is in no list and was found by sweeping
+/// every event number on an M2 Ultra (`docs/design.md` section 2.1):
+/// on the P cores event 0x23 counted one per 128-byte line a demand
+/// load or store fetched from memory, none for a set the system cache
+/// holds, none for a prefetched sequential read, and the E cores have
+/// no event that does the same.
+const APPLE_DTLB: &[Static] = &[EventDef::core_event("L2_TLB_MISS_DATA", 0x0b)];
+const APPLE_ITLB: Static = EventDef::core_event("L1I_TLB_MISS_DEMAND", 0xd4);
+const APPLE_P_LLC: Static = EventDef::core_event("unlisted_0x23", 0x23);
+const APPLE_CLASSES: &[CoreClass] = &[
+    CoreClass {
+        pmu: "apple_avalanche_pmu",
+        l3_miss: Some(APPLE_P_LLC),
+    },
+    CoreClass {
+        pmu: "apple_blizzard_pmu",
+        l3_miss: None,
+    },
+];
+
 /// Every table, in lookup order.
 pub const TABLES: &[EventTable] = &[
     EventTable {
         table: "amdzen3",
         vendor: Vendor::Amd,
-        l3_miss: AMD_L3_ZEN3,
+        classes: &[],
+        l3_miss: Some(AMD_L3_ZEN3),
         l3_miss_proxy: Some(AMD_DRAM_FILLS),
         dtlb: AMD_DTLB,
         itlb: AMD_ITLB,
+        memory_line: None,
+        demand_misses_only: false,
     },
     EventTable {
         table: "amdzen4",
         vendor: Vendor::Amd,
-        l3_miss: AMD_L3_ZEN4,
+        classes: &[],
+        l3_miss: Some(AMD_L3_ZEN4),
         l3_miss_proxy: Some(AMD_DRAM_FILLS),
         dtlb: AMD_DTLB,
         itlb: AMD_ITLB,
+        memory_line: None,
+        demand_misses_only: false,
     },
     EventTable {
         table: "amdzen5",
         vendor: Vendor::Amd,
-        l3_miss: AMD_L3_ZEN4,
+        classes: &[],
+        l3_miss: Some(AMD_L3_ZEN4),
         l3_miss_proxy: Some(AMD_DRAM_FILLS),
         dtlb: AMD_DTLB,
         itlb: AMD_ITLB,
+        memory_line: None,
+        demand_misses_only: false,
     },
     EventTable {
         table: "skylakex",
         vendor: Vendor::Intel,
-        l3_miss: INTEL_LLC,
+        classes: &[],
+        l3_miss: Some(INTEL_LLC),
         l3_miss_proxy: None,
         dtlb: INTEL_DTLB_SKX,
         itlb: INTEL_ITLB_SKX,
+        memory_line: None,
+        demand_misses_only: false,
     },
     EventTable {
         table: "sapphirerapids",
         vendor: Vendor::Intel,
-        l3_miss: INTEL_LLC,
+        classes: &[],
+        l3_miss: Some(INTEL_LLC),
         l3_miss_proxy: None,
         dtlb: INTEL_DTLB_SPR,
         itlb: INTEL_ITLB_SPR,
+        memory_line: None,
+        demand_misses_only: false,
     },
     EventTable {
         table: "arm64",
         vendor: Vendor::Arm,
-        l3_miss: ARM_LLC,
+        classes: &[],
+        l3_miss: Some(ARM_LLC),
         l3_miss_proxy: None,
         dtlb: ARM_DTLB,
         itlb: ARM_ITLB,
+        memory_line: None,
+        demand_misses_only: false,
+    },
+    EventTable {
+        table: "applem2",
+        vendor: Vendor::Apple,
+        classes: APPLE_CLASSES,
+        l3_miss: None,
+        l3_miss_proxy: None,
+        dtlb: APPLE_DTLB,
+        itlb: APPLE_ITLB,
+        memory_line: Some(128),
+        demand_misses_only: true,
     },
 ];
 
@@ -259,6 +361,9 @@ pub fn table_named(name: &str) -> Option<&'static EventTable> {
 /// The table for a CPU, following the kernel's `mapfile.csv` at v7.1.
 /// Models the kernel has no table for, or that this crate has not
 /// verified, return `None`; callers then run counters as unavailable.
+/// Apple's M2 parts, Blizzard and Avalanche cores in the M2, M2 Pro,
+/// Max and Ultra, are the ones the sweep behind the table ran on; the
+/// M1's cores share the driver's event list but not that measurement.
 pub fn table_for(cpu: &CpuIdent) -> Option<&'static EventTable> {
     let name = match (Vendor::of(cpu)?, cpu.family, cpu.model) {
         (Vendor::Amd, 25, 0x00..=0x0f | 0x20..=0x2f | 0x40..=0x5f) => "amdzen3",
@@ -267,6 +372,7 @@ pub fn table_for(cpu: &CpuIdent) -> Option<&'static EventTable> {
         (Vendor::Intel, 6, 0x55 | 0x6a | 0x6c | 0xaf) => "skylakex",
         (Vendor::Intel, 6, 0x8f | 0xcf | 0xad | 0xae) => "sapphirerapids",
         (Vendor::Arm, 0x41, _) => "arm64",
+        (Vendor::Apple, 0x61, 0x032..=0x039) => "applem2",
         _ => return None,
     };
     table_named(name)
@@ -473,6 +579,14 @@ impl Sysfs {
         parse_cpulist(&text)
     }
 
+    /// CPUs listed in the PMU's `cpus`, which a core PMU of one class
+    /// of core on a host with several has, or `None` when the file is
+    /// absent.
+    pub fn pmu_cpus(&self, pmu: &str) -> Option<Vec<u32>> {
+        let text = std::fs::read_to_string(self.pmu_dir(pmu).join("cpus")).ok()?;
+        parse_cpulist(&text)
+    }
+
     /// Encode an event. Core events use the vendor's built-in format
     /// and `PERF_TYPE_RAW`; anything else is read from sysfs.
     pub fn encode(&self, vendor: Vendor, ev: &EventDef) -> Result<Encoded, FormatError> {
@@ -515,6 +629,10 @@ mod tests {
 
     fn fixture() -> Sysfs {
         Sysfs::at(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/root"))
+    }
+
+    fn apple_fixture() -> Sysfs {
+        Sysfs::at(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/apple"))
     }
 
     fn ident(vendor: &str, family: u32, model: u32) -> CpuIdent {
@@ -565,6 +683,10 @@ mod tests {
         assert_eq!(t("arm", 0x41, 0xd49), Some("arm64"), "Neoverse N2");
         assert_eq!(t("arm", 0x41, 0xd0c), Some("arm64"), "Neoverse N1");
         assert_eq!(t("arm", 0x50, 0x000), None, "Ampere implementer");
+        assert_eq!(t("arm", 0x61, 0x038), Some("applem2"), "M2 Max Blizzard");
+        assert_eq!(t("arm", 0x61, 0x039), Some("applem2"), "M2 Max Avalanche");
+        assert_eq!(t("arm", 0x61, 0x033), Some("applem2"), "M2 Avalanche");
+        assert_eq!(t("arm", 0x61, 0x023), None, "M1 Firestorm: not measured");
         assert_eq!(t("CentaurHauls", 7, 59), None);
         assert!(table_named("nope").is_none());
     }
@@ -575,20 +697,34 @@ mod tests {
             assert_eq!(table_named(t.table).map(|x| x.table), Some(t.table));
             assert!(!t.dtlb.is_empty());
             if t.vendor == Vendor::Amd {
-                assert_eq!(t.l3_miss.pmu, "amd_l3", "{}", t.table);
+                assert_eq!(t.l3_miss.unwrap().pmu, "amd_l3", "{}", t.table);
                 assert!(t.l3_miss_proxy.is_some(), "{}", t.table);
             } else {
-                assert_eq!(t.l3_miss.pmu, CORE, "{}", t.table);
                 assert!(t.l3_miss_proxy.is_none(), "{}", t.table);
+            }
+            if t.classes.is_empty() {
+                assert!(t.l3_miss.is_some(), "{}", t.table);
+            } else {
+                assert!(t.l3_miss.is_none(), "{}: classes carry it", t.table);
+                assert!(t.classes.iter().any(|c| c.l3_miss.is_some()), "{}", t.table);
+                assert!(t.classes.iter().all(|c| !c.pmu.is_empty()), "{}", t.table);
+            }
+            for s in t.dtlb.iter().chain([&t.itlb]) {
+                assert_eq!(s.pmu, CORE, "{}: TLB events are core events", t.table);
             }
         }
     }
 
     #[test]
     fn every_table_event_encodes() {
-        let sysfs = fixture();
         for t in TABLES {
-            let all = [t.l3_miss]
+            let sysfs = if t.vendor == Vendor::Apple {
+                apple_fixture()
+            } else {
+                fixture()
+            };
+            let all = t
+                .l3_miss
                 .into_iter()
                 .chain(t.l3_miss_proxy)
                 .chain(t.dtlb.iter().copied())
@@ -605,7 +741,65 @@ mod tests {
                 }
                 assert_eq!((enc.config1, enc.config2), (0, 0));
             }
+            for class in t.classes {
+                let on_class = t
+                    .dtlb
+                    .iter()
+                    .copied()
+                    .chain([t.itlb])
+                    .chain(class.l3_miss)
+                    .map(|s| s.def().on_pmu(class.pmu));
+                for def in on_class {
+                    let enc = sysfs
+                        .encode(t.vendor, &def)
+                        .unwrap_or_else(|e| panic!("{}: {def}: {e}", t.table));
+                    assert_eq!(
+                        enc.type_id,
+                        sysfs.pmu_type(class.pmu).unwrap(),
+                        "{}: {def} on its class's PMU",
+                        t.table
+                    );
+                    assert_eq!(
+                        enc.config,
+                        sysfs.encode(t.vendor, &def.on_pmu(CORE)).unwrap().config,
+                        "{}: {def}: the class PMU's format is the core format",
+                        t.table
+                    );
+                }
+                assert!(sysfs.pmu_cpus(class.pmu).is_some_and(|c| !c.is_empty()));
+            }
         }
+    }
+
+    #[test]
+    fn apple_classes_from_the_fixture() {
+        let sysfs = apple_fixture();
+        assert_eq!(sysfs.pmu_type("apple_avalanche_pmu"), Ok(11));
+        assert_eq!(sysfs.pmu_type("apple_blizzard_pmu"), Ok(10));
+        assert_eq!(sysfs.pmu_cpus("apple_avalanche_pmu"), Some(vec![4, 5]));
+        assert_eq!(sysfs.pmu_cpus("apple_blizzard_pmu"), Some(vec![0, 1]));
+        assert_eq!(sysfs.pmu_cpus("nope"), None);
+        assert_eq!(fixture().pmu_cpus("cpu"), None, "one class: no cpus file");
+        let p = APPLE_P_LLC.def().on_pmu("apple_avalanche_pmu");
+        assert_eq!(p.to_string(), "apple_avalanche_pmu/event=0x23/");
+        let enc = sysfs.encode(Vendor::Apple, &p).unwrap();
+        assert_eq!((enc.type_id, enc.config), (11, 0x23));
+        assert_eq!(
+            sysfs
+                .encode(Vendor::Apple, &APPLE_DTLB[0].def())
+                .unwrap()
+                .config,
+            0x0b
+        );
+        assert_eq!(
+            sysfs.encode(Vendor::Apple, &EventDef::core_event("x", 0x100).def()),
+            Err(FormatError::TooWide {
+                field: "event".into(),
+                value: 0x100,
+                bits: 8
+            }),
+            "eight event bits"
+        );
     }
 
     #[test]
@@ -742,6 +936,8 @@ mod tests {
     fn display_and_vendor() {
         assert_eq!(INTEL_LLC.def().to_string(), "cpu/event=0x2e,umask=0x41/");
         assert_eq!(Vendor::of(&ident("amd", 25, 1)), Some(Vendor::Amd));
+        assert_eq!(Vendor::of(&ident("arm", 0x41, 0xd49)), Some(Vendor::Arm));
+        assert_eq!(Vendor::of(&ident("arm", 0x61, 0x039)), Some(Vendor::Apple));
         assert_eq!(Vendor::of(&ident("via", 1, 1)), None);
     }
 }

@@ -76,18 +76,32 @@ Each field in a profile carries provenance: the scope (`cgroup`,
 ### 2.1 Vendor events
 
 Vendors count different things, so a profile is comparable only on its
-own vendor's definitions. The tables live in `src/events/` with fixtures
-copied from the kernel's `tools/perf/pmu-events` JSON at v7.1.
+own vendor's definitions. The tables live in `src/events.rs` with
+fixtures copied from the kernel's `tools/perf/pmu-events` JSON at v7.1,
+or, for Apple's cores, which the kernel has no table for, from the
+driver `drivers/perf/apple_m1_cpu_pmu.c` and a sweep of every event
+number on an M2 Ultra.
 
-| field | AMD Zen 3, 4, 5 | Intel Skylake-SP and later server cores | ARM Neoverse |
-| --- | --- | --- | --- |
-| L3 misses | L3 PMU lookup-miss event, raw `amd_l3/event=0x04,umask=0x01/` on Zen 4 and 5 and `event=0x06,umask=0x01` on Zen 3, per L3 domain, filtered to the scope's cores with the `coreid` / `threadmask` fields. Unprivileged proxy: core event `ls_any_fills_from_sys.dram_io_all`, raw `event=0x44,umask=0x48`, data cache fills from DRAM or MMIO | `LONGEST_LAT_CACHE.MISS`, `event=0x2e,umask=0x41` | `LL_CACHE_MISS_RD`, `0x37`, reads only |
-| dTLB | L1 dTLB misses that hit the L2 TLB: raw `event=0x45,umask=0x0f` | `DTLB_LOAD_MISSES.WALK_COMPLETED` plus `DTLB_STORE_MISSES.WALK_COMPLETED`; `0x08` and `0x49` with umask `0x0e` through Ice Lake-SP and on Sierra Forest, `0x12` and `0x13` from Sapphire Rapids | `DTLB_WALK`, `0x34` |
-| iTLB | L2 iTLB misses: raw `event=0x85,umask=0x0f` | `ITLB_MISSES.WALK_COMPLETED`; `0x85` or `0x11`, umask `0x0e`, split as above | `ITLB_WALK`, `0x35` |
+| field | AMD Zen 3, 4, 5 | Intel Skylake-SP and later server cores | ARM Neoverse | Apple M2 |
+| --- | --- | --- | --- | --- |
+| L3 misses | L3 PMU lookup-miss event, raw `amd_l3/event=0x04,umask=0x01/` on Zen 4 and 5 and `event=0x06,umask=0x01` on Zen 3, per L3 domain, filtered to the scope's cores with the `coreid` / `threadmask` fields. Unprivileged proxy: core event `ls_any_fills_from_sys.dram_io_all`, raw `event=0x44,umask=0x48`, data cache fills from DRAM or MMIO | `LONGEST_LAT_CACHE.MISS`, `event=0x2e,umask=0x41` | `LL_CACHE_MISS_RD`, `0x37`, reads only | P cores: event `0x23`, in no list, which the sweep found counting one per 128-byte line a demand load or store fetched from memory: 1.00 per visit of a random 2 GiB set with 16 KiB pages and with 32 MiB hugepages alike, 2.00 with a store to a second line, 0 for a 32 MiB set the system cache holds, 0 for a prefetched sequential read, so like AMD's proxy it does not count prefetched lines. E cores: none; their work adds instructions and cycles but no misses, and the plan's note says so |
+| dTLB | L1 dTLB misses that hit the L2 TLB: raw `event=0x45,umask=0x0f` | `DTLB_LOAD_MISSES.WALK_COMPLETED` plus `DTLB_STORE_MISSES.WALK_COMPLETED`; `0x08` and `0x49` with umask `0x0e` through Ice Lake-SP and on Sierra Forest, `0x12` and `0x13` from Sapphire Rapids | `DTLB_WALK`, `0x34` | `L2_TLB_MISS_DATA`, `0x0b`: an access that missed the last TLB level, 0.98 per visit of a set past it on both classes of core, where the walk event `MMU_TABLE_WALK_DATA`, `0x08`, counted 1.0 on the P cores and 1.5 on the E |
+| iTLB | L2 iTLB misses: raw `event=0x85,umask=0x0f` | `ITLB_MISSES.WALK_COMPLETED`; `0x85` or `0x11`, umask `0x0e`, split as above | `ITLB_WALK`, `0x35` | `L1I_TLB_MISS_DEMAND`, `0xd4`: a demand instruction fetch that missed the first-level iTLB, 1.2 per call into a stub page of a set past the reach, steady at a call on one access in two hundred. The L2 miss and walk events, `0x0a` and `0x07`, count speculative fetches too: about two per call at a call on every access, but at one call in two hundred bursts of up to one per access, hundreds per call, for seconds at a time, and the L1 fill event `0x04` a dozen per access |
 
 CPU models are mapped to tables the way the kernel's `mapfile.csv`
 does it. A model with no verified table gets no counters rather than a
-guess, and the report says so.
+guess, and the report says so; Apple's M1 cores share the driver's
+event list with the M2's but not the sweep, so they get none.
+
+A host whose cores come in classes, each with a PMU of its own, as
+Apple's P and E cores, opens the same core events on every class's
+PMU under one name. A task's event on a class's PMU is enabled for
+the task's whole run time but runs only while the task is on that
+class's CPUs, so the readings of one name are folded before scaling:
+the counts add, the running times add, and the sum is scaled by the
+time the task was on no PMU at all, which is multiplexing; scaled one
+by one, each would count the time on the other class as if it were.
+A per-CPU event opens on the PMU of the CPU's class.
 
 AMD's dTLB definition counts L2 TLB hits where the others count walks;
 the two are not comparable, and the profile's vendor field says which

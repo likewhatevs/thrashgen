@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::caps::Expectations;
-use crate::events::{CORE, EventTable, FormatError, Sysfs};
+use crate::events::{CORE, EventDef, EventTable, FormatError, Static, Sysfs};
 use crate::perf::{Options, Probe, Spec};
 use crate::profile::{self, Method, Mode, Provenance};
 use crate::topology::Topology;
@@ -126,14 +126,37 @@ impl Plan {
 pub const L3_FILLS_KEY: &str = "l3_dram_fills_per_sec";
 
 /// Core-PMU counters for one target: instructions, cycles, TLBs and,
-/// where the core PMU has one, L3 misses or their proxy.
+/// where the core PMU has one, L3 misses or their proxy. On a host
+/// with several classes of core each class has the set on its own
+/// PMU, under the same names, so a task's readings fold across the
+/// classes it ran on (`perf::fold_by_name`) and a CPU's come from the
+/// class it belongs to.
 struct CoreSet {
-    specs: Vec<Spec>,
+    /// One entry per class, or one for the single core PMU: the CPUs
+    /// the PMU covers, `None` for all, and the specs on it.
+    classes: Vec<(Option<Vec<u32>>, Vec<Spec>)>,
     fields: Vec<(&'static str, Vec<String>, Method)>,
+    notes: Vec<String>,
+}
+
+impl CoreSet {
+    /// Every class's specs, for a target that runs anywhere.
+    fn all_specs(&self) -> Vec<Spec> {
+        self.classes.iter().flat_map(|(_, s)| s.clone()).collect()
+    }
+
+    /// The specs of the class a CPU belongs to, or of every class
+    /// whose coverage is unknown.
+    fn specs_for_cpu(&self, cpu: u32) -> Vec<Spec> {
+        self.classes
+            .iter()
+            .filter(|(cpus, _)| cpus.as_ref().is_none_or(|c| c.contains(&cpu)))
+            .flat_map(|(_, s)| s.clone())
+            .collect()
+    }
 }
 
 fn core_set(table: &EventTable, sysfs: &Sysfs) -> Result<CoreSet, FormatError> {
-    let mut specs = vec![Spec::instructions(), Spec::cycles()];
     let mut fields = vec![
         (
             "instructions_per_sec",
@@ -142,30 +165,102 @@ fn core_set(table: &EventTable, sysfs: &Sysfs) -> Result<CoreSet, FormatError> {
         ),
         ("cycles_per_sec", vec!["cycles".to_string()], Method::Perf),
     ];
-    let mut dtlb = Vec::new();
-    for s in table.dtlb {
-        let def = s.def();
-        let name = format!("dtlb:{}", def.name);
-        specs.push(Spec::new(&name, sysfs.encode(table.vendor, &def)?));
-        dtlb.push(name);
+    let dtlb_names: Vec<String> = table
+        .dtlb
+        .iter()
+        .map(|s| format!("dtlb:{}", s.def().name))
+        .collect();
+    fields.push(("dtlb_misses_per_sec", dtlb_names.clone(), Method::Perf));
+    let itlb_name = format!("itlb:{}", table.itlb.def().name);
+    fields.push(("itlb_misses_per_sec", vec![itlb_name.clone()], Method::Perf));
+
+    // The single core PMU, or one class per PMU, each with the L3
+    // miss event it has.
+    let pmus: Vec<(Option<&'static str>, Option<Static>)> = if table.classes.is_empty() {
+        vec![(None, table.l3_miss)]
+    } else {
+        table
+            .classes
+            .iter()
+            .map(|c| (Some(c.pmu), c.l3_miss))
+            .collect()
+    };
+    let mut classes = Vec::with_capacity(pmus.len());
+    let mut l3_names: Vec<String> = Vec::new();
+    let mut l3_method = Method::Perf;
+    let mut without_l3: Vec<&str> = Vec::new();
+    for (pmu, l3) in &pmus {
+        let on = |def: EventDef| match pmu {
+            Some(p) => def.on_pmu(p),
+            None => def,
+        };
+        let (cpus, mut specs) = match pmu {
+            Some(p) => {
+                let t = sysfs.pmu_type(p)?;
+                (
+                    sysfs.pmu_cpus(p),
+                    vec![Spec::instructions_on(t), Spec::cycles_on(t)],
+                )
+            }
+            None => (None, vec![Spec::instructions(), Spec::cycles()]),
+        };
+        for (s, name) in table.dtlb.iter().zip(&dtlb_names) {
+            specs.push(Spec::on_core(
+                name,
+                sysfs.encode(table.vendor, &on(s.def()))?,
+            ));
+        }
+        specs.push(Spec::on_core(
+            &itlb_name,
+            sysfs.encode(table.vendor, &on(table.itlb.def()))?,
+        ));
+        match l3 {
+            Some(l3) if l3.def().pmu == CORE => {
+                let def = on(l3.def());
+                let name = format!("l3:{}", def.name);
+                specs.push(Spec::on_core(&name, sysfs.encode(table.vendor, &def)?));
+                if !l3_names.contains(&name) {
+                    l3_names.push(name);
+                }
+            }
+            Some(_) => {
+                if let Some(proxy) = table.l3_miss_proxy {
+                    let def = on(proxy.def());
+                    let name = format!("l3proxy:{}", def.name);
+                    specs.push(Spec::on_core(&name, sysfs.encode(table.vendor, &def)?));
+                    if !l3_names.contains(&name) {
+                        l3_names.push(name);
+                    }
+                    l3_method = Method::Proxy;
+                }
+            }
+            None => without_l3.push(pmu.unwrap_or(CORE)),
+        }
+        classes.push((cpus, specs));
     }
-    fields.push(("dtlb_misses_per_sec", dtlb, Method::Perf));
-    let itlb = table.itlb.def();
-    let name = format!("itlb:{}", itlb.name);
-    specs.push(Spec::new(&name, sysfs.encode(table.vendor, &itlb)?));
-    fields.push(("itlb_misses_per_sec", vec![name], Method::Perf));
-    let l3 = table.l3_miss.def();
-    if l3.pmu == CORE {
-        let name = format!("l3:{}", l3.name);
-        specs.push(Spec::new(&name, sysfs.encode(table.vendor, &l3)?));
-        fields.push(("l3_misses_per_sec", vec![name], Method::Perf));
-    } else if let Some(proxy) = table.l3_miss_proxy {
-        let def = proxy.def();
-        let name = format!("l3proxy:{}", def.name);
-        specs.push(Spec::new(&name, sysfs.encode(table.vendor, &def)?));
-        fields.push(("l3_misses_per_sec", vec![name], Method::Proxy));
+    let mut notes = Vec::new();
+    if l3_names.is_empty() {
+        notes.push("no L3 miss event on this CPU: L3 misses are not measured".into());
+    } else {
+        fields.push(("l3_misses_per_sec", l3_names, l3_method));
+        if !without_l3.is_empty() {
+            let with: Vec<&str> = pmus
+                .iter()
+                .filter(|(_, l3)| l3.is_some())
+                .filter_map(|(p, _)| *p)
+                .collect();
+            notes.push(format!(
+                "L3 misses are counted on {} only: {} has no event for them, so work on its CPUs adds instructions and cycles but no misses",
+                with.join(" and "),
+                without_l3.join(" and ")
+            ));
+        }
     }
-    Ok(CoreSet { specs, fields })
+    Ok(CoreSet {
+        classes,
+        fields,
+        notes,
+    })
 }
 
 /// AMD L3 PMU groups for a set of CPUs: one group per L3 domain, with
@@ -189,7 +284,7 @@ fn amd_l3_groups(
         if covered.is_empty() {
             continue;
         }
-        let base = table.l3_miss.def();
+        let base = table.l3_miss.expect("an uncore L3 event").def();
         let mut specs = Vec::new();
         if covered.len() == domain.len() {
             let def = base.with_fields(&[("enallcores", 1), ("enallslices", 1)]);
@@ -242,7 +337,8 @@ pub fn plan(
         return Ok(plan);
     };
     let core = core_set(table, sysfs)?;
-    let amd = table.l3_miss.def().pmu != CORE;
+    plan.notes.extend(core.notes.iter().cloned());
+    let amd = table.l3_miss.is_some_and(|l3| l3.def().pmu != CORE);
 
     let task_opts = |access: &Access| Options {
         kernel: access.self_kernel,
@@ -281,7 +377,7 @@ pub fn plan(
             }
             plan.groups.push(Group {
                 target: TargetPlan::SelfThreads,
-                specs: core.specs.clone(),
+                specs: core.all_specs(),
                 opts: task_opts(access),
             });
             add_fields(&mut plan, profile::Scope::Process, task_mode(access), &core);
@@ -319,7 +415,7 @@ pub fn plan(
             for tid in tids {
                 plan.groups.push(Group {
                     target: TargetPlan::Task(*tid),
-                    specs: core.specs.clone(),
+                    specs: core.all_specs(),
                     opts: task_opts(access),
                 });
             }
@@ -339,7 +435,7 @@ pub fn plan(
                 for cpu in cpus {
                     plan.groups.push(Group {
                         target: TargetPlan::CgroupOnCpu(*cpu),
-                        specs: core.specs.clone(),
+                        specs: core.specs_for_cpu(*cpu),
                         opts: Options {
                             kernel: true,
                             inherit: false,
@@ -382,7 +478,7 @@ pub fn plan(
                 for tid in tids {
                     plan.groups.push(Group {
                         target: TargetPlan::Task(*tid),
-                        specs: core.specs.clone(),
+                        specs: core.all_specs(),
                         opts: task_opts(access),
                     });
                 }
@@ -415,7 +511,7 @@ pub fn plan(
             for cpu in cpus {
                 plan.groups.push(Group {
                     target: TargetPlan::Cpu(*cpu),
-                    specs: core.specs.clone(),
+                    specs: core.specs_for_cpu(*cpu),
                     opts: Options {
                         kernel: true,
                         inherit: false,
@@ -483,6 +579,14 @@ mod tests {
 
     fn zen4() -> &'static EventTable {
         table_named("amdzen4").unwrap()
+    }
+
+    fn apple_sysfs() -> Sysfs {
+        Sysfs::at(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/apple"))
+    }
+
+    fn m2() -> &'static EventTable {
+        table_named("applem2").unwrap()
     }
 
     fn names(p: &Plan) -> Vec<String> {
@@ -632,6 +736,117 @@ mod tests {
             "load and store walks are summed"
         );
         assert!(p.notes.is_empty(), "{:?}", p.notes);
+    }
+
+    #[test]
+    fn two_classes_of_core_open_the_set_on_each_pmu() {
+        let sysfs = apple_sysfs();
+        let topo = Topology::read(&sysfs).unwrap();
+        let p = plan(
+            &ScopeInfo::SelfThreads { pinned_cpus: None },
+            &USER,
+            Some(m2()),
+            &sysfs,
+            &topo,
+        )
+        .unwrap();
+        assert_eq!(p.groups.len(), 1, "one target, both classes' events in it");
+        let specs = &p.groups[0].specs;
+        assert_eq!(
+            specs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            [
+                "instructions",
+                "cycles",
+                "dtlb:L2_TLB_MISS_DATA",
+                "itlb:L1I_TLB_MISS_DEMAND",
+                "l3:unlisted_0x23",
+                "instructions",
+                "cycles",
+                "dtlb:L2_TLB_MISS_DATA",
+                "itlb:L1I_TLB_MISS_DEMAND",
+            ],
+            "the same names on each PMU, so a task's readings fold; the E cores have no L3 event"
+        );
+        assert_eq!(
+            specs[0].enc.config,
+            (11 << 32) | 1,
+            "instructions on the P PMU"
+        );
+        assert_eq!(specs[6].enc.config, 10 << 32, "cycles on the E PMU");
+        assert_eq!((specs[2].enc.type_id, specs[2].enc.config), (11, 0x0b));
+        assert_eq!((specs[7].enc.type_id, specs[7].enc.config), (10, 0x0b));
+        assert_eq!((specs[4].enc.type_id, specs[4].enc.config), (11, 0x23));
+        assert!(
+            specs.iter().all(|s| s.core),
+            "class PMUs take the mode asked for"
+        );
+        assert_eq!(p.fields["l3_misses_per_sec"].counters, ["l3:unlisted_0x23"]);
+        assert_eq!(
+            p.fields["l3_misses_per_sec"].provenance.method,
+            Method::Perf
+        );
+        assert_eq!(p.fields["instructions_per_sec"].counters, ["instructions"]);
+        assert_eq!(p.fields.len(), 5);
+        assert!(
+            p.notes
+                .iter()
+                .any(|n| n.contains("apple_avalanche_pmu only")
+                    && n.contains("apple_blizzard_pmu has no event")),
+            "{:?}",
+            p.notes
+        );
+
+        // Per-CPU targets take the class the CPU belongs to.
+        let host = plan(
+            &ScopeInfo::Host { cpus: vec![0, 4] },
+            &ALL,
+            Some(m2()),
+            &sysfs,
+            &topo,
+        )
+        .unwrap();
+        assert_eq!(host.groups.len(), 2);
+        assert_eq!(host.groups[0].target, TargetPlan::Cpu(0));
+        assert_eq!(
+            host.groups[0]
+                .specs
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "instructions",
+                "cycles",
+                "dtlb:L2_TLB_MISS_DATA",
+                "itlb:L1I_TLB_MISS_DEMAND"
+            ],
+            "an E core: no L3 event"
+        );
+        assert!(
+            host.groups[0]
+                .specs
+                .iter()
+                .all(|s| s.enc.type_id == 10 || s.enc.config >> 32 == 10)
+        );
+        assert_eq!(host.groups[1].specs.len(), 5, "a P core: with the L3 event");
+        assert!(
+            host.groups[1]
+                .specs
+                .iter()
+                .all(|s| s.enc.type_id == 11 || s.enc.config >> 32 == 11)
+        );
+        let cg = plan(
+            &ScopeInfo::Cgroup {
+                cpus: vec![5],
+                tids: vec![],
+            },
+            &ALL,
+            Some(m2()),
+            &sysfs,
+            &topo,
+        )
+        .unwrap();
+        assert_eq!(cg.groups[0].target, TargetPlan::CgroupOnCpu(5));
+        assert_eq!(cg.groups[0].specs.len(), 5);
     }
 
     #[test]

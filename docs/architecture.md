@@ -62,16 +62,16 @@ flowchart TB
 | `run` | the fit loop: footprint, counters, workers, windows, report | `fit`, `loadgen`, `footprint`, `sampler`, `plan`, `resctrl`, `report`, `calibration` |
 | `compare` | field-by-field comparison within a tolerance | `profile`, `report` |
 | `fit` | the fitter's rules, pure functions of the last window | `loadgen` (knobs), `profile` (targets) |
-| `loadgen` | worker threads, the access, knobs and their validation | `footprint` |
+| `loadgen` | worker threads, the access, knobs and their validation, the host geometry the streams are laid out on | `footprint` |
 | `footprint` | anonymous, page-cache, shared and kernel memory as owned objects | none |
 | `sampler` | readers and counters into samples, with a passed-in clock | `measure`, `perf`, `plan` |
-| `plan` | which counters to open for a scope given what is allowed | `caps`, `events`, `topology`, `perf` |
-| `perf` | `perf_event_open`, scaled for multiplexing | none |
-| `events` | vendor event tables and encodings | none |
+| `plan` | which counters to open for a scope given what is allowed, on every class's PMU where the host's cores come in classes | `caps`, `events`, `topology`, `perf` |
+| `perf` | `perf_event_open`, scaled for multiplexing, one name's readings across core classes folded first | none |
+| `events` | vendor event tables and encodings, the core classes a table spans | none |
 | `caps` | what this process may measure, and the rules that say why | none |
 | `measure`, `cgroup` | busy time and memory per scope, cgroup v2 files | none |
 | `resctrl` | monitoring groups and their per-domain byte counts | none |
-| `topology`, `cpu` | CPU topology and identification | none |
+| `topology`, `cpu` | CPU topology, capacity and line size, and identification | none |
 | `profile`, `samples`, `report`, `calibration` | the file formats | none |
 | `sys` | thin wrappers over kernel interfaces the crates lack | none |
 
@@ -166,6 +166,9 @@ per-cgroup attachment and kernel mode need `CAP_PERFMON` or a lowered
 `perf_event_paranoid`; without them counters attach to the tool's own
 threads in user mode, L3 misses come from the core-side DRAM-fill
 proxy, and bandwidth is modelled from the counted misses unless a
-resctrl group is writable. Every fallback is named in the report's
-notes and in each target's tier. `docs/privileges.md` lists what each
-level buys.
+resctrl group is writable. On a host whose cores come in classes with
+a PMU each, a task's counters open on every class's PMU and a CPU's
+on its class's, and a class without an event for a field, Apple's E
+cores for L3 misses, leaves that field counted on the classes that
+have it. Every fallback is named in the report's notes and in each
+target's tier. `docs/privileges.md` lists what each level buys.
