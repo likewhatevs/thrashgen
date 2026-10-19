@@ -87,7 +87,22 @@ if [ ! -x "$prefix/bin/tao_bench_server" ]; then
       [ -d "$fmt_dir/lib64" ] || ln -s lib "$fmt_dir/lib64"
       fmt_flag=(--with-fmt="$fmt_dir")
     fi
-    PKG_CONFIG_PATH="$folly_inst/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+    # folly's pkg-config file names neither glog nor gflags, and a
+    # getdeps build of folly may have built its own rather than use the
+    # system's; the server's link then needs those, found the same way.
+    dep_pc=; dep_ld=; dep_libs=
+    for dep in glog gflags; do
+      dir=$(find "$folly_scratch/installed" -maxdepth 1 -name "$dep-*" | head -n1)
+      [ -n "$dir" ] || continue
+      for lib in "$dir/lib64" "$dir/lib"; do
+        [ -d "$lib" ] || continue
+        dep_pc+="$lib/pkgconfig:"
+        dep_ld+=" -L$lib -Wl,-rpath,$lib"
+      done
+      dep_libs+=" -l$dep"
+    done
+    PKG_CONFIG_PATH="$dep_pc$folly_inst/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+      LDFLAGS="$dep_ld${LDFLAGS:+ $LDFLAGS}" LIBS="$dep_libs${LIBS:+ $LIBS}" \
       ./configure -q --with-folly="$folly_inst" "${fmt_flag[@]}" --disable-coverage --enable-tls
     make -s -j"$jobs"
     install -m 755 memcached "$prefix/bin/tao_bench_server"
