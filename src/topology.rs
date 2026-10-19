@@ -25,6 +25,13 @@ pub struct Cpu {
     /// Bytes in that L3, from `cache/indexN/size`; `None` without an
     /// L3 or a readable size.
     pub l3_bytes: Option<u64>,
+    /// `cpu_capacity`, the scheduler's relative throughput of the CPU
+    /// on a host whose cores differ, 1024 for the fastest; `None`
+    /// where every CPU is alike and the file is absent.
+    pub capacity: Option<u32>,
+    /// `cache/index0/coherency_line_size`, the first cache's line in
+    /// bytes; `None` where sysfs does not say, as on Apple's chips.
+    pub line_bytes: Option<u64>,
 }
 
 /// The online CPUs.
@@ -126,6 +133,13 @@ impl Topology {
                 Some(d) => read_size(&d.join("size"))?,
                 None => None,
             };
+            let capacity_file = dir.join("cpu_capacity");
+            let capacity = if capacity_file.is_file() {
+                Some(read_u32(&capacity_file)?)
+            } else {
+                None
+            };
+            let line_bytes = read_size(&dir.join("cache/index0/coherency_line_size"))?;
             cpus.push(Cpu {
                 id,
                 core_id: read_u32(&dir.join("topology/core_id"))?,
@@ -133,6 +147,8 @@ impl Topology {
                 siblings: read_cpulist(&dir.join("topology/thread_siblings_list"))?,
                 l3,
                 l3_bytes,
+                capacity,
+                line_bytes,
             });
         }
         Ok(Topology { cpus })
@@ -146,6 +162,12 @@ impl Topology {
     /// The largest L3 any online CPU has, in bytes, when sysfs says.
     pub fn l3_bytes(&self) -> Option<u64> {
         self.cpus.iter().filter_map(|c| c.l3_bytes).max()
+    }
+
+    /// The cache line size sysfs reports for the first CPU that has
+    /// one.
+    pub fn line_bytes(&self) -> Option<u64> {
+        self.cpus.iter().find_map(|c| c.line_bytes)
     }
 
     /// Distinct L3 domains, each the ascending list of online CPUs
@@ -234,6 +256,32 @@ mod tests {
         assert_eq!(t.l3_domain_of(32).unwrap()[..3], [0, 1, 2]);
         assert_eq!(t.l3_domain_of(99), None);
         assert_eq!(t.cpu(2), None);
+        assert_eq!(c33.capacity, None, "x86: no cpu_capacity file");
+        assert_eq!(t.line_bytes(), Some(64));
+    }
+
+    #[test]
+    fn reads_the_apple_fixture() {
+        let t = Topology::read(&Sysfs::at(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/apple"
+        )))
+        .unwrap();
+        assert_eq!(
+            t.cpus.iter().map(|c| c.id).collect::<Vec<_>>(),
+            [0, 1, 4, 5]
+        );
+        assert_eq!(t.cpu(0).unwrap().capacity, Some(561), "an E core");
+        assert_eq!(t.cpu(4).unwrap().capacity, Some(1024), "a P core");
+        assert_eq!(t.cpu(4).unwrap().siblings, [4], "no SMT");
+        assert_eq!(
+            t.cpu(4).unwrap().l3,
+            None,
+            "no L3 in sysfs: the system cache is not listed"
+        );
+        assert_eq!(t.l3_bytes(), None);
+        assert!(t.l3_domains().is_empty());
+        assert_eq!(t.line_bytes(), None, "no coherency_line_size in sysfs");
     }
 
     #[test]

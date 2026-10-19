@@ -70,7 +70,8 @@ mod tests {
     #[test]
     fn cachestat_counts_a_file_we_just_wrote() {
         let mut f = tempfile::tempfile().unwrap();
-        f.write_all(&vec![1u8; 3 * 4096]).unwrap();
+        let page = crate::measure::page_size() as usize;
+        f.write_all(&vec![1u8; 3 * page]).unwrap();
         f.flush().unwrap();
         match cachestat(&f, 0, 0) {
             Ok(st) => assert_eq!(st.nr_cache, 3, "{st:?}"),

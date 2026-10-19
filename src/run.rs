@@ -628,6 +628,9 @@ pub fn choose_cpus(affinity: &[u32], topo: &Topology, n: usize) -> Vec<u32> {
             _ => rest.push(c),
         }
     }
+    let capacity = |c: &u32| std::cmp::Reverse(topo.cpu(*c).and_then(|x| x.capacity).unwrap_or(0));
+    first.sort_by_key(capacity);
+    rest.sort_by_key(capacity);
     first.extend(rest);
     first.into_iter().take(n).collect()
 }

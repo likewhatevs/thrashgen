@@ -9,14 +9,37 @@ use std::collections::BTreeMap;
 
 use crate::profile::CpuIdent;
 
-/// Identify the CPU this process runs on.
+/// Identify the CPU this process runs on. Arm hosts print no model
+/// name in `/proc/cpuinfo`; there the device tree's `model`, the
+/// machine and its chip, stands in for reports.
 pub fn detect() -> Option<CpuIdent> {
     let text = std::fs::read_to_string("/proc/cpuinfo").ok()?;
-    from_cpuinfo(&text)
+    let dt_model = std::fs::read_to_string("/sys/firmware/devicetree/base/model").ok();
+    from_cpuinfo_and_dt(&text, dt_model.as_deref())
 }
 
 /// Parse the first processor block of a `/proc/cpuinfo` text.
 pub fn from_cpuinfo(text: &str) -> Option<CpuIdent> {
+    from_cpuinfo_and_dt(text, None)
+}
+
+/// As [`from_cpuinfo`], naming a CPU that `/proc/cpuinfo` does not by
+/// the device tree's `model` when there is one. The string is
+/// NUL-terminated in sysfs.
+pub fn from_cpuinfo_and_dt(text: &str, dt_model: Option<&str>) -> Option<CpuIdent> {
+    let mut cpu = parse_cpuinfo(text)?;
+    if cpu.name.is_empty() {
+        if let Some(model) = dt_model {
+            let model = model.trim_end_matches('\0').trim();
+            if !model.is_empty() {
+                cpu.name = model.to_string();
+            }
+        }
+    }
+    Some(cpu)
+}
+
+fn parse_cpuinfo(text: &str) -> Option<CpuIdent> {
     let block = text.split("\n\n").find(|b| !b.trim().is_empty())?;
     let kv: BTreeMap<&str, &str> = block
         .lines()
@@ -42,15 +65,14 @@ pub fn from_cpuinfo(text: &str) -> Option<CpuIdent> {
     if let (Some(imp), Some(part)) = (kv.get("CPU implementer"), kv.get("CPU part")) {
         let family = parse_hex(imp)?;
         let model = parse_hex(part)?;
-        let name = kv.get("model name").map_or_else(
-            || format!("ARM implementer 0x{family:x} part 0x{model:x}"),
-            std::string::ToString::to_string,
-        );
         return Some(CpuIdent {
             vendor: "arm".to_string(),
             family,
             model,
-            name,
+            name: kv
+                .get("model name")
+                .map(std::string::ToString::to_string)
+                .unwrap_or_default(),
         });
     }
     None
@@ -82,10 +104,31 @@ mod tests {
 
     #[test]
     fn arm() {
-        let c = from_cpuinfo(include_str!("../tests/fixtures/cpuinfo-arm.txt")).unwrap();
+        let text = include_str!("../tests/fixtures/cpuinfo-arm.txt");
+        let c = from_cpuinfo(text).unwrap();
         assert_eq!(c.vendor, "arm");
         assert_eq!((c.family, c.model), (0x41, 0xd49));
-        assert_eq!(c.name, "ARM implementer 0x41 part 0xd49");
+        assert_eq!(c.name, "", "no model name line");
+        let named = from_cpuinfo_and_dt(text, Some("Some Board\0")).unwrap();
+        assert_eq!(named.name, "Some Board", "the device tree names it");
+        assert_eq!(from_cpuinfo_and_dt(text, Some("\0")).unwrap().name, "");
+        let x86 = include_str!("../tests/fixtures/cpuinfo-amd.txt");
+        assert_eq!(
+            from_cpuinfo_and_dt(x86, Some("Board")).unwrap().name,
+            "AMD Ryzen Threadripper PRO 7975WX 32-Cores",
+            "a cpuinfo name wins"
+        );
+    }
+
+    #[test]
+    fn apple() {
+        let c = from_cpuinfo(include_str!("../tests/fixtures/cpuinfo-apple.txt")).unwrap();
+        assert_eq!(c.vendor, "arm");
+        assert_eq!(
+            (c.family, c.model),
+            (0x61, 0x038),
+            "implementer Apple, a Blizzard core first"
+        );
     }
 
     #[test]

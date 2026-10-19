@@ -423,7 +423,7 @@ mod tests {
     fn memory_of_self_counts_our_cache_files() {
         let root = Root::default();
         let mut f = tempfile::tempfile().unwrap();
-        f.write_all(&vec![7u8; 8 * 4096]).unwrap();
+        f.write_all(&vec![7u8; 8 * page_size() as usize]).unwrap();
         f.flush().unwrap();
         let m = memory(&Scope::SelfProcess, &root, &[&f]).unwrap();
         assert_eq!(
