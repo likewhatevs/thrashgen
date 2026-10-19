@@ -253,7 +253,15 @@ pub struct Convergence {
     held_out: u32,
     /// Budgets granted after a hold saw its surroundings change.
     pub renewals: u32,
+    /// A renewed budget is being spent and has not converged.
+    renewing: bool,
+    /// Passes of a re-fit since the closest pass last came closer.
+    stale: u32,
+    last_pass: u32,
 }
+
+/// Passes a re-fit may make without coming closer before it holds.
+pub const STALE_PASSES: u32 = 6;
 
 impl Convergence {
     /// A fit that re-fits after `refit_windows` consecutive windows out
@@ -272,12 +280,39 @@ impl Convergence {
             held_within: Vec::new(),
             held_out: 0,
             renewals: 0,
+            renewing: false,
+            stale: 0,
+            last_pass: 0,
         }
+    }
+
+    /// A re-fit starts afresh: the closest pass is judged in the new
+    /// surroundings, not against what the fit reached alone.
+    fn start_over(&mut self) {
+        self.best = None;
+        self.stale = 0;
+    }
+
+    /// Whether a re-fit has stopped coming closer: beside a neighbour
+    /// a target can be out of reach at any knobs, and a fit that keeps
+    /// trying spends its budget moving. stress-ng's live fit made
+    /// sixty-one moves over eight seconds beside a memory-bound
+    /// neighbour before holding its closest pass, which was the right
+    /// one (Zen 4, 2026-10-18). After [`STALE_PASSES`] passes without
+    /// a closer one, a re-fit holds that pass; it moves again when its
+    /// surroundings change, as any hold does.
+    pub fn stuck(&self) -> bool {
+        (self.refitting || self.renewing)
+            && !self.converged
+            && !self.out_of_passes
+            && self.stale >= STALE_PASSES
     }
 
     /// Out of passes: hold, remembering which targets the hold meets.
     pub fn hold(&mut self, judged: &[Status]) {
         self.out_of_passes = true;
+        self.renewing = false;
+        self.stale = 0;
         self.held_within = judged
             .iter()
             .filter(|s| s.within && s.measured.is_some())
@@ -307,6 +342,8 @@ impl Convergence {
         self.held_within.clear();
         self.held_out = 0;
         self.renewals += 1;
+        self.renewing = true;
+        self.start_over();
         true
     }
 
@@ -320,15 +357,22 @@ impl Convergence {
             self.out_of_tolerance += 1;
             self.streak = 0;
         }
-        if self.best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
-            self.best = Some((distance, knobs.clone(), pass));
-        }
         self.converged = self.streak >= CONVERGED_WINDOWS;
         self.ever |= self.converged;
         if self.converged {
             self.refitting = false;
-        } else if self.ever && self.out_of_tolerance >= self.refit_windows {
+            self.renewing = false;
+        } else if self.ever && !self.refitting && self.out_of_tolerance >= self.refit_windows {
             self.refitting = true;
+            self.start_over();
+        }
+        let closer = self.best.as_ref().is_none_or(|(d, _, _)| distance < *d);
+        if closer {
+            self.best = Some((distance, knobs.clone(), pass));
+        }
+        if pass != self.last_pass {
+            self.stale = if closer { 0 } else { self.stale + 1 };
+            self.last_pass = pass;
         }
     }
 
@@ -1224,7 +1268,23 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 }
                 let budget = settings.max_passes.saturating_mul(fit.renewals + 1);
                 if fitting && !stop && (settings.adaptive || fit.refit()) {
-                    if fitter.passes < budget || fit.ever {
+                    if fit.stuck() {
+                        // A re-fit that has stopped coming closer: what it
+                        // cannot reach, it cannot reach at these knobs
+                        // either, so it holds the closest pass it saw.
+                        let held = match &fit.best {
+                            Some((_, k, pass)) if *k != knobs => {
+                                generator.set_knobs(k.clone(), &buffers)?;
+                                knobs = k.clone();
+                                format!("; holding the knobs of pass {pass}, the closest")
+                            }
+                            _ => "; holding".to_string(),
+                        };
+                        notes.push(format!(
+                            "no closer after {STALE_PASSES} passes of re-fitting; what is out is out of reach here{held}"
+                        ));
+                        fit.hold(&judged);
+                    } else if fitter.passes < budget || fit.ever {
                         let mut next = fitter.step(&knobs, &m, &fit_goal);
                         // A lever the IPC and MPKI rules pulled against
                         // each other has just been frozen: the two targets
@@ -1425,8 +1485,8 @@ mod tests {
         assert!(!c.holding(), "one within is not converged again");
         assert_eq!(
             c.best.as_ref().map(|(_, _, p)| *p),
-            Some(1),
-            "the closest stays"
+            Some(3),
+            "the closest is judged afresh in the new surroundings"
         );
         // Moving again, the fit is as at first: a window out moves it
         // without another second's wait, or a target left at the edge
@@ -1441,6 +1501,60 @@ mod tests {
         c.observe(false, 1.1, &k, 3);
         c.observe(true, 0.9, &k, 3);
         assert!(!c.converged && c.holding());
+    }
+
+    #[test]
+    fn a_refit_that_stops_coming_closer_holds_and_moves_again_on_a_change() {
+        let status = |key: &'static str, within: bool| Status {
+            key,
+            target: 1.0,
+            measured: Some(if within { 1.0 } else { 2.0 }),
+            error: Some(if within { 0.0 } else { 1.0 }),
+            within,
+        };
+        let k = Knobs::default();
+        let mut c = Convergence::new(10);
+        // A cold fit that makes no progress is not stuck: that is what
+        // the pass budget is for.
+        for pass in 1..=12 {
+            c.observe(false, 5.0, &k, pass);
+        }
+        assert!(!c.stuck());
+        // Converged, then out for a second: a re-fit, judged afresh.
+        c.observe(true, 0.1, &k, 13);
+        c.observe(true, 0.1, &k, 13);
+        assert!(c.converged);
+        for _ in 0..10 {
+            c.observe(false, 4.0, &k, 13);
+        }
+        assert!(
+            c.refit() && c.best.as_ref().is_some_and(|(d, _, _)| *d == 4.0),
+            "{:?}",
+            c.best
+        );
+        // Coming closer pass by pass: not stuck.
+        for (i, d) in [3.0, 2.5, 2.0, 1.8, 1.6, 1.5, 1.4].iter().enumerate() {
+            c.observe(false, *d, &k, 14 + i as u32);
+            assert!(!c.stuck(), "pass {} came closer", 14 + i);
+        }
+        // Then no closer for six passes: stuck, and the closest pass is
+        // the one to hold.
+        for i in 0..STALE_PASSES {
+            assert!(!c.stuck());
+            c.observe(false, 1.5, &k, 21 + i);
+        }
+        assert!(c.stuck());
+        assert_eq!(c.best.as_ref().map(|(d, _, p)| (*d, *p)), Some((1.4, 20)));
+        c.hold(&[status("ipc", false), status("l3_mpki", true)]);
+        assert!(!c.stuck() && c.out_of_passes);
+        // The surroundings change: a target the hold met goes out for a
+        // second, and the re-fit starts afresh with a fresh budget.
+        for _ in 0..10 {
+            c.renew(&[status("ipc", false), status("l3_mpki", false)]);
+        }
+        assert!(!c.out_of_passes && c.renewals == 1 && c.best.is_none());
+        c.observe(false, 0.9, &k, 27);
+        assert!(!c.stuck());
     }
 
     #[test]

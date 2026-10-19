@@ -476,7 +476,14 @@ runs out of passes without ever converging holds the closest pass it
 saw, by that capped sum of relative errors over tolerance, rather than
 the last, which is as likely to be a swing as a settling, and says
 so; one that has converged is not limited, since it moves only after
-a second out. A fit that ends out of tolerance while still moving
+a second out. A re-fit, after a second out or on a renewed budget,
+judges its closest pass afresh in the new surroundings, and when six
+passes bring it no closer it holds that pass: beside a memory-bound
+neighbour stress-ng's live fit made sixty-one moves over eight
+seconds before holding the pass that was right all along (Zen 4,
+2026-10-18); what is out is out of reach at those knobs too, and the
+hold moves again when a target it met goes out for a second, as any
+hold does. A fit that ends out of tolerance while still moving
 reports the closest pass's knobs, which is what a hold of them should
 run; one that has stood still for a second has settled and reports
 where it stands. The first guess takes
