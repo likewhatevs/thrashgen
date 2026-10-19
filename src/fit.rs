@@ -637,11 +637,15 @@ impl Fitter {
     /// lower there. The pass with the smallest distance is the one worth
     /// holding.
     pub fn distance(&self, statuses: &[Status]) -> f64 {
-        self.distances(statuses).iter().map(|(_, d)| d).sum()
+        self.distances(statuses)
+            .iter()
+            .map(|(_, d)| d.min(DISTANCE_CAP))
+            .sum()
     }
 
     /// Each measured target's distance from tolerance, in tolerances,
-    /// capped as [`distance`](Self::distance) caps them.
+    /// uncapped: a hold compares them to tell a target that has gone
+    /// much further out, which the cap would hide.
     pub fn distances(&self, statuses: &[Status]) -> Vec<(&'static str, f64)> {
         statuses
             .iter()
@@ -656,7 +660,7 @@ impl Fitter {
                 if (measured - s.target).abs() <= abs {
                     return Some((s.key, 0.0));
                 }
-                s.error.map(|e| (s.key, (e.abs() / tol).min(DISTANCE_CAP)))
+                s.error.map(|e| (s.key, e.abs() / tol))
             })
             .collect()
     }

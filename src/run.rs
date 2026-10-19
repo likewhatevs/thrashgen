@@ -261,10 +261,15 @@ pub struct Convergence {
     /// Passes of a re-fit since the closest pass last came closer.
     stale: u32,
     last_pass: u32,
+    /// Windows since the re-fit started afresh.
+    since_start: u32,
 }
 
 /// Passes a re-fit may make without coming closer before it holds.
 pub const STALE_PASSES: u32 = 6;
+/// Seconds a re-fit runs before the hold for lack of progress can take
+/// it, so a neighbour's traffic has settled by then.
+pub const STALE_GRACE_SECONDS: u32 = 5;
 
 impl Convergence {
     /// A fit that re-fits after `refit_windows` consecutive windows out
@@ -287,6 +292,7 @@ impl Convergence {
             held_errors: Vec::new(),
             stale: 0,
             last_pass: 0,
+            since_start: 0,
         }
     }
 
@@ -295,6 +301,7 @@ impl Convergence {
     fn start_over(&mut self) {
         self.best = None;
         self.stale = 0;
+        self.since_start = 0;
     }
 
     /// Whether a re-fit has stopped coming closer: beside a neighbour
@@ -303,12 +310,19 @@ impl Convergence {
     /// sixty-one moves over eight seconds beside a memory-bound
     /// neighbour before holding its closest pass, which was the right
     /// one (Zen 4, 2026-10-18). After [`STALE_PASSES`] passes without
-    /// a closer one, a re-fit holds that pass; it moves again when its
-    /// surroundings change, as any hold does.
+    /// a closer one, once [`STALE_GRACE_SECONDS`] of the re-fit have
+    /// run, a re-fit holds that pass; it moves again when its
+    /// surroundings change, as any hold does. The grace is for the
+    /// surroundings themselves: a hold taken a second after a
+    /// neighbour arrived held a replay's pre-disturbance knobs, closest
+    /// while the neighbour's traffic was still ramping, at an IPC of
+    /// 0.17 against 0.64 for the neighbour's whole stay, where its
+    /// re-fit used to reach 0.66 in three seconds (Zen 4, 2026-10-19).
     pub fn stuck(&self) -> bool {
         (self.refitting || self.renewing)
             && !self.converged
             && !self.out_of_passes
+            && self.since_start >= STALE_GRACE_SECONDS * self.refit_windows
             && self.stale >= STALE_PASSES
     }
 
@@ -330,9 +344,10 @@ impl Convergence {
     /// Whether a held fit's surroundings have changed: a target the
     /// hold met has been out for a second of windows in a row, or one
     /// has read more than twice its distance at the hold and a
-    /// tolerance more for that second; per target, since a floor out
-    /// of reach stands at the cap in every window and would hide the
-    /// rest in a sum. A fit held for an
+    /// tolerance more for that second; per target and uncapped, since
+    /// a floor out of reach stands at the cap in every window and
+    /// would hide the rest in a sum, and a target already past the cap
+    /// at the hold could never read further. A fit held for an
     /// unreachable target, stress-ng's dTLB floor, kept its
     /// neighbour-time knobs after the neighbour left and ran at three
     /// times the IPC, since its budget was spent while the neighbour
@@ -389,6 +404,7 @@ impl Convergence {
             self.refitting = true;
             self.start_over();
         }
+        self.since_start = self.since_start.saturating_add(1);
         let closer = self.best.as_ref().is_none_or(|(d, _, _)| distance < *d);
         if closer {
             self.best = Some((distance, knobs.clone(), pass));
@@ -1561,6 +1577,15 @@ mod tests {
             "{:?}",
             c.best
         );
+        // No progress in the first seconds is the surroundings settling,
+        // not the fit: no hold before the grace is over.
+        for pass in 100..100 + STALE_PASSES + 2 {
+            c.observe(false, 4.5, &k, pass);
+            assert!(!c.stuck(), "pass {pass} inside the grace");
+        }
+        for _ in 0..STALE_GRACE_SECONDS * 10 {
+            c.observe(false, 3.0, &k, 13);
+        }
         // Coming closer pass by pass: not stuck.
         for (i, d) in [3.0, 2.5, 2.0, 1.8, 1.6, 1.5, 1.4].iter().enumerate() {
             c.observe(false, *d, &k, 14 + i as u32);

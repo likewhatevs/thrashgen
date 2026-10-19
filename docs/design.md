@@ -482,15 +482,17 @@ the last, which is as likely to be a swing as a settling, and says
 so; one that has converged is not limited, since it moves only after
 a second out. A re-fit, after a second out or on a renewed budget,
 judges its closest pass afresh in the new surroundings, and when six
-passes bring it no closer it holds that pass: beside a memory-bound
+passes bring it no closer, five seconds in so a neighbour's traffic
+has settled, it holds that pass: beside a memory-bound
 neighbour stress-ng's live fit made sixty-one moves over eight
 seconds before holding the pass that was right all along (Zen 4,
 2026-10-18); what is out is out of reach at those knobs too, and the
 hold moves again when a target it met goes out for a second, as any
 hold does, or when a target reads more than twice its distance at
-the hold and a tolerance more for a second, per target since a floor
-out of reach stands at the cap in every window and would hide the
-rest in a sum: a re-fit that held while a neighbour was still
+the hold and a tolerance more for a second, per target and uncapped,
+since a floor out of reach stands at the cap in every window and
+would hide the rest in a sum, and a target already past the cap at
+the hold could never read further: a re-fit that held while a neighbour was still
 arriving had its closest pass measured before the neighbour's
 traffic settled, TaoBench's at an IPC of 0.63 that read 0.17 for the
 neighbour's whole stay, and stress-ng's hold beside it, its IPC 0.19,
