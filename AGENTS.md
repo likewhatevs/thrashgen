@@ -151,6 +151,10 @@ three profiles at once and `MODE=disturbed` fits each live while a
 stress-ng starts and stops beside it, both from a finished user set;
 `experiments/publish.sh` copies the small outputs into
 `docs/experiments/<mode>/`, `experiments/plot.py` draws the figures.
+`experiments/levers.sh` measures what each lever of the generator
+costs per unit at fixed knobs; run it before and after a change to
+the access path or a compiler update and compare with the figures in
+`docs/status.md`.
 A full chain of the five privilege modes takes about two hours on the
 reference host, the two neighbour modes ten minutes, and none of it
 may overlap with builds, tests or other load, since the recordings

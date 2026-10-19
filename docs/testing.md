@@ -75,3 +75,18 @@ privilege modes record their own benchmarks; the neighbour modes,
 user set, so they run after it: `experiments/noisy.sh` with `COPIES`
 for the first two, `experiments/disturb.sh` for the third, which
 records a live fit in phases around a neighbour it starts and stops.
+
+## The generator's costs: `experiments/levers.sh`
+
+What each lever costs per unit on this host, instructions and the
+events it brings, from fixed-knob runs at two settings of one lever
+with everything else at one op: ops, lines of a run, sparse visits,
+stub calls, non-temporal lines and page-cache reads. The figures for
+the reference host are in `docs/status.md`; a change to the access
+path, or to the compiler, is checked against them by running the
+script before and after, since the hot path is the one place where
+what the compiler emits is the result. The script takes a short cold
+fit for the host's set sizes and then sets every lever outright, so
+it needs a quiet host and a profile with a gigabyte of anonymous
+memory, the published stress-ng recording by default, and one whose
+page cache outgrows the L3 for the reads, fio's by default.
