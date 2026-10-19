@@ -255,6 +255,9 @@ pub struct Convergence {
     pub renewals: u32,
     /// A renewed budget is being spent and has not converged.
     renewing: bool,
+    /// Each target's distance at the hold, to tell a hold whose
+    /// surroundings have worsened under it.
+    held_errors: Vec<(&'static str, f64)>,
     /// Passes of a re-fit since the closest pass last came closer.
     stale: u32,
     last_pass: u32,
@@ -281,6 +284,7 @@ impl Convergence {
             held_out: 0,
             renewals: 0,
             renewing: false,
+            held_errors: Vec::new(),
             stale: 0,
             last_pass: 0,
         }
@@ -308,11 +312,13 @@ impl Convergence {
             && self.stale >= STALE_PASSES
     }
 
-    /// Out of passes: hold, remembering which targets the hold meets.
-    pub fn hold(&mut self, judged: &[Status]) {
+    /// Out of passes: hold, remembering which targets the hold meets
+    /// and how far each stands.
+    pub fn hold(&mut self, judged: &[Status], distances: &[(&'static str, f64)]) {
         self.out_of_passes = true;
         self.renewing = false;
         self.stale = 0;
+        self.held_errors = distances.to_vec();
         self.held_within = judged
             .iter()
             .filter(|s| s.within && s.measured.is_some())
@@ -322,18 +328,35 @@ impl Convergence {
     }
 
     /// Whether a held fit's surroundings have changed: a target the
-    /// hold met has been out for a second of windows in a row. A fit
-    /// held for an unreachable target, stress-ng's dTLB floor, kept its
+    /// hold met has been out for a second of windows in a row, or one
+    /// has read more than twice its distance at the hold and a
+    /// tolerance more for that second; per target, since a floor out
+    /// of reach stands at the cap in every window and would hide the
+    /// rest in a sum. A fit held for an
+    /// unreachable target, stress-ng's dTLB floor, kept its
     /// neighbour-time knobs after the neighbour left and ran at three
     /// times the IPC, since its budget was spent while the neighbour
-    /// was there. Grants a fresh budget and says so, once per change.
-    pub fn renew(&mut self, judged: &[Status]) -> bool {
+    /// was there; and a re-fit that held its closest pass while a
+    /// neighbour was still arriving, a replay's at an IPC of 0.63 that
+    /// read 0.17 once the neighbour's traffic had settled (Zen 4,
+    /// 2026-10-19), held it for the neighbour's whole stay. Grants a
+    /// fresh budget and says so, once per change.
+    pub fn renew(&mut self, judged: &[Status], distances: &[(&'static str, f64)]) -> bool {
         if !self.out_of_passes {
             return false;
         }
-        let out = judged
-            .iter()
-            .any(|s| self.held_within.contains(&s.key) && s.measured.is_some() && !s.within);
+        let worsened = distances.iter().any(|(key, d)| {
+            let held = self
+                .held_errors
+                .iter()
+                .find(|(k, _)| k == key)
+                .map_or(0.0, |(_, h)| *h);
+            *d > 2.0 * held + 1.0
+        });
+        let out = worsened
+            || judged
+                .iter()
+                .any(|s| self.held_within.contains(&s.key) && s.measured.is_some() && !s.within);
         self.held_out = if out { self.held_out + 1 } else { 0 };
         if self.held_out < self.refit_windows {
             return false;
@@ -1260,7 +1283,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 // The pass limit is for a fit that has never converged;
                 // one that has keeps following the host, since it moves
                 // only when a second of windows in a row is out.
-                if fitting && !stop && fit.renew(&judged) {
+                if fitting && !stop && fit.renew(&judged, &fitter.distances(&judged)) {
                     notes.push(format!(
                         "a target the hold met has been out for a second after {} passes; fitting again with a fresh budget",
                         fitter.passes
@@ -1283,7 +1306,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         notes.push(format!(
                             "no closer after {STALE_PASSES} passes of re-fitting; what is out is out of reach here{held}"
                         ));
-                        fit.hold(&judged);
+                        fit.hold(&judged, &fitter.distances(&judged));
                     } else if (fitter.passes < budget || fit.ever) && !fit.out_of_passes {
                         // A fit that has converged before keeps following
                         // the host, unless it is holding for lack of
@@ -1332,7 +1355,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                             "not within tolerance after {} passes{held}",
                             fitter.passes
                         ));
-                        fit.hold(&judged);
+                        fit.hold(&judged, &fitter.distances(&judged));
                     }
                 }
             }
@@ -1551,16 +1574,41 @@ mod tests {
         }
         assert!(c.stuck());
         assert_eq!(c.best.as_ref().map(|(d, _, p)| (*d, *p)), Some((1.4, 20)));
-        c.hold(&[status("ipc", false), status("l3_mpki", true)]);
+        // Held with IPC 2.8 tolerances out and the dTLB floor at the cap.
+        let held = [("ipc", 2.8), ("dtlb_pki", 10.0)];
+        c.hold(&[status("ipc", false), status("l3_mpki", true)], &held);
         assert!(!c.stuck() && c.out_of_passes);
-        // The surroundings change: a target the hold met goes out for a
-        // second, and the re-fit starts afresh with a fresh budget.
-        for _ in 0..10 {
-            c.renew(&[status("ipc", false), status("l3_mpki", false)]);
+        // The held knobs reading about what the hold saw is no change,
+        // and the floor at the cap never counts as worse.
+        let same = [("ipc", 3.0), ("dtlb_pki", 10.0)];
+        for _ in 0..20 {
+            assert!(!c.renew(&[status("ipc", false), status("l3_mpki", true)], &same));
         }
+        // A target reading more than twice its held distance and a
+        // tolerance more for a second is: the neighbour's traffic
+        // settled after the hold, and the re-fit starts afresh.
+        let worse = [("ipc", 7.0), ("dtlb_pki", 10.0)];
+        for i in 0..9 {
+            assert!(
+                !c.renew(&[status("ipc", false), status("l3_mpki", true)], &worse),
+                "{i}"
+            );
+        }
+        assert!(c.renew(&[status("ipc", false), status("l3_mpki", true)], &worse));
         assert!(!c.out_of_passes && c.renewals == 1 && c.best.is_none());
         c.observe(false, 0.9, &k, 27);
         assert!(!c.stuck());
+        // Held again, a target the hold met going out for a second
+        // renews it too.
+        for _ in 0..STALE_PASSES {
+            c.observe(false, 0.9, &k, 28);
+            c.observe(false, 0.9, &k, 29);
+        }
+        c.hold(&[status("ipc", false), status("l3_mpki", true)], &held);
+        for _ in 0..10 {
+            c.renew(&[status("ipc", false), status("l3_mpki", false)], &held);
+        }
+        assert!(!c.out_of_passes && c.renewals == 2);
     }
 
     #[test]
@@ -1575,34 +1623,34 @@ mod tests {
         let mut c = Convergence::new(10);
         let k = Knobs::default();
         c.observe(false, 2.0, &k, 36);
-        assert!(!c.renew(&[status("ipc", false)]), "not holding yet");
-        c.hold(&[status("ipc", true), status("dtlb_pki", false)]);
+        assert!(!c.renew(&[status("ipc", false)], &[]), "not holding yet");
+        c.hold(&[status("ipc", true), status("dtlb_pki", false)], &[]);
         assert!(c.out_of_passes);
         for _ in 0..20 {
             assert!(
-                !c.renew(&[status("ipc", true), status("dtlb_pki", false)]),
+                !c.renew(&[status("ipc", true), status("dtlb_pki", false)], &[]),
                 "the unreachable target stays out: no change"
             );
         }
         for i in 0..9 {
             assert!(
-                !c.renew(&[status("ipc", false), status("dtlb_pki", false)]),
+                !c.renew(&[status("ipc", false), status("dtlb_pki", false)], &[]),
                 "{i}"
             );
         }
         assert!(
-            !c.renew(&[status("ipc", true), status("dtlb_pki", false)]),
+            !c.renew(&[status("ipc", true), status("dtlb_pki", false)], &[]),
             "one within resets"
         );
         for _ in 0..9 {
-            c.renew(&[status("ipc", false), status("dtlb_pki", false)]);
+            c.renew(&[status("ipc", false), status("dtlb_pki", false)], &[]);
         }
         assert!(
-            c.renew(&[status("ipc", false), status("dtlb_pki", false)]),
+            c.renew(&[status("ipc", false), status("dtlb_pki", false)], &[]),
             "a second out"
         );
         assert!(!c.out_of_passes && c.renewals == 1);
-        assert!(!c.renew(&[status("ipc", false)]), "once per hold");
+        assert!(!c.renew(&[status("ipc", false)], &[]), "once per hold");
     }
 
     #[test]

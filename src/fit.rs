@@ -637,6 +637,12 @@ impl Fitter {
     /// lower there. The pass with the smallest distance is the one worth
     /// holding.
     pub fn distance(&self, statuses: &[Status]) -> f64 {
+        self.distances(statuses).iter().map(|(_, d)| d).sum()
+    }
+
+    /// Each measured target's distance from tolerance, in tolerances,
+    /// capped as [`distance`](Self::distance) caps them.
+    pub fn distances(&self, statuses: &[Status]) -> Vec<(&'static str, f64)> {
         statuses
             .iter()
             .filter_map(|s| {
@@ -648,11 +654,11 @@ impl Fitter {
                 };
                 let abs = absolute_tolerance(s.key);
                 if (measured - s.target).abs() <= abs {
-                    return Some(0.0);
+                    return Some((s.key, 0.0));
                 }
-                s.error.map(|e| (e.abs() / tol).min(DISTANCE_CAP))
+                s.error.map(|e| (s.key, (e.abs() / tol).min(DISTANCE_CAP)))
             })
-            .sum()
+            .collect()
     }
 
     /// A first guess from the goal alone: compute from the MPKI target

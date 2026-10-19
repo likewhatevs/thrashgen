@@ -487,7 +487,14 @@ neighbour stress-ng's live fit made sixty-one moves over eight
 seconds before holding the pass that was right all along (Zen 4,
 2026-10-18); what is out is out of reach at those knobs too, and the
 hold moves again when a target it met goes out for a second, as any
-hold does. A fit that ends out of tolerance while still moving
+hold does, or when a target reads more than twice its distance at
+the hold and a tolerance more for a second, per target since a floor
+out of reach stands at the cap in every window and would hide the
+rest in a sum: a re-fit that held while a neighbour was still
+arriving had its closest pass measured before the neighbour's
+traffic settled, TaoBench's at an IPC of 0.63 that read 0.17 for the
+neighbour's whole stay, and stress-ng's hold beside it, its IPC 0.19,
+read 0.55 once the neighbour had left (Zen 4, 2026-10-19). A fit that ends out of tolerance while still moving
 reports the closest pass's knobs, which is what a hold of them should
 run; one that has stood still for a second has settled and reports
 where it stands. The first guess takes
