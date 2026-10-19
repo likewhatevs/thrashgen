@@ -1230,13 +1230,15 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                         // each other has just been frozen: the two targets
                         // meet nowhere along it, so the fit goes back to
                         // the closest pass it saw and continues from there.
-                        let frozen = fitter.lines_track.frozen || fitter.seq_track.frozen;
+                        let frozen = fitter.lines_track.frozen
+                            || fitter.seq_track.frozen
+                            || fitter.ops_track.frozen;
                         if frozen && !fit.compromise {
                             fit.compromise = true;
                             if let Some((_, k, pass)) = &fit.best {
                                 next = k.clone();
                                 notes.push(format!(
-                                    "IPC and MPKI pull a lever against each other at one op per access; holding pass {pass}, the closest, as the compromise"
+                                    "a lever has turned twice within three passes between what two targets ask; holding pass {pass}, the closest, as the compromise"
                                 ));
                             }
                         }

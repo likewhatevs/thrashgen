@@ -400,7 +400,12 @@ access the IPC and MPKI rules pull the run length and the sequential
 share against each other, a prefetched walk or a longer run bringing
 the misses the one wants and the IPC the other does not; a lever that
 has turned twice within three passes is frozen, since the two targets
-meet nowhere along it; the fit goes back to the closest pass it saw,
+meet nowhere along it. Compute is a count, and near one op the MPKI
+band can lie between two counts: stress-ng under resctrl swung
+between five and six ops for its whole budget, 15.3 and 13.2 misses
+per thousand around 14.2 (Zen 4, 2026-10-19), so a move of one op
+that turns twice within three passes is frozen the same way, larger
+moves being the model settling. Frozen, the fit goes back to the closest pass it saw,
 by the sum of its relative errors over tolerance, each capped at ten
 tolerances so a target out of reach does not pick the pass by its
 noise, and continues from

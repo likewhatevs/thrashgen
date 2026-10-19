@@ -420,6 +420,9 @@ pub struct Fitter {
     /// Reversals of the run length at one op per access, where the IPC
     /// and MPKI rules pull it against each other.
     pub lines_track: Reversals,
+    /// Reversals of compute by one op at a time: the band lies between
+    /// two counts.
+    pub ops_track: Reversals,
     /// What a wakeup costs the rates, for judging a bursty profile.
     pub wake: Wakeups,
     /// The same for the sequential share.
@@ -538,6 +541,7 @@ impl Fitter {
             kernel_counted: false,
             lines_track: Reversals::default(),
             seq_track: Reversals::default(),
+            ops_track: Reversals::default(),
             wake: Wakeups::default(),
         }
     }
@@ -776,6 +780,7 @@ impl Fitter {
         self.dilution(&p, &mut k);
         self.reads_back(&mut p, &mut k);
         Self::ops_rule(&p, &mut k);
+        self.freeze_ops_between_counts(&p, &mut k);
         self.sparse_shrink(&p, &mut k);
         self.misses_at_floor(&p, &mut k);
         // The IPC and MPKI rules are done with the run length and the
@@ -1435,6 +1440,25 @@ impl Fitter {
         }
     }
 
+    /// Compute is a count: near one op the model's next value rounds to
+    /// the count it just left when the band lies between two counts, so
+    /// MPKI alternates over and under and nothing settles. stress-ng
+    /// under resctrl swung between five and six ops for its whole
+    /// budget, 15.3 and 13.2 misses per thousand around 14.2 (Zen 4,
+    /// 2026-10-19). A move of one op that turns twice within three
+    /// passes is frozen where it stands, and the run adopts the
+    /// closest pass; larger moves are the model settling and count
+    /// for nothing.
+    fn freeze_ops_between_counts(&mut self, p: &Pass, k: &mut Knobs) {
+        let delta = f64::from(k.ops) - f64::from(p.knobs.ops);
+        if delta.abs() > 1.0 {
+            return;
+        }
+        if self.ops_track.observe(delta, self.passes + 1) {
+            k.ops = p.knobs.ops;
+        }
+    }
+
     /// At one op per access the IPC and MPKI rules pull the run length
     /// and the sequential share against each other: a prefetched walk
     /// or a longer run brings the misses the one wants and the IPC the
@@ -2089,6 +2113,59 @@ mod tests {
         );
         let next = without.step(&k, &m, &goal);
         assert_eq!((next.kreads, next.ntlines), (0.0, 0.0), "{next:?}");
+    }
+
+    #[test]
+    fn compute_frozen_when_the_band_lies_between_two_counts() {
+        // stress-ng under resctrl: at five ops MPKI reads 15.3, at six
+        // 13.2, around a target of 14.24 whose band neither count hits,
+        // while the dTLB floor keeps every window a pass.
+        let goal = Goal {
+            ipc: Some(0.2218),
+            mpki: Some(14.24),
+            dtlb_pki: Some(0.011),
+            ..Goal::default()
+        };
+        let at = |ops: u32| {
+            let (mpki, ipa, ipc) = if ops == 5 {
+                (15.3, 435.0, 0.218)
+            } else {
+                (13.2, 457.0, 0.235)
+            };
+            Measured {
+                ipc: Some(ipc),
+                mpki: Some(mpki),
+                dtlb_pki: Some(0.17),
+                accesses_per_s: 1.0e7,
+                instructions_per_s: Some(ipa * 1.0e7),
+                factor: None,
+                ..Measured::default()
+            }
+        };
+        let mut k = Knobs {
+            ops: 5,
+            chains: 0.5,
+            lines: 8.0,
+            dep: 0.5,
+            wset: 0.125,
+            wfrac: 1.0,
+            sparse_pages: 256,
+            code_pages: 16384,
+            ..Knobs::default()
+        };
+        let mut f = Fitter::new(4, LIMITS);
+        f.slope = Some(23.3);
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            let next = f.step(&k, &at(k.ops), &goal);
+            seen.push(next.ops);
+            k = next;
+        }
+        // Up, back, and the third move, up again, is the second turn:
+        // frozen where it stands.
+        assert_eq!(&seen[..3], &[6, 5, 5], "{seen:?}");
+        assert!(f.ops_track.frozen, "{seen:?}");
+        assert!(seen[2..].iter().all(|o| *o == 5), "held after: {seen:?}");
     }
 
     #[test]

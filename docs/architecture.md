@@ -139,7 +139,7 @@ flowchart TD
     I --> J["bandwidth: write share, non-temporal lines, page-cache reads within the MPKI band"]
     J --> K["visit rates: compensate the change in instructions per access, correct the error"]
     K --> L["dTLB excess from the main stream: working set, then walk, then dilution"]
-    L --> M{"at one op, a lever turned twice within three passes?"}
+    L --> M{"a lever turned twice within three passes: run length or walk at one op, or compute by one op?"}
     M -->|yes| M1["freeze it; the run adopts the closest pass"]
     M --> N[clamp and return]
 ```
