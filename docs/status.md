@@ -3,22 +3,22 @@
 Where the project stands and what is left, for whoever picks it up.
 Dates are absolute. Update this file when an item below closes.
 
-## Verified, as of 2026-10-18
+## Verified, as of 2026-10-19
 
 All on one AMD Zen 4 workstation (Threadripper PRO 7975WX, 64 CPUs,
 Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 
 | claim | how | result |
 | --- | --- | --- |
-| unit, fixture, CLI and plot tests | `cargo test` | 183 pass |
+| unit, fixture, CLI and plot tests | `cargo test` | 195 pass |
 | lints | `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, with and without the features | clean |
 | coverage | `cargo llvm-cov --summary-only` | 96% lines, 95% regions |
-| counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | pass |
+| counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | 188 unit and 13 CLI tests pass |
 | per-CPU, uncore, resctrl, L3 filters | root tests as in `docs/testing.md`, resctrl mounted | pass |
 | the generator's per-access costs with the host geometry | fixed-knob runs of the build before the geometry (a15e00f) and this one, interleaved, one op and one lever at a time (`experiments/levers.sh` does the same for one build), and the user-mode replays at their published knobs, 2026-10-18 | instructions per line of a run 13.3 up to 8 lines and 12.7 up to 64, in both builds; 1.6 and 0.93 to 0.95 fills per line at one op; a sparse visit 15.9 instructions against 16.9 at 1.00 dTLB events; a stub call 36 against 38 at 1.03 iTLB events; a non-temporal line 41.0 against 40.8; a page-cache read 117 instructions in user mode and 1791 with 60.9 misses in kernel mode; the replays within 0.5 percent of the old build's instructions per access. With compute between visits the fills per visit differ between builds, 4 to 17 percent fewer and 5 percent more at the same knobs with the hot loops the same instruction for instruction, and moving the batch loop into a function in the old tree alone moved them 4 percent: prefetcher timing, which the fitter's measured elasticity absorbs |
-| the fit lands in seconds | cold fits of the recorded profiles on this host, `thrashgen run orig.json --duration 8 --no-cache` | schbench 0.3 s, sysbench 0.6 s, taobench 0.6 s to the last knob change; stress-ng meets everything but dTLB (open item 2) by 1.0 s; fio converges by 1.4 s and re-fits when its duty cycle changes plateau (open item 3) |
-| neighbours: three profiles at once, twelve instances, a neighbour coming and going | `MODE=noisy`, `MODE=crowd`, `MODE=disturbed` | `docs/experiments.md`: with neighbours every profile keeps every field it can reach; a full host takes schbench's IPC to 2.85 from 3.71, a sibling sharing each core, and ten to twenty percent of stress-ng's ratios on a saturated bus; a fit follows a neighbour's arrival and departure within about a second and is back within on every reachable field once it has left |
-| end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy`, `perfmon` | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.3 to 0.9 s, with neighbours and under the L3 PMU too; stress-ng 9 of 10 but for its dTLB floor, with neighbours too, 8 under the L3 PMU; fio 9 of 10 in user mode, 8 under resctrl, 6 to 7 where the profile carries kernel-mode misses; bandwidth within its floor for the compute-bound profiles and 5 percent over for TaoBench |
+| the fit lands in seconds | the chain's first fits on 2026-10-19 at `33ffb22` | schbench 0.4 s, sysbench 0.6 s, taobench 0.7 s, fio 0.8 s to convergence in user mode; stress-ng meets everything but dTLB (open item 2) by 1.0 s; fio with the kernel in the count by 3.7 s |
+| neighbours: three profiles at once, twelve instances, a neighbour coming and going | `MODE=noisy`, `MODE=crowd` at `33ffb22`, `MODE=disturbed` at `d393c34`, 2026-10-19 | `docs/experiments.md`: with two neighbours TaoBench lands every field and stress-ng everything but its floor, schbench's IPC 6 percent over; a full host takes schbench's IPC to 2.93 from 3.74, a sibling sharing each core, TaoBench's four copies land every field and stress-ng's hold a compromise on a saturated bus; a fit follows a neighbour's arrival and departure within about a second and is back within on every reachable field once it has left, its re-fit bounded by the hold for lack of progress and the renewal of a hold whose targets go much further out |
+| end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `perfmon`, 2026-10-19 at `33ffb22` on a quiet host | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.4 to 0.7 s, TaoBench's re-fits under resctrl and the L3 PMU holding their closest pass after six passes without progress, everything within; fio 10 of 10 in user and kernel mode, 9 of 10 under resctrl (MPKI) and under the L3 PMU (MPKI a third over); stress-ng 9 of 10 but for its dTLB floor, 9 of 11 under resctrl where its 70 GB/s is beyond its counted misses, 8 under the L3 PMU; measured bandwidth within for every profile that can reach it, 4 percent under for TaoBench |
 
 ## Verified on an Apple M2 Ultra, as of 2026-10-18
 
@@ -59,16 +59,13 @@ Not verified anywhere:
   `pmu-events` at v7.1 and are checked only against fixtures, never
   on that hardware; Apple's M1 cores share the driver's event list
   with the M2's but not the sweep, so they get no table;
-- the Zen 4 results above predate the host geometry and the per-class
-  counters; the x86 paths are unchanged in intent and pass the fixture
-  tests, but have not been rerun there since;
 - the replay of a container across hosts: every replay here ran on
   the host that recorded it.
 
 ## Open items
 
-In rough order of value. The first four are from the Zen 4 host; the
-M2 Ultra's follow.
+In rough order of value. The first four and the last two are from the
+Zen 4 host; the M2 Ultra's are between.
 
 1. **Bandwidth measurement and levers.** Under resctrl the bandwidth
    rule has three levers, the write share, non-temporal lines and
@@ -85,7 +82,13 @@ M2 Ultra's follow.
    band. Bandwidth beyond what the counted misses move, stress-ng's
    70 GB/s at 21 MPKI, is physics: prefetch and streaming stores the
    miss proxy does not count, where the generator's bytes follow its
-   misses, so the rule waits there. On this host resctrl's monitoring runs in its
+   misses, so the rule waits there. The rule also rests while
+   bandwidth is within its absolute floor, which it checked by the
+   relative band alone until 2026-10-19, when a 6.5 MB/s target read
+   at 24 MB/s halved sysbench's write share on every pass another
+   target made. In the chain of 2026-10-19 measured bandwidth landed
+   within for every profile that can reach it, TaoBench's 4 percent
+   under. On this host resctrl's monitoring runs in its
    `default` assignment mode, the only one it offers, where the
    kernel's documentation warns that the hardware reallocates counters
    and readings come back misleading or `Unavailable`; a probe showed
@@ -138,12 +141,16 @@ M2 Ultra's follow.
    longer decides what the hold averages; the kernel-mode profile's
    cold-cache misses are the same cost and get the same correction.
    What is left is physics the hold cannot help: a quiet second of
-   the replay still carries the refetch, as the original's did. Under `CAP_PERFMON` the L3
+   the replay still carries the refetch, as the original's did. With
+   the recording started once fio's reads run from the page cache, the
+   chain of 2026-10-19 landed fio within on every field in user and
+   kernel mode and on 9 of 10 under resctrl and the L3 PMU, its MPKI
+   the field out there. Under `CAP_PERFMON` the L3
    PMU counts prefetched lines too, so stress-ng reads 95 MPKI; a miss
    every ten instructions needs the prefetched walk, which lifts IPC,
    and the two targets meet nowhere, so the fit now freezes the lever
    they fight over and holds the closest pass as the compromise, by
-   1.6 s, where it used to cycle through its whole budget.
+   2.9 s, where it used to cycle through its whole budget.
 
 4. **What a neighbour takes.** Beside a memory-bound neighbour a
    replay cannot have the IPC its profile recorded alone: schbench's
@@ -151,11 +158,18 @@ M2 Ultra's follow.
    bus. The fit tries anyway: stress-ng's live fit spent two budgets
    of passes, sixty-one moves over eight seconds, before holding its
    closest pass, which was the right one once the neighbour left. A
-   fit that knew which targets a neighbour makes unreachable, from
-   the IPC's response to its own levers, could hold sooner; the
-   comparison itself is against a profile recorded alone, which is
-   the question asked, and a profile recorded beside the same
-   neighbour would be the other question.
+   re-fit now judges its closest pass afresh in the new surroundings
+   and, five seconds in, holds it after six passes without a closer
+   one, and a hold renews when a target it met goes out or one goes
+   much further out (design section 6): on 2026-10-19 stress-ng spent
+   one budget and one renewal on the arrival, 49 passes over 11 s,
+   and its hold renewed within a second of the departure, where it
+   used to spend two budgets and keep its neighbour-time knobs;
+   TaoBench's re-fit reached an IPC of 0.50 against 0.64 beside the
+   neighbour and every field after it. The comparison itself is
+   against a profile recorded alone, which is the question asked, and
+   a profile recorded beside the same neighbour would be the other
+   question.
 
 5. **Misses on the E cores.** Apple's E-core PMU has no event that
    counts fetches from memory, so a profile's misses per instruction
@@ -177,6 +191,22 @@ M2 Ultra's follow.
    and is what the table uses. Whether the bursts are the front end
    fetching a stale predicted target is not known; a call to a hot
    page on every access did not quiet them.
+
+8. **The L3 PMU counts the whole domain.** Under `CAP_PERFMON` the
+   recorder's L3 misses come from the L3 PMU filtered to the scope's
+   cores, and a cgroup that may run anywhere has every core, so any
+   neighbour's misses land in the recording and the replay alike: an
+   indexer from another session beside the chain of 2026-10-19 had
+   sysbench read 5.7 misses per thousand instructions where it reads
+   0.05 alone. The mode needs a quiet host or a pinned cgroup; the
+   recorder could say which it had.
+9. **Kernel memory that does not come back.** The empty files that
+   stand in for kernel memory cost more slab than estimated on btrfs,
+   and when the closed loop removes them the slab is not reclaimed
+   during a quiet hold: sysbench's replay under resctrl ended 9 MiB
+   over its 4 MiB of memory on 2026-10-19, within the 8 MiB floor on
+   the chain's other runs. Work: a cheaper stand-in for kernel memory,
+   or a floor the hold reports as the kernel's.
 
 Closed since 2026-10-16: the fast fit closed the pass-budget item and
 fio's TLB rate; busy cores and burstiness are judged from the third

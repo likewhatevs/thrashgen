@@ -148,17 +148,20 @@ What each benchmark is, and why it is in the set:
 Run on the Zen 4 host described in `docs/design.md`, with the 100 ms
 fit windows: each replay fitted for 10 s and the knobs it ended on
 then ran for 150 s with no counters of their own, recorded over the
-last 135 s. The five privilege modes are from 2026-10-18 and the
-fitter at commit `cf1436d`, except fio under resctrl, which ran again
-at `c54d63f`: its first recording that day had a cold page cache and a
-per-second CV of 3.8, and the replay's two threads could not carry
-that burstiness, which is what `c54d63f` fixed (`docs/design.md`
-section 6). "Within" counts the fields within tolerance out of the
+last 135 s. The seven modes are from one chain on 2026-10-19 at
+commit `33ffb22`, on a host with nothing else running, except the
+`disturbed` mode, which ran again at `d393c34` after what its first
+run showed of the hold for lack of progress (`docs/design.md`
+section 6). An earlier chain that day had an indexer from another
+session start beside it, and under `CAP_PERFMON` the L3 PMU counts
+the whole L3 domain for a cgroup that may run anywhere, so a
+neighbour's misses land in both recordings. "Within" counts the fields within tolerance out of the
 fields the recorder measured; "fit" is the number of passes, windows
 that moved a knob, and the second of the last one, or "held" when the
-fit stopped on the closest pass it saw, out of passes or with a lever
-frozen. Plots and data are under `docs/experiments/<mode>/`, the
-figures under `docs/experiments/plots/`.
+fit stopped on the closest pass it saw, out of passes, with a lever
+frozen or no closer after six passes of re-fitting. Plots and data
+are under `docs/experiments/<mode>/`, the figures under
+`docs/experiments/plots/`.
 
 ![Fields within tolerance per benchmark and mode; grey is the fields measured](experiments/plots/within.png)
 
@@ -170,11 +173,11 @@ figures under `docs/experiments/plots/`.
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
+| schbench | 10 of 10 | 3 passes, 0.4 s | nothing |
 | sysbench | 10 of 10 | 5 passes, 0.6 s | nothing |
-| taobench | 10 of 10 | 6 passes, 0.7 s | nothing |
-| stress-ng | 9 of 10 | 9 passes, 1.0 s | dTLB 0.17 vs 0.0058 |
-| fio | 9 of 10 | 13 passes, 1.4 s | iTLB 0.070 vs 0.025 |
+| taobench | 10 of 10 | 8 passes, 7.7 s | nothing; converged at 0.7 s, then a second of MPKI 6 percent over at 7 s took two more passes |
+| stress-ng | 9 of 10 | 9 passes, 1.0 s | dTLB 0.18 vs 0.0034, the hardware floor |
+| fio | 10 of 10 | 7 passes, 0.8 s | nothing |
 
 ![user mode: replay over original per observable, every benchmark](experiments/user/summary.svg)
 
@@ -184,11 +187,11 @@ figures under `docs/experiments/plots/`.
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
+| schbench | 10 of 10 | 3 passes, 0.4 s | nothing |
 | sysbench | 10 of 10 | 5 passes, 0.6 s | nothing |
-| taobench | 10 of 10 | 8 passes, 4.4 s | nothing |
-| stress-ng | 9 of 10 | 9 passes, 1.0 s | dTLB 0.22 vs 0.011 |
-| fio | 7 of 10 | 45 passes, 8.3 s | IPC 2.12 vs 1.42, MPKI 0.39 vs 2.17, iTLB 0.010 vs 0.063 |
+| taobench | 10 of 10 | 12 passes, 6.0 s | nothing; converged at 0.7 s, re-fitted once at 6 s |
+| stress-ng | 9 of 10 | 12 passes, 2.3 s | dTLB 0.22 vs 0.009, the hardware floor |
+| fio | 10 of 10 | 24 passes, 3.7 s | nothing |
 
 ![kernel mode: replay over original per observable, every benchmark](experiments/kernel/summary.svg)
 
@@ -198,11 +201,11 @@ figures under `docs/experiments/plots/`.
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 11 of 11 | 7 passes, 0.9 s | nothing; bandwidth 57 MB/s vs 73, within its floor |
-| sysbench | 11 of 11 | 5 passes, 0.6 s | nothing; bandwidth within its floor |
-| taobench | 10 of 11 | 19 passes, 9.2 s | bandwidth 10.1 vs 9.6 GB/s, 5 percent over |
-| stress-ng | 9 of 11 | 11 passes, 1.2 s | dTLB 0.18 vs 0.0033, bandwidth 16 vs 70 GB/s |
-| fio | 8 of 10 | held, 36 passes by 9.5 s | dTLB 8.2 vs 8.7, iTLB 0.016 vs 0.053; the replay's bandwidth had no reading |
+| schbench | 11 of 11 | 3 passes, 0.4 s | nothing; bandwidth 173 MB/s vs 124, within its floor |
+| sysbench | 11 of 11 | 5 passes, 0.6 s | nothing; bandwidth 7 MB/s vs 5, within its floor |
+| taobench | 11 of 11 | held, 29 passes by 5.6 s | nothing; bandwidth 9.0 vs 9.4 GB/s; a re-fit at 5 s came no closer for six passes and held pass 17 |
+| stress-ng | 9 of 11 | 11 passes, 1.2 s | bandwidth 15.7 vs 69.6 GB/s, dTLB 0.18 vs 0.0035 |
+| fio | 9 of 10 | held, 45 passes by 9.7 s | MPKI 0.089 vs 0.026; the replay's bandwidth had no reading |
 
 ![resctrl mode: replay over original per observable, every benchmark](experiments/resctrl/summary.svg)
 
@@ -212,9 +215,9 @@ figures under `docs/experiments/plots/`.
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 10 of 10 | 5 passes, 0.6 s | nothing |
+| schbench | 9 of 10 | 10 passes, 2.7 s | IPC 3.96 vs 3.74, 6 percent over |
 | taobench | 10 of 10 | 6 passes, 0.7 s | nothing |
-| stress-ng | 9 of 10 | 15 passes, 3.8 s | dTLB 0.19 vs 0.0058 |
+| stress-ng | 9 of 10 | held, 27 passes by 5.3 s | dTLB 0.37 vs 0.0034, the hardware floor; a lever turned twice within three passes and the fit held pass 20, the closest |
 
 ![noisy mode: replay over original per observable, every benchmark](experiments/noisy/summary.svg)
 
@@ -226,9 +229,9 @@ figures under `docs/experiments/plots/`.
 | --- | --- | --- | --- |
 | schbench | 10 of 10 | 4 passes, 0.5 s | nothing |
 | sysbench | 10 of 10 | 5 passes, 0.6 s | nothing |
-| taobench | 10 of 10 | 5 passes, 0.6 s | nothing |
-| stress-ng | 8 of 10 | held, 9 passes by 1.2 s | MPKI 38 vs 95, dTLB |
-| fio | 6 of 10 | held, 36 passes by 3.9 s | burstiness 1.1 vs 1.6, MPKI 17.6 vs 15.2, dTLB 5.4 vs 6.2, iTLB 0.24 vs 0.056 |
+| taobench | 10 of 10 | held, 18 passes by 5.1 s | nothing; a re-fit at 4 s came no closer for six passes and held pass 12 |
+| stress-ng | 8 of 10 | held, 12 passes by 2.9 s | MPKI 43 vs 95, dTLB 4.1 vs 0.0099 |
+| fio | 9 of 10 | 13 passes, 1.4 s | MPKI 21.2 vs 16.0 |
 
 ![perfmon mode: replay over original per observable, every benchmark](experiments/perfmon/summary.svg)
 
@@ -238,9 +241,9 @@ figures under `docs/experiments/plots/`.
 
 | profile | copies within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 9 of 10, all four | 7 to 8 passes, 3.0 to 6.3 s | IPC 2.83 to 2.87 vs 3.71 |
-| stress-ng | 7 to 8 of 10 | 27 to 49 passes, still moving at 10 s | dTLB; IPC 0.25 to 0.27 vs 0.22 on three copies; MPKI 15 to 22 vs 20.5 on three |
-| taobench | 9 to 10 of 10 | 7 to 22 passes, 0.9 to 10 s | MPKI 6.4 vs 6.1 on two copies, IPC 0.66 vs 0.70 on one |
+| schbench | 9 of 10, all four | 15 passes, 1.6 to 1.8 s | IPC 2.93 vs 3.74 on every copy |
+| stress-ng | 7 to 9 of 10 | held, 14 to 36 passes by 4.0 to 8.8 s | dTLB on every copy; IPC 0.25 vs 0.22 and MPKI 16.4 vs 21.1 on one copy, MPKI 23.2 vs 21.1 on another |
+| taobench | 10 of 10, all four | 6 to 10 passes, 0.7 to 1.1 s | nothing |
 
 ![crowd mode: replay over original per observable, every benchmark](experiments/crowd/summary.svg)
 
@@ -254,9 +257,9 @@ of its departure.
 
 | profile | alone | beside | after | moved on arrival, on departure |
 | --- | --- | --- | --- | --- |
-| schbench | 10 of 10 | 9 of 10: IPC 3.2 vs 3.71 | 10 of 10 | 6 passes from 1.3 s after; 2 passes from 1.3 s after |
-| stress-ng | 9 of 10: dTLB floor | 7 of 10: IPC 0.06 vs 0.22, MPKI 24.8 vs 20.5, dTLB | 9 of 10: dTLB floor | 61 passes over 8 s, two budgets, then the closest pass held; none needed after |
-| taobench | 10 of 10 | 8 of 10: cores 2.93 vs 3.09, IPC 0.66 vs 0.70 | 10 of 10 | 31 passes from 0.9 s after; 43 passes from 0.8 s after |
+| schbench | 10 of 10 | 10 of 10 | 10 of 10 | 2 passes at 1.3 s after; 1 pass at 1.3 s after |
+| stress-ng | 9 of 10: dTLB floor | 8 of 10: MPKI 22.7 vs 21.1, dTLB | 9 of 10: dTLB floor | 49 passes over 11 s, a budget spent, a renewal, then the closest pass held; 10 passes from 1.1 s after, the hold renewed |
+| taobench | 9 of 10: burstiness 0.10 vs 0.081 | 9 of 10: IPC 0.50 vs 0.64 | 10 of 10 | 39 passes over 10 s, two holds for lack of progress, each renewed; 26 passes from 0.9 s after |
 
 ![disturbed mode: each live fit's IPC, MPKI and dTLB rate over its hundred seconds, the neighbour's span shaded](experiments/plots/disturbed.png)
 
@@ -399,16 +402,14 @@ What the M2 Ultra adds to the reading below:
 
 The comparison is between two recordings taken the same way, so it
 measures the replay against the recorder, not against the replay's
-own report. What the five modes say:
+own report. What the seven modes say:
 
 - **Every converging profile fits in under a second.** schbench,
-  sysbench and TaoBench converge in 0.3 to 0.9 s in every mode, with
-  two neighbours or without, and land every field within tolerance
-  but TaoBench's bandwidth under resctrl, 5 percent over;
-  TaoBench, the farthest from the first guess, takes six passes where
-  it took ten the day before, since the sparse visits now correct by
-  the dTLB events they are short rather than by ratio. stress-ng
-  reaches everything but its dTLB rate by its tenth pass, 1.0 s.
+  sysbench, TaoBench and fio converge in 0.4 to 0.8 s in user mode
+  and land every field within tolerance; TaoBench re-fits once a few
+  seconds later when its MPKI drifts to the edge of its band and is
+  back within in two passes. stress-ng reaches everything but its
+  dTLB rate by its ninth pass, 1.0 s.
 - **stress-ng meets everything but its dTLB rate**, which is a floor
   of this host's hardware: under the L2-hit definition the L1 dTLB
   reloads on about 1.4 percent of hugepage touches whatever the set,
@@ -416,67 +417,63 @@ own report. What the five modes say:
   in a page of its own. A sequential walk would meet the rate and
   lift IPC to 0.74 against 0.22. Its 70 GB/s is a streaming store's
   bandwidth, several times what its counted misses move; random
-  64-byte lines reach 15 GB/s here. The fit never converges, since
-  the dTLB rate is always out, so it stays bound by its pass budget
-  and nudges when a pooled MPKI crosses the edge of its band, which is
-  the 15 passes with neighbours. See `docs/design.md` section 5.1 and
-  `docs/status.md`.
-- **fio is a bursty, kernel-bound process seen one plateau at a
-  time.** Its duty cycle holds each of twenty factors for four
-  seconds, and its rates per instruction differ several times over
-  between a quiet plateau, where every wakeup refetches a cold cache
-  and TLB, and a busy one. In user mode the fit converged in 1.4 s
-  inside one plateau and nine fields held over the 135 s hold; the
-  iTLB rate, which the stub calls set for that plateau, averaged
-  three times higher over all of them. In kernel mode the profile
-  acquires the kernel's own misses, 2.2 per thousand instructions
-  from page-cache copies, and the fit re-fits at each plateau and
-  does not settle: 45 passes, its last at 8.3 s, and the hold ran at
-  the IPC of the plateau it ended in. In resctrl mode, with one
-  thread for its 0.26 cores, busy cores and burstiness land within a
-  percent and the replay's bandwidth has no reading.
+  64-byte lines reach 16 GB/s here. See `docs/design.md` section 5.1
+  and `docs/status.md`.
+- **fio lands in every mode where its misses are user-mode or the
+  kernel's alike.** Its recording now starts once its reads run from
+  the page cache, so it is a steady process at a quarter of a core
+  with a per-second CV near 0.2, and its rates per instruction still
+  differ between a busy second and a quiet one by the refetch each
+  wakeup costs. The fitter learns that cost from two plateaus and
+  judges every window at the long-run factor, so the fit lands in 7
+  passes in user mode and holds; with the kernel in the count the
+  page-cache reads supply the kernel's misses and the fit lands in 24
+  passes, 3.7 s, every field within. Under resctrl its MPKI, 0.09
+  against 0.03, is the one field out, and the replay's bandwidth has
+  no reading, since the monitoring counters lose a single
+  low-duty thread (`docs/status.md`, open item 1); under the L3 PMU
+  its MPKI lands a third over.
 - **The L3 PMU changes the question.** With `CAP_PERFMON` the
   recorder counts every L3 miss, prefetched lines included, so
   stress-ng's profile reads 95 misses per thousand instructions where
-  the proxy saw 21, and fio's 15 where it saw 2. A miss every ten
-  instructions needs the prefetched walk, which lifts IPC as it lifts
-  MPKI; the fitter sees the two rules pull the run length against each
-  other, freezes it by the ninth pass and holds the closest pass as
-  the compromise, 38 MPKI at the target's IPC, where it used to cycle
-  through its whole budget. The compute-bound profiles and TaoBench
-  are unaffected: TaoBench's 20 MPKI under the L3 PMU is met in five
-  passes.
-- **Measured bandwidth** lands within its floor for the compute-bound
-  profiles and 5 percent over for TaoBench, 10.1 against 9.6 GB/s:
-  the monitoring counters on this host wander (`docs/status.md`,
-  open item 1), the converged fit re-fit at 9 s after a second of
-  readings out, and the hold ran the knobs of that re-fit. stress-ng's
-  70 GB/s is beyond what its counted misses move. Where bandwidth is
-  modelled, for want of resctrl, it is reported and not fitted.
-- **Neighbours cost nothing measurable here.** With three replays
-  sharing the caches and the memory bus, schbench and TaoBench land 10
-  of 10 in 0.6 and 0.7 s, and stress-ng's IPC and MPKI land within one
-  percent over the hold, where the day before they had drifted 20
-  percent: the run-length rule no longer chases a pooled MPKI short
-  by noise to its cap.
-
-- **A full host costs what the host costs.** With twelve instances
-  on sixty-four hardware threads, schbench's replays sit at IPC 2.85
-  against 3.71 on every copy: eight threads at that IPC need cores to
-  themselves, and with sixty busy threads each shares a core with a
-  sibling. stress-ng's four copies want sixteen gigabytes a second
-  each from a bus the other eight instances use too, and their IPC
-  and MPKI land ten to twenty percent off; TaoBench's copies are
-  within or a few percent out. Memory is within on every instance,
-  now that the generator measures its own cgroup.
+  the proxy saw 21. A miss every ten instructions needs the prefetched
+  walk, which lifts IPC as it lifts MPKI; the fitter sees the two
+  rules pull a lever against each other, freezes it and holds the
+  closest pass as the compromise by 2.9 s, 43 MPKI at the target's
+  IPC. The L3 PMU also counts the whole L3 domain for a cgroup that
+  may run anywhere, so this mode needs a quiet host: an earlier chain
+  that day had an indexer from another session start beside it, and
+  sysbench's recording read 5.7 MPKI where it reads 0.05 alone.
+- **Measured bandwidth** lands within tolerance for every profile
+  that can reach it: within the floor for the compute-bound profiles,
+  4 percent under for TaoBench, whose re-fit at 5 s came no closer for
+  six passes and held its closest pass. stress-ng's 70 GB/s is beyond
+  what its counted misses move. Where bandwidth is modelled, for want
+  of resctrl, it is reported and not fitted.
+- **Neighbours cost what the host costs.** With three replays sharing
+  the caches and the memory bus, TaoBench lands 10 of 10 in 0.7 s and
+  stress-ng meets everything but its floor; schbench's IPC lands 6
+  percent over. With twelve instances on sixty-four hardware threads,
+  schbench's replays sit at IPC 2.93 against 3.74 on every copy: eight
+  threads at that IPC need cores to themselves, and with sixty busy
+  threads each shares a core with a sibling. TaoBench's four copies
+  land every field; stress-ng's four want sixteen gigabytes a second
+  each from a bus the other eight instances use too, and their fits
+  hold a compromise by four to nine seconds, within on seven to nine
+  fields. Memory is within on every instance, now that the generator
+  measures its own cgroup.
 - **A neighbour arriving moves the fit within about a second, and a
-  neighbour leaving within about a second too**, after which every
-  profile is back within tolerance on every field it can reach.
-  While a memory-bound neighbour is there, what the replay cannot
-  have is what the neighbour takes: schbench's IPC on a shared core,
-  stress-ng's IPC on a saturated bus, and TaoBench's IPC by five
-  percent; stress-ng's fit spent two budgets of passes against that
-  before holding, which is work left to do.
+  neighbour leaving within about a second too.** schbench moves twice
+  on arrival and once on departure and is within on every field in
+  every phase. Beside the memory-bound neighbour, what the replay
+  cannot have is what the neighbour takes: TaoBench's IPC lands at
+  0.50 against 0.64 and stress-ng's MPKI 8 percent over, and both are
+  back within on every field they can reach once it has left. The
+  re-fits are bounded now: a re-fit that comes no closer for six
+  passes, five seconds in, holds its closest pass, and a hold whose
+  targets go out, or go much further out, renews; stress-ng spent one
+  budget and one renewal on the arrival, 49 passes over 11 s, where
+  it used to spend two budgets and never renew on departure.
 
 What the plots cannot show is anything outside the observables: the
 replay has no syscalls, no I/O and no wakeups, however close the

@@ -25,11 +25,10 @@ Directional goals, in order:
    the design says so in section 5.1 and the report says so in its
    notes; a residual the tool cannot explain is a bug.
 2. **Speed.** The fit converges in about a second on a cold start
-   (0.3 to 0.9 s on the reference host for the profiles that converge;
-   stress-ng and fio reach what they can by 1.0 to 1.4 s), so
-   representative load is up by the fifth second, and a repeat run of
-   the same profile on the same CPU model starts converged from the
-   cache.
+   (0.4 to 0.8 s on the reference host for the profiles that converge;
+   stress-ng reaches what it can by 1.0 s), so representative load is
+   up by the fifth second, and a repeat run of the same profile on the
+   same CPU model starts converged from the cache.
 3. **Noisy hosts.** Several instances share a host, each fed its own
    container's profile and measuring only its own scope. A converged
    fit follows a real change in its surroundings and ignores a
