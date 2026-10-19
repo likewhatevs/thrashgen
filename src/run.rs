@@ -494,8 +494,13 @@ pub fn page_cache_reads_usable(file_bytes: u64, l3_bytes: Option<u64>) -> bool {
 }
 
 /// Pages to reserve for the sparse and code streams: the configured
-/// capacities, each capped at an eighth of the anonymous target so a
-/// small footprint is not swamped by the streams' own pages.
+/// capacities, each capped at an eighth of the anonymous target or a
+/// quarter of the anonymous field's absolute tolerance, whichever is
+/// more, so a small footprint is not swamped by the streams' own pages
+/// and a tiny one still gets a code set past the iTLB's reach: fio's
+/// 3.4 MB of anonymous memory allowed 103 stub pages, which the L2
+/// iTLB holds, and ten thousand calls an access made a tenth of the
+/// iTLB rate the recording asked for (Zen 4, 2026-10-18).
 pub fn stream_capacities(
     anon_target: Option<f64>,
     sparse: usize,
@@ -504,7 +509,8 @@ pub fn stream_capacities(
 ) -> (usize, usize) {
     match anon_target {
         Some(anon) if anon > 0.0 => {
-            let cap = ((anon / 8.0) as usize / page).max(64);
+            let floor = crate::fit::absolute_tolerance("anon_bytes") / 4.0;
+            let cap = ((anon / 8.0).max(floor) as usize / page).max(64);
             (sparse.min(cap), code.min(cap))
         }
         _ => (sparse, code),
@@ -1539,6 +1545,16 @@ mod tests {
         );
         assert_eq!(
             stream_capacities(Some(1.0e5), 16384, 16384, PAGE),
+            (512, 512),
+            "a tiny target gets a quarter of the memory tolerance, 2 MiB"
+        );
+        assert_eq!(
+            stream_capacities(Some(1.0e5), 16384, 16384, 16384),
+            (128, 128),
+            "the same 2 MiB in 16 KiB pages"
+        );
+        assert_eq!(
+            stream_capacities(Some(1.0e5), 16384, 16384, 1 << 20),
             (64, 64),
             "never below 64 pages"
         );
