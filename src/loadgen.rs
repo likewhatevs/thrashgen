@@ -20,10 +20,65 @@ use thiserror::Error;
 
 use crate::footprint::{AnonBuffer, FileMap};
 
-/// Cache line size the streams assume.
-pub const LINE: usize = 64;
-/// Small page size the streams assume.
-pub const PAGE: usize = 4096;
+/// The memory geometry the streams are laid out on: the host's small
+/// page, which is what a TLB entry covers, and the line a miss fetches
+/// from memory, which is what a miss costs. Both differ between hosts:
+/// 4 KiB pages and 64-byte lines on x86, 16 KiB pages on Apple's
+/// Linux and 128-byte lines in its L2 and system cache where `CTR_EL0`
+/// says 64 (`docs/design.md` section 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Geometry {
+    /// Page size in bytes.
+    pub page: usize,
+    /// Line size in bytes.
+    pub line: usize,
+    /// Whether a run's lines each land in a page of their own rather
+    /// than consecutively in one: on Apple's chips a visit's second and
+    /// further lines in a page, consecutive, strided or scattered, are
+    /// fetched by the region prefetcher and counted by no miss event,
+    /// 1.0 counted per visit of 2, 8 or 128 consecutive lines (M2
+    /// Ultra, 2026-10-18), so a run only makes counted misses when its
+    /// lines are in pages of their own; they stay independent, so they
+    /// overlap, where a dependent visit's wait on each other.
+    pub run_in_pages: bool,
+}
+
+impl Geometry {
+    /// A geometry; the page must be a multiple of the line.
+    pub const fn new(page: usize, line: usize) -> Geometry {
+        assert!(page % line == 0 && line >= 8);
+        Geometry {
+            page,
+            line,
+            run_in_pages: false,
+        }
+    }
+
+    /// This host's page with the line given, the table's or sysfs's.
+    pub fn host(line: usize) -> Geometry {
+        Geometry::new(crate::measure::page_size() as usize, line)
+    }
+
+    /// The same geometry with runs laid out one line per page.
+    #[must_use]
+    pub const fn runs_in_pages(self, yes: bool) -> Geometry {
+        Geometry {
+            run_in_pages: yes,
+            ..self
+        }
+    }
+
+    /// Lines in a page.
+    pub const fn page_lines(&self) -> usize {
+        self.page / self.line
+    }
+
+    /// The most consecutive lines a visit can touch: a page's worth.
+    pub fn lines_max(&self) -> f64 {
+        self.page_lines() as f64
+    }
+}
+
 /// Accesses between clock checks.
 const BATCH: u32 = 64;
 
@@ -145,10 +200,10 @@ impl Knobs {
                 self.chains
             )));
         }
-        if !(self.lines > 0.0 && self.lines <= (PAGE / LINE) as f64) {
+        if !(self.lines > 0.0 && self.lines <= buffers.geo.lines_max()) {
             return Err(KnobError(format!(
                 "lines must be above 0 and at most {}, got {}",
-                PAGE / LINE,
+                buffers.geo.page_lines(),
                 self.lines
             )));
         }
@@ -252,12 +307,14 @@ pub fn clipped_duty_stats(duty: f64, cv: f64) -> (f64, f64) {
 
 /// Executable pages, one tiny stub each at a page-dependent offset.
 /// Stub pages are spaced [`CODE_STRIDE`] pages apart in virtual memory
-/// and the gaps are never touched, so no 16 KiB block is fully mapped
-/// and AMD's TLB cannot coalesce neighbouring pages into one entry.
+/// and the gaps are never touched, so no 16 KiB block of 4 KiB pages
+/// is fully mapped and AMD's TLB cannot coalesce neighbouring pages
+/// into one entry.
 #[derive(Debug)]
 pub struct CodePages {
     buf: AnonBuffer,
     pages: usize,
+    page: usize,
 }
 
 /// Virtual pages between consecutive stub pages.
@@ -294,20 +351,22 @@ fn sync_instructions(stubs: &[*const u8]) {
 }
 
 impl CodePages {
-    /// Offset of the stub within page `i`, spread over cache sets.
-    pub fn offset(i: usize) -> usize {
-        (i * 160) % (PAGE - 64)
+    /// Offset of the stub within page `i` of `page` bytes, spread over
+    /// cache sets.
+    pub fn offset(i: usize, page: usize) -> usize {
+        (i * 160) % (page - 64)
     }
 
-    /// Write stubs into `pages` fresh pages and make them executable.
+    /// Write stubs into `pages` fresh pages of `page` bytes and make
+    /// them executable.
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    pub fn new(pages: usize) -> std::io::Result<CodePages> {
-        let buf = AnonBuffer::new_untouched(pages * CODE_STRIDE * PAGE, false)?;
+    pub fn new(pages: usize, page: usize) -> std::io::Result<CodePages> {
+        let buf = AnonBuffer::new_untouched(pages * CODE_STRIDE * page, false)?;
         let mut stubs = Vec::with_capacity(pages);
         for i in 0..pages {
             let dst = buf
                 .as_ptr()
-                .wrapping_add(i * CODE_STRIDE * PAGE + Self::offset(i));
+                .wrapping_add(i * CODE_STRIDE * page + Self::offset(i, page));
             // SAFETY: inside the mapping, which is writable until mprotect.
             unsafe { std::ptr::copy_nonoverlapping(STUB.as_ptr(), dst, STUB.len()) };
             stubs.push(dst.cast_const());
@@ -318,16 +377,16 @@ impl CodePages {
         unsafe {
             mprotect(
                 ptr,
-                pages * CODE_STRIDE * PAGE,
+                pages * CODE_STRIDE * page,
                 ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
             )
         }?;
-        Ok(CodePages { buf, pages })
+        Ok(CodePages { buf, pages, page })
     }
 
     /// Not implemented on this architecture.
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    pub fn new(_pages: usize) -> std::io::Result<CodePages> {
+    pub fn new(_pages: usize, _page: usize) -> std::io::Result<CodePages> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "code stubs are only implemented for x86_64 and aarch64",
@@ -350,7 +409,7 @@ impl CodePages {
         let addr = self
             .buf
             .as_ptr()
-            .wrapping_add(i * CODE_STRIDE * PAGE + Self::offset(i));
+            .wrapping_add(i * CODE_STRIDE * self.page + Self::offset(i, self.page));
         // SAFETY: `addr` is a stub written by `new` in a page that is
         // now executable, with the C ABI the stub implements.
         let f: extern "C" fn(u64) -> u64 = unsafe { std::mem::transmute(addr) };
@@ -389,6 +448,8 @@ impl SparseSet {
 /// how much of each to use.
 #[derive(Debug)]
 pub struct Buffers {
+    /// The geometry the streams are laid out on.
+    pub geo: Geometry,
     main: AnonBuffer,
     sparse: SparseSet,
     code: CodePages,
@@ -404,9 +465,10 @@ pub struct CacheRead {
 }
 
 impl CacheRead {
-    /// A reader of `file`, which must be the page-cache file.
-    pub fn new(file: &File) -> std::io::Result<CacheRead> {
-        let pages = (file.metadata()?.len() / PAGE as u64) as usize;
+    /// A reader of `file`, which must be the page-cache file, in pages
+    /// of `page` bytes.
+    pub fn new(file: &File, page: usize) -> std::io::Result<CacheRead> {
+        let pages = (file.metadata()?.len() / page as u64) as usize;
         if pages == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -422,17 +484,20 @@ impl CacheRead {
 
 impl Buffers {
     /// Allocate `main_bytes` of main buffer, `sparse_pages` anonymous
-    /// pages for the sparse stream and `code_pages` executable pages.
+    /// pages for the sparse stream and `code_pages` executable pages,
+    /// on geometry `geo`.
     pub fn new(
+        geo: Geometry,
         main_bytes: usize,
         huge: bool,
         sparse_pages: usize,
         code_pages: usize,
     ) -> std::io::Result<Buffers> {
         Self::with_sparse(
+            geo,
             main_bytes,
             huge,
-            SparseSet::Anon(AnonBuffer::new(sparse_pages.max(1) * PAGE, false)?),
+            SparseSet::Anon(AnonBuffer::new(sparse_pages.max(1) * geo.page, false)?),
             code_pages,
             None,
         )
@@ -440,6 +505,7 @@ impl Buffers {
 
     /// As [`new`](Self::new), with the sparse set given.
     pub fn with_sparse(
+        geo: Geometry,
         main_bytes: usize,
         huge: bool,
         sparse: SparseSet,
@@ -447,9 +513,10 @@ impl Buffers {
         cache: Option<CacheRead>,
     ) -> std::io::Result<Buffers> {
         Ok(Buffers {
-            main: AnonBuffer::new(main_bytes.max(PAGE), huge)?,
+            geo,
+            main: AnonBuffer::new(main_bytes.max(geo.page), huge)?,
             sparse,
-            code: CodePages::new(code_pages.max(1))?,
+            code: CodePages::new(code_pages.max(1), geo.page)?,
             cache,
         })
     }
@@ -471,7 +538,7 @@ impl Buffers {
 
     /// Pages available to the sparse stream.
     pub fn sparse_capacity(&self) -> usize {
-        self.sparse.len() / PAGE
+        self.sparse.len() / self.geo.page
     }
 
     /// Pages available to the code stream.
@@ -495,14 +562,14 @@ pub struct WorkerStats {
     pub tid: AtomicU64,
 }
 
-/// Non-temporal store of one line at `p`.
+/// Non-temporal store of one line of `line` bytes at `p`.
 #[inline(always)]
-fn nt_store_line(p: *mut u8, v: u64) {
+fn nt_store_line(p: *mut u8, v: u64, line: usize) {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: `p` is 8-byte aligned inside a mapped line; SSE2 is
     // baseline on x86_64.
     unsafe {
-        for k in 0..(LINE / 8) {
+        for k in 0..(line / 8) {
             std::arch::x86_64::_mm_stream_si64(p.add(k * 8).cast::<i64>(), v as i64);
         }
     }
@@ -510,7 +577,7 @@ fn nt_store_line(p: *mut u8, v: u64) {
     // SAFETY: as above; `stnp` writes a non-temporal pair of 8 bytes at
     // each 16-byte step of the line.
     unsafe {
-        for k in 0..(LINE / 16) {
+        for k in 0..(line / 16) {
             std::arch::asm!(
                 "stnp {v}, {v}, [{p}]",
                 v = in(reg) v,
@@ -522,7 +589,7 @@ fn nt_store_line(p: *mut u8, v: u64) {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     // SAFETY: as above, with plain stores.
     unsafe {
-        for k in 0..(LINE / 8) {
+        for k in 0..(line / 8) {
             std::ptr::write_volatile(p.add(k * 8).cast::<u64>(), v);
         }
     }
@@ -674,6 +741,11 @@ fn scale32(x: u32, n: usize) -> usize {
 /// so an access does no division, rounding or float-to-int work.
 #[derive(Debug)]
 struct Pace {
+    /// Page and line sizes and the lines a page holds, carried here so
+    /// an address needs no load from the buffers' geometry.
+    page: usize,
+    line: usize,
+    page_lines: usize,
     pages: usize,
     slice_start: usize,
     slice_lines: usize,
@@ -688,6 +760,8 @@ struct Pace {
     batch: u32,
     /// Pages the sparse walk advances per visit.
     sparse_stride: usize,
+    /// Each line of a run in a page of its own.
+    run_in_pages: bool,
 }
 
 /// A stride coprime to the page count, near the golden ratio of it, so
@@ -718,10 +792,14 @@ impl Pace {
     fn new(k: &Knobs, w: &Worker) -> Pace {
         let (pages, slice_start, slice_pages) = w.geometry(k.wset);
         let whole = k.lines as usize;
+        let geo = w.buffers.geo;
         Pace {
+            page: geo.page,
+            line: geo.line,
+            page_lines: geo.page_lines(),
             pages,
             slice_start,
-            slice_lines: slice_pages * PAGE_LINES,
+            slice_lines: slice_pages * geo.page_lines(),
             lines_whole: whole,
             lines_fract: k.lines - whole as f64,
             stores: [
@@ -731,6 +809,7 @@ impl Pace {
             compute: ComputeSplit::of(k.ops, k.chains),
             batch: if k.ops >= 256 { 1 } else { BATCH },
             sparse_stride: sparse_stride(k.sparse_pages),
+            run_in_pages: geo.run_in_pages,
         }
     }
 }
@@ -766,15 +845,12 @@ struct Carry {
     pagebuf: Vec<u8>,
 }
 
-/// Lines per page.
-const PAGE_LINES: usize = PAGE / LINE;
-
 impl Worker {
     /// Pages of the working set and this worker's slice of it, as
     /// (pages, slice start, slice length), from the main buffer and
     /// `wset`. Slices are equal, one per worker, never beyond the set.
     fn geometry(&self, wset: f64) -> (usize, usize, usize) {
-        let main_pages = self.buffers.main.len() / PAGE;
+        let main_pages = self.buffers.main.len() / self.buffers.geo.page;
         let pages = ((main_pages as f64 * wset) as usize).clamp(1, main_pages);
         let slice = (pages / self.threads.max(1)).max(1);
         let start = (self.index % pages.div_ceil(slice)) * slice;
@@ -795,6 +871,7 @@ impl Worker {
         mut chase: u64,
     ) -> u64 {
         let main = self.buffers.main.as_ptr();
+        let (page_bytes, line_bytes, page_lines) = (p.page, p.line, p.page_lines);
         c.lines += p.lines_fract;
         let extra = usize::from(c.lines >= 1.0);
         if extra == 1 {
@@ -808,13 +885,13 @@ impl Worker {
                 // Walk the slice line by line, never across a page within
                 // one visit, wrapping at the slice end.
                 c.seq -= 1.0;
-                if c.cursor % PAGE_LINES + lines > PAGE_LINES {
-                    c.cursor = (c.cursor / PAGE_LINES + 1) * PAGE_LINES;
+                if c.cursor % page_lines + lines > page_lines {
+                    c.cursor = (c.cursor / page_lines + 1) * page_lines;
                 }
                 if c.cursor >= p.slice_lines {
                     c.cursor = 0;
                 }
-                let at = (p.slice_start + c.cursor / PAGE_LINES, c.cursor % PAGE_LINES);
+                let at = (p.slice_start + c.cursor / page_lines, c.cursor % page_lines);
                 c.cursor += lines;
                 at
             } else {
@@ -837,7 +914,7 @@ impl Worker {
                 // overlapping: 123 ns an access against 47 on Zen 4.
                 (
                     scale32((draw >> 32) as u32, p.pages),
-                    scale32(draw as u32, PAGE_LINES - p.lines_whole),
+                    scale32(draw as u32, page_lines - p.lines_whole),
                 )
             };
             let stores = p.stores[extra];
@@ -851,11 +928,17 @@ impl Worker {
                     // through was folded away. Scattered over one page
                     // instead, the region prefetcher fetched the lot.
                     let d = rng.next();
-                    scale32((d >> 32) as u32, p.pages) * PAGE
-                        + scale32(d as u32, PAGE_LINES) * LINE
+                    scale32((d >> 32) as u32, p.pages) * page_bytes
+                        + scale32(d as u32, page_lines) * line_bytes
                         + (std::hint::black_box(chase) & std::hint::black_box(0u64)) as usize
+                } else if p.run_in_pages && i > 0 {
+                    // A page of its own for each further line, from a
+                    // draw of its own, with nothing to wait for.
+                    let d = rng.next();
+                    scale32((d >> 32) as u32, p.pages) * page_bytes
+                        + scale32(d as u32, page_lines) * line_bytes
                 } else {
-                    page * PAGE + (line0 + i) * LINE
+                    page * page_bytes + (line0 + i) * line_bytes
                 };
                 let q = main.wrapping_add(at);
                 // SAFETY: inside the main buffer.
@@ -873,8 +956,12 @@ impl Worker {
         while c.nt >= 1.0 {
             let draw = rng.next();
             let page = scale32((draw >> 32) as u32, p.pages);
-            let line = scale32(draw as u32, PAGE_LINES);
-            nt_store_line(main.wrapping_add(page * PAGE + line * LINE), state[1]);
+            let line = scale32(draw as u32, page_lines);
+            nt_store_line(
+                main.wrapping_add(page * page_bytes + line * line_bytes),
+                state[1],
+                line_bytes,
+            );
             c.nt -= 1.0;
         }
         let sparse = self.buffers.sparse.as_ptr();
@@ -890,7 +977,7 @@ impl Worker {
                 }
             }
             c.sparse_at = page;
-            let q = sparse.wrapping_add(page * PAGE + (page % PAGE_LINES) * LINE);
+            let q = sparse.wrapping_add(page * page_bytes + (page % page_lines) * line_bytes);
             // SAFETY: inside the sparse buffer.
             state[2] ^= unsafe { std::ptr::read_volatile(q.cast::<u64>()) };
             c.tlb -= 1.0;
@@ -904,14 +991,14 @@ impl Worker {
         if let Some(cache) = &self.buffers.cache {
             c.kread += k.kreads;
             if c.kread >= 1.0 && c.pagebuf.is_empty() {
-                c.pagebuf = vec![0; PAGE];
+                c.pagebuf = vec![0; page_bytes];
             }
             while c.kread >= 1.0 {
                 let page = scale32((rng.next() >> 32) as u32, cache.pages);
                 // The kernel copies the page out of the page cache into the
                 // worker's buffer; a byte of it is folded in.
                 if let Ok(n) =
-                    nix::sys::uio::pread(&cache.fd, &mut c.pagebuf[..], (page * PAGE) as i64)
+                    nix::sys::uio::pread(&cache.fd, &mut c.pagebuf[..], (page * page_bytes) as i64)
                 {
                     state[3] ^= u64::from(c.pagebuf[n.saturating_sub(1)]);
                     self.stats.kreads.fetch_add(1, Ordering::Relaxed);
@@ -1083,8 +1170,53 @@ impl Drop for Generator {
 mod tests {
     use super::*;
 
+    /// The x86 geometry, which the stream arithmetic below is written
+    /// against; the streams are laid out by these numbers alone, so
+    /// they hold on a host with larger pages or lines too.
+    const GEO: Geometry = Geometry::new(4096, 64);
+    const PAGE: usize = GEO.page;
+    const LINE: usize = GEO.line;
+    const PAGE_LINES: usize = GEO.page_lines();
+
     fn small_buffers() -> Arc<Buffers> {
-        Arc::new(Buffers::new(4 << 20, false, 64, 16).unwrap())
+        Arc::new(Buffers::new(GEO, 4 << 20, false, 64, 16).unwrap())
+    }
+
+    #[test]
+    fn geometry() {
+        assert_eq!(GEO.page_lines(), 64);
+        assert_eq!(GEO.lines_max(), 64.0);
+        assert_eq!(Geometry::new(16384, 128).page_lines(), 128);
+        let scattered = GEO.runs_in_pages(true);
+        assert!(scattered.run_in_pages && scattered.page == GEO.page);
+        let host = Geometry::host(64);
+        assert_eq!(host.page, crate::measure::page_size() as usize);
+        assert!(host.page_lines() >= 64);
+        let b = Buffers::new(Geometry::new(16384, 128), 1 << 20, false, 2, 2).unwrap();
+        assert_eq!(b.sparse_capacity(), 2);
+        assert!(!b.geo.run_in_pages, "consecutive lines unless asked");
+        assert!(
+            Knobs {
+                lines: 128.0,
+                sparse_pages: 1,
+                code_pages: 1,
+                ..Knobs::default()
+            }
+            .validate(&b)
+            .is_ok()
+        );
+        assert!(
+            Knobs {
+                lines: 129.0,
+                sparse_pages: 1,
+                code_pages: 1,
+                ..Knobs::default()
+            }
+            .validate(&b)
+            .unwrap_err()
+            .0
+            .contains("at most 128")
+        );
     }
 
     #[test]
@@ -1206,22 +1338,25 @@ mod tests {
         assert_eq!(KnobError("x".into()).to_string(), "x");
     }
 
-    #[cfg(target_arch = "x86_64")]
     #[test]
     fn code_stubs_return_x_plus_one() {
-        let c = CodePages::new(8).unwrap();
-        assert_eq!(c.len(), 8);
-        assert!(!c.is_empty());
-        for i in 0..8 {
-            assert_eq!(c.call(i, 41 + i as u64), 42 + i as u64);
+        // On the host's own page size, as `run` makes them, and on a
+        // 4 KiB layout within it.
+        for page in [crate::measure::page_size() as usize, PAGE] {
+            let c = CodePages::new(8, page).unwrap();
+            assert_eq!(c.len(), 8);
+            assert!(!c.is_empty());
+            for i in 0..8 {
+                assert_eq!(c.call(i, 41 + i as u64), 42 + i as u64, "page {page}");
+            }
+            assert_ne!(CodePages::offset(1, page), CodePages::offset(2, page));
+            assert!(CodePages::offset(1000, page) + STUB.len() <= page);
+            assert_eq!(
+                c.buf.len(),
+                8 * CODE_STRIDE * page,
+                "stride reserved, gaps untouched"
+            );
         }
-        assert_ne!(CodePages::offset(1), CodePages::offset(2));
-        assert!(CodePages::offset(1000) + STUB.len() <= PAGE);
-        assert_eq!(
-            c.buf.len(),
-            8 * CODE_STRIDE * PAGE,
-            "stride reserved, gaps untouched"
-        );
     }
 
     #[test]
@@ -1497,6 +1632,43 @@ mod tests {
     }
 
     #[test]
+    fn runs_in_pages_put_each_line_in_a_page_of_its_own() {
+        let b = Arc::new(Buffers::new(GEO.runs_in_pages(true), 4 << 20, false, 64, 16).unwrap());
+        let knobs = Knobs {
+            lines: 4.0,
+            wfrac: 1.0,
+            ops: 1,
+            ..Knobs::default()
+        };
+        let w = bench_worker(&b, 0, 1, &knobs);
+        let before = line_words(&b);
+        let pace = Pace::new(&knobs, &w);
+        assert!(pace.run_in_pages);
+        let mut rng = Draws::seeded(5);
+        let mut state = [1u64, 2, 3, 4];
+        let mut c = Carry::default();
+        let mut chase = 0u64;
+        for _ in 0..200 {
+            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+        }
+        let lines = changed(&before, &b);
+        let pages: std::collections::BTreeSet<usize> =
+            lines.iter().map(|l| l / PAGE_LINES).collect();
+        assert!(
+            lines.len() > 600 && lines.len() <= 800,
+            "{} lines",
+            lines.len()
+        );
+        assert!(pages.len() > 450, "{} pages", pages.len());
+        let runs = lines
+            .windows(2)
+            .filter(|w| w[1] == w[0] + 1 && w[1] / PAGE_LINES == w[0] / PAGE_LINES)
+            .count();
+        assert!(runs < lines.len() / 8, "{runs} adjacent pairs: not a run");
+        assert!(c.dep.abs() < 1e-9, "no dependent visits were drawn");
+    }
+
+    #[test]
     fn a_run_length_below_one_visits_on_that_share_of_accesses() {
         let b = small_buffers();
         let knobs = Knobs {
@@ -1562,8 +1734,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = crate::footprint::CacheFile::create(dir.path(), 64 * PAGE as u64).unwrap();
         let map = cache.map(64 * PAGE).unwrap();
-        let b =
-            Arc::new(Buffers::with_sparse(1 << 20, false, SparseSet::File(map), 1, None).unwrap());
+        let b = Arc::new(
+            Buffers::with_sparse(GEO, 1 << 20, false, SparseSet::File(map), 1, None).unwrap(),
+        );
         assert!(b.sparse_on_file());
         assert_eq!(b.sparse_capacity(), 64);
         let knobs = Knobs {
@@ -1588,10 +1761,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut cache = crate::footprint::CacheFile::create(dir.path(), 64 * PAGE as u64).unwrap();
         cache.settle().unwrap();
-        let reader = CacheRead::new(cache.file()).unwrap();
+        let reader = CacheRead::new(cache.file(), PAGE).unwrap();
         assert_eq!(reader.pages, 64);
         let b = Arc::new(
             Buffers::with_sparse(
+                GEO,
                 1 << 20,
                 false,
                 SparseSet::Anon(AnonBuffer::new(PAGE, false).unwrap()),

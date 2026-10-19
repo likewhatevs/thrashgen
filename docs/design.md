@@ -177,7 +177,7 @@ PRNG, not from loaded data, so misses overlap.
 | `duty` | busy cores | busy fraction of each 10 ms period |
 | `cv` | burstiness | duty factor held for four wall-clock seconds at a time: within each block of 20 such plateaus, the 20 midpoint quantiles of a lognormal with mean 1 and CV `cv` (σ² = ln(1 + cv²), μ = −σ²/2), in an order seeded from the run seed and the block, so every block carries exactly the set's mean and CV and all threads move together; four seconds, since a recorder whose seconds are not the generator's averages two factors in a sample that straddles a change, which at one change a second lost a fifth of the CV on average |
 | `ops`, `chains` | instructions per access, so IPC and every per-instruction rate | `chains` independent ALU dependency chains, 0.25 to 4: a fraction mixes the two nearest of 1, 2 and 4, and below one a share of the iterations runs a long-latency square-root chain; `ops` iterations, kept alive with an empty `asm!` barrier |
-| `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer, 1/1024 to 64; below one it is the share of accesses that visit at all, so a profile with one miss per hundred thousand instructions needs no hundred thousand ops of compute per access; longer runs let the prefetcher hide latency, raising IPC at equal MPKI |
+| `lines` | L3 misses per access | consecutive lines touched in a random page of the main buffer, 1/1024 to a page's worth, 64 on x86; below one it is the share of accesses that visit at all, so a profile with one miss per hundred thousand instructions needs no hundred thousand ops of compute per access; longer runs let the prefetcher hide latency, raising IPC at equal MPKI. Where the miss event counts demand fetches only and the region prefetcher fetches the rest of a page, Apple's M2, each line of a run lands in a random page of its own instead, independent of the others, since a run of 2, 8 or 128 consecutive, strided or scattered lines in one page counted one miss: so laid out, 2 lines counted 2.0 and, with compute between visits, 8 counted 8.0, where at one op per access 8 counted 1.7 and 64 counted 11, the event undercounting dense back-to-back misses |
 | `seq` | dTLB rate down and IPC up at equal MPKI | share of visits that continue where the worker's last one ended, inside the worker's own slice of the working set, never crossing a page within a visit; a walk changes page once per 64 lines and lets the prefetcher stream |
 | `dep` | IPC down at equal MPKI | share of the random visits whose page is the PRNG draw XOR the value loaded before it, and whose further lines each land in a page of their own, each waiting for the line before, so no miss can issue until the previous one completes; lines scattered within one page would be fetched together by the region prefetcher |
 | `wset` | dTLB rate down at equal MPKI | fraction of the main buffer, from its start, that the main and non-temporal streams touch; a set of hugepage-backed memory within the first-level TLB's reach keeps missing the L3 without TLB events |
@@ -192,6 +192,18 @@ Footprint: the main buffer is anonymous memory touched once at start;
 page cache is a file of `pagecache_bytes` in a disk-backed scratch
 directory, written then read, with residency re-checked and restored;
 shmem is a `memfd`; kernel memory is empty files as in section 2.
+
+The streams are laid out on the host's geometry: the page is the
+kernel's small page, what a TLB entry covers, 4 KiB on x86 and 16 KiB
+on Apple's Linux; the line is what a miss fetches from memory, the
+cost of a miss, 64 bytes on x86 and in sysfs's `coherency_line_size`,
+128 on Apple's chips, whose L2 and system cache move 128-byte lines
+where `CTR_EL0` says 64: a second load 64 bytes into a line the
+first had missed on cost an L2 hit and no further fetch (M2 Ultra,
+2026-10-18). A run is at most a page of lines, 64 on x86 and 128 on
+Apple, and on Apple its lines are in pages of their own, as the
+`lines` row says; a page-cache read moves a page; the report's notes
+say which geometry a run used.
 
 ### 5.1 Known limits
 
@@ -222,6 +234,24 @@ stress-ng's 70 GB/s at 21 MPKI and an IPC of 0.22 is several times
 the bytes its demand misses explain, hardware prefetch and streaming
 stores the miss proxy does not count, where the generator's bytes
 follow its misses, so there the bandwidth rule waits.
+
+On Apple's M2 the limits are the event's. Its miss event counts demand
+fetches on the P cores alone, so a profile's misses per instruction
+are diluted by whatever ran on the E cores, on the recording and the
+replay alike, and a sequential reader or writer, whose lines the
+prefetchers bring in, records next to no misses at any bandwidth. At
+one op per access the event undercounts dense misses: eight
+independent lines in eight pages counted 1.7 where, with sixty-four
+ops of compute between visits, they counted 8.0, so the most counted
+misses per instruction come with compute between them, and the
+fitter's measured elasticities see what the event sees. The L2 TLB
+missed none of 2048 random pages and a quarter of 4096, some 3072
+entries of 16 KiB, and the main buffer's 32 MiB hugepages fit the
+first level, so the main stream makes next to no dTLB events, a few
+thousandths per visit, and the rate comes from the sparse set, whose
+floor of 4096 pages is 64 MiB here; and there is no bandwidth
+measurement without resctrl, so bandwidth is modelled from the
+counted misses, which the prefetched traffic is not in.
 
 ## 6. Fitting
 

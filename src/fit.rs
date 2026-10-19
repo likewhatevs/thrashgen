@@ -2,7 +2,7 @@
 //! pure functions of the last window's measurements so they can be
 //! driven against a simulated machine in tests.
 
-use crate::loadgen::{Knobs, SLOWEST_CHAINS, clipped_duty_stats};
+use crate::loadgen::{Geometry, Knobs, SLOWEST_CHAINS, clipped_duty_stats};
 use crate::profile::Targets;
 
 /// What one window measured, in profile units. Fields the tier cannot
@@ -149,6 +149,9 @@ pub struct Limits {
     pub main_pages: usize,
     /// Whether there is a page-cache file for page-cache reads.
     pub kreads_available: bool,
+    /// The page and line the streams are laid out on: the longest run
+    /// is a page of lines, and a page-cache read moves a page.
+    pub geo: Geometry,
 }
 
 /// Ops per access. The top, with the visit ceiling, keeps an access
@@ -222,12 +225,8 @@ const LINES_MIN: f64 = 1.0 / 1024.0;
 /// The most of the random visits that turn dependent, or back, in one
 /// pass.
 const DEP_STEP: f64 = 0.2;
-/// Page-cache reads per access at most: 256 KiB of copying per access.
+/// Page-cache reads per access at most: 64 pages of copying per access.
 const KREADS_MAX: f64 = 64.0;
-/// What a page-cache read moves from DRAM: the page, which a file
-/// larger than the L3 seldom has cached, as bytes and as lines missed.
-const KREAD_BYTES: f64 = 4096.0;
-const KREAD_LINES: f64 = 64.0;
 /// What a page-cache read costs the counts, measured on Zen 4 at four
 /// reads per access over a 1 GiB file on btrfs: with the kernel in the
 /// count, 1785 instructions (1664 on tmpfs) and 61 misses, the page's
@@ -652,7 +651,7 @@ impl Fitter {
         self.remember(&p);
         self.ipc_ladder(&mut p, &mut k);
         self.dilution(&p, &mut k);
-        Self::reads_back(&mut p, &mut k);
+        self.reads_back(&mut p, &mut k);
         Self::ops_rule(&p, &mut k);
         self.sparse_shrink(&p, &mut k);
         self.misses_at_floor(&p, &mut k);
@@ -995,14 +994,25 @@ impl Fitter {
         }
     }
 
+    /// What a page-cache read moves from DRAM: the page, which a file
+    /// larger than the L3 seldom has cached, as bytes and as lines
+    /// missed.
+    fn kread_bytes(&self) -> f64 {
+        self.limits.geo.page as f64
+    }
+
+    fn kread_lines(&self) -> f64 {
+        self.limits.geo.page_lines() as f64
+    }
+
     /// Page-cache reads give misses back before compute dilutes them,
     /// since they were the last lever taken: by the model, the misses
     /// over per access over the lines a page holds, damped.
-    fn reads_back(p: &mut Pass, k: &mut Knobs) {
+    fn reads_back(&self, p: &mut Pass, k: &mut Knobs) {
         if let (Some(t), Some(v), Some(ipa)) = (p.goal.mpki, p.m.mpki, p.ipa) {
             if k.kreads > 0.0 && !p.mpki_within() && v > t {
                 let over = (v - t) / 1000.0 * ipa;
-                k.kreads = (k.kreads - p.d * over / KREAD_LINES).max(0.0);
+                k.kreads = (k.kreads - p.d * over / self.kread_lines()).max(0.0);
                 p.mpki_handled = true;
             }
         }
@@ -1087,13 +1097,13 @@ impl Fitter {
                 .lines_response
                 .map_or(1.0, |e| e.max(LINES_RESPONSE_MIN));
             let step = ((t / v).ln() / response).min(std::f64::consts::LN_2);
-            k.lines = (k.lines * step.exp()).clamp(LINES_MIN, 64.0);
+            k.lines = (k.lines * step.exp()).clamp(LINES_MIN, self.limits.geo.lines_max());
         }
-        let exhausted = spent || p.knobs.lines >= 64.0;
+        let exhausted = spent || p.knobs.lines >= self.limits.geo.lines_max();
         let reads = self.kernel_counted && self.limits.kreads_available;
         if let (true, true, Some(ipa)) = (exhausted, reads, p.ipa) {
             let short = (t - v) / 1000.0 * ipa;
-            k.kreads = (k.kreads + p.d * short / KREAD_LINES).clamp(0.0, KREADS_MAX);
+            k.kreads = (k.kreads + p.d * short / self.kread_lines()).clamp(0.0, KREADS_MAX);
         }
         if exhausted && !reads {
             self.mpki_at_ceiling = true;
@@ -1149,16 +1159,17 @@ impl Fitter {
         {
             // Non-temporal lines cannot carry it: page-cache reads,
             // a page from DRAM each, by the shortfall, damped.
-            let need = (t - v) / (KREAD_BYTES * p.aps_next);
+            let need = (t - v) / (self.kread_bytes() * p.aps_next);
             let room = self.kreads_within_mpki(p);
             k.kreads = (k.kreads + (d * need).min(room)).clamp(0.0, KREADS_MAX);
         } else if v < t * (1.0 - self.tol.ratio) && !nt_fits {
             // Bandwidth waits: the lever left would take IPC with it.
         } else {
-            let per_line_now = 64.0 * m.accesses_per_s;
+            let line = self.limits.geo.line as f64;
+            let per_line_now = line * m.accesses_per_s;
             let nt_now = k.ntlines * per_line_now;
             let other_per_access = (v - nt_now).max(0.0) / m.accesses_per_s.max(1e-9);
-            let need_lines = ((t / p.aps_next - other_per_access) / 64.0).max(0.0);
+            let need_lines = ((t / p.aps_next - other_per_access) / line).max(0.0);
             let now = k.ntlines;
             k.ntlines = (now + d * (need_lines - now)).clamp(0.0, NTLINES_MAX);
         }
@@ -1166,7 +1177,7 @@ impl Fitter {
 
     /// The most page-cache reads per access that can be added before
     /// the MPKI the model predicts leaves its band: a read adds
-    /// [`KREAD_INSTRUCTIONS_ALL`] instructions and [`KREAD_LINES`]
+    /// [`KREAD_INSTRUCTIONS_ALL`] instructions and a page of lines in
     /// misses with the kernel in the count, [`KREAD_INSTRUCTIONS_USER`]
     /// and none without, so MPKI moves toward what a read is made of.
     /// Unbounded without an MPKI target or when the band is not in the
@@ -1176,7 +1187,7 @@ impl Fitter {
             return KREADS_MAX;
         };
         let (instr, misses) = if self.kernel_counted {
-            (KREAD_INSTRUCTIONS_ALL, KREAD_LINES)
+            (KREAD_INSTRUCTIONS_ALL, self.kread_lines())
         } else {
             (KREAD_INSTRUCTIONS_USER, 0.0)
         };
@@ -1319,12 +1330,15 @@ mod tests {
     use crate::loadgen::Buffers;
     use proptest::prelude::*;
 
+    /// The x86 geometry the plant's constants are written against.
+    const GEO: Geometry = Geometry::new(4096, 64);
     const LIMITS: Limits = Limits {
         sparse_capacity: 16384,
         sparse_floor: 128,
         code_capacity: 16384,
         main_pages: 262_144,
         kreads_available: true,
+        geo: GEO,
     };
 
     /// A stand-in machine: monotone in every knob the way the real one
@@ -1699,7 +1713,7 @@ mod tests {
         let mut f = Fitter::new(1, LIMITS);
         f.kernel_counted = true;
         let next = f.step(&k, &short, &goal);
-        let want = 0.5 * (1.0 / 1000.0 * 2000.0) / KREAD_LINES;
+        let want = 0.5 * (1.0 / 1000.0 * 2000.0) / GEO.page_lines() as f64;
         assert!((next.kreads - want).abs() < 1e-9, "{next:?}");
         assert_eq!(next.ops, 1, "compute is at its floor already");
         // Misses over: the reads give back first, compute stays.
@@ -1751,6 +1765,7 @@ mod tests {
             1,
             Limits {
                 kreads_available: false,
+                geo: GEO,
                 ..LIMITS
             },
         );
@@ -1801,7 +1816,7 @@ mod tests {
             ..m.clone()
         };
         let next = g.step(&k, &heavy, &goal);
-        let need = (7.0e10 - 1.0e10) / (KREAD_BYTES * 7.0e6);
+        let need = (7.0e10 - 1.0e10) / (GEO.page as f64 * 7.0e6);
         assert!((next.kreads - 0.5 * need).abs() < 1e-6, "{next:?}");
     }
 
@@ -1948,6 +1963,7 @@ mod tests {
         };
         let limits = Limits {
             kreads_available: false,
+            geo: GEO,
             ..LIMITS
         };
         // The first step takes misses to follow the run length.
@@ -2480,6 +2496,7 @@ mod tests {
                 code_capacity: 50,
                 main_pages: 256,
                 kreads_available: false,
+                geo: GEO,
             },
         );
         let k = f.initial_knobs(
@@ -2496,7 +2513,7 @@ mod tests {
         assert_eq!(k.sparse_pages, 100, "capped by capacity");
         assert_eq!(k.code_pages, 50);
         assert!(k.tlbvisits > 0.0 && k.codevisits == 0.0);
-        let b = Buffers::new(1 << 20, false, 1000, 50).unwrap();
+        let b = Buffers::new(GEO, 1 << 20, false, 1000, 50).unwrap();
         k.validate(&b).unwrap();
         let g = f.initial_knobs(
             &Goal {
@@ -2522,7 +2539,7 @@ mod tests {
             let goal = Goal { cores: Some(2.0), cv: Some(0.3), ipc: Some(1.2), mpki: Some(5.0), dram: Some(4e9), dtlb_pki: Some(2.0), itlb_pki: Some(0.1) };
             let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps, cv_samples: 300, instructions_per_s: Some(aps * 100.0) };
             let next = f.step(&k, &m, &goal);
-            let b = Buffers::new(1 << 20, false, 2048, 16384).unwrap();
+            let b = Buffers::new(GEO, 1 << 20, false, 2048, 16384).unwrap();
             prop_assert!(next.validate(&b).is_ok(), "{next:?}");
             prop_assert!(next.ops >= 1 && next.ntlines <= NTLINES_MAX);
         }

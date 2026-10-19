@@ -20,7 +20,7 @@ use crate::cpu;
 use crate::events::{Sysfs, Vendor, table_for};
 use crate::fit::{Fitter, Goal, Limits, Measured, Status, TlbRegime};
 use crate::footprint::{AnonBuffer, CacheFile, KernelFiles, ShmemBuffer, is_tmpfs};
-use crate::loadgen::{Buffers, CacheRead, Generator, Knobs, PAGE, SparseSet};
+use crate::loadgen::{Buffers, CacheRead, Generator, Geometry, Knobs, SparseSet};
 use crate::measure::{self, Scope};
 use crate::perf;
 use crate::plan::{Access, ScopeInfo, plan};
@@ -469,8 +469,13 @@ pub const CORES_WINDOW_SECONDS: usize = 2 * crate::loadgen::FACTOR_BLOCK as usiz
 /// anonymous target cannot spare the pages the configured sparse set
 /// needs, and the file has them. Pages visited there count as page
 /// cache, which the profile asked for anyway.
-pub fn sparse_from_file(anon_cap: usize, configured: usize, pagecache_bytes: u64) -> bool {
-    anon_cap < configured && pagecache_bytes >= (configured * PAGE) as u64
+pub fn sparse_from_file(
+    anon_cap: usize,
+    configured: usize,
+    pagecache_bytes: u64,
+    page: usize,
+) -> bool {
+    anon_cap < configured && pagecache_bytes >= (configured * page) as u64
 }
 
 /// Whether a `cgroup.procs` listing names `pid` and nothing else.
@@ -490,10 +495,15 @@ pub fn page_cache_reads_usable(file_bytes: u64, l3_bytes: Option<u64>) -> bool {
 /// Pages to reserve for the sparse and code streams: the configured
 /// capacities, each capped at an eighth of the anonymous target so a
 /// small footprint is not swamped by the streams' own pages.
-pub fn stream_capacities(anon_target: Option<f64>, sparse: usize, code: usize) -> (usize, usize) {
+pub fn stream_capacities(
+    anon_target: Option<f64>,
+    sparse: usize,
+    code: usize,
+    page: usize,
+) -> (usize, usize) {
     match anon_target {
         Some(anon) if anon > 0.0 => {
-            let cap = ((anon / 8.0) as usize / PAGE).max(64);
+            let cap = ((anon / 8.0) as usize / page).max(64);
             (sparse.min(cap), code.min(cap))
         }
         _ => (sparse, code),
@@ -523,8 +533,9 @@ pub fn plan_memory(
     sparse_pages: usize,
     code_pages: usize,
     main_override: Option<u64>,
+    page: usize,
 ) -> MemoryPlan {
-    let stream_pages = ((sparse_pages + code_pages) * PAGE) as u64;
+    let stream_pages = ((sparse_pages + code_pages) * page) as u64;
     let main_bytes = match (main_override, t.get("anon_bytes")) {
         (Some(m), _) => m,
         (None, Some(anon)) => (anon as u64)
@@ -554,10 +565,10 @@ pub fn plan_memory(
 
 /// DRAM traffic the generator knows it causes: reads are the counted
 /// L3 misses, writes are the non-temporal lines plus the dirty lines
-/// of the main stream written back, 64 bytes each.
-pub fn dram_model(sample: &Sample, knobs: &Knobs, accesses_per_s: f64) -> Option<f64> {
+/// of the main stream written back, a line of `line` bytes each.
+pub fn dram_model(sample: &Sample, knobs: &Knobs, accesses_per_s: f64, line: usize) -> Option<f64> {
     let misses = sample.values.get("l3_misses_per_sec")?;
-    Some(64.0 * (misses + accesses_per_s * (knobs.ntlines + knobs.wfrac * knobs.lines)))
+    Some(line as f64 * (misses + accesses_per_s * (knobs.ntlines + knobs.wfrac * knobs.lines)))
 }
 
 /// Profile units from one window's sample.
@@ -616,7 +627,11 @@ pub fn affinity_cpus() -> Result<Vec<u32>> {
 }
 
 /// Pick `n` CPUs, one per physical core first, so SMT siblings only
-/// pair up once every core is in use.
+/// pair up once every core is in use, and the fastest cores first
+/// where the host's cores differ, as the scheduler places a busy
+/// thread: on an Apple chip the E cores are numbered first, and a
+/// worker pinned to one runs at half the clock of the P core a
+/// recorded benchmark ran on.
 pub fn choose_cpus(affinity: &[u32], topo: &Topology, n: usize) -> Vec<u32> {
     let mut first: Vec<u32> = Vec::new();
     let mut rest: Vec<u32> = Vec::new();
@@ -667,6 +682,24 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
     let affinity = affinity_cpus()?;
     let mut notes: Vec<String> = Vec::new();
     notes.extend(memory_limit_note(targets));
+    // The line a miss fetches: the table's where it knows better than
+    // sysfs, else what sysfs reports, else the common 64 bytes.
+    let line = table
+        .and_then(|t| t.memory_line)
+        .or_else(|| topo.line_bytes().map(|b| b as usize))
+        .unwrap_or(64);
+    let demand_only = table.is_some_and(|t| t.demand_misses_only);
+    let geo = Geometry::host(line).runs_in_pages(demand_only);
+    notes.push(format!(
+        "streams laid out on {}-byte pages and {}-byte lines{}",
+        geo.page,
+        geo.line,
+        if geo.run_in_pages {
+            ", a run's lines each in a page of their own"
+        } else {
+            ""
+        }
+    ));
 
     let threads = settings
         .threads
@@ -709,6 +742,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         targets.get("anon_bytes"),
         settings.sparse_capacity,
         settings.code_capacity,
+        geo.page,
     );
     let mem_plan = plan_memory(
         targets,
@@ -716,6 +750,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         sparse_capacity,
         code_capacity,
         settings.main_bytes,
+        geo.page,
     );
     if mem_plan.pagecache_bytes > 0 && is_tmpfs(&settings.scratch_dir).unwrap_or(false) {
         notes.push(format!(
@@ -736,6 +771,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             sparse_capacity,
             settings.sparse_capacity,
             mem_plan.pagecache_bytes,
+            geo.page,
         )
     });
     let sparse = match on_file {
@@ -745,17 +781,18 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 settings.sparse_capacity
             ));
             SparseSet::File(
-                c.map(settings.sparse_capacity * PAGE)
+                c.map(settings.sparse_capacity * geo.page)
                     .context("map the page-cache file for the sparse stream")?,
             )
         }
         None => SparseSet::Anon(
-            crate::footprint::AnonBuffer::new(sparse_capacity.max(1) * PAGE, false)
+            crate::footprint::AnonBuffer::new(sparse_capacity.max(1) * geo.page, false)
                 .context("allocate the sparse buffer")?,
         ),
     };
     let buffers = Arc::new(
         Buffers::with_sparse(
+            geo,
             mem_plan.main_bytes as usize,
             settings.huge,
             sparse,
@@ -763,8 +800,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             // A page-cache target below a page leaves nothing to read.
             cache
                 .as_ref()
-                .filter(|c| c.len() >= PAGE as u64)
-                .map(|c| CacheRead::new(c.file()))
+                .filter(|c| c.len() >= geo.page as u64)
+                .map(|c| CacheRead::new(c.file(), geo.page))
                 .transpose()
                 .context("open the page-cache file for reads")?,
         )
@@ -901,13 +938,15 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
         .min(buffers.sparse_capacity())
         .max(1),
         code_capacity: buffers.code_capacity(),
-        main_pages: buffers.main().len() / PAGE,
+        main_pages: buffers.main().len() / geo.page,
         kreads_available: buffers.has_cache() && kreads_usable,
+        geo,
     };
     let mut fitter = Fitter::new(threads, limits);
-    fitter.proxy_misses = provenance
-        .get("l3_misses_per_sec")
-        .is_some_and(|p| p.method == Method::Proxy);
+    fitter.proxy_misses = demand_only
+        || provenance
+            .get("l3_misses_per_sec")
+            .is_some_and(|p| p.method == Method::Proxy);
     fitter.kernel_counted = provenance
         .get("l3_misses_per_sec")
         .is_some_and(|p| p.mode == Mode::All);
@@ -1021,7 +1060,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     .values
                     .get("dram_bytes_per_sec")
                     .copied()
-                    .or_else(|| dram_model(&sample, &knobs, aps));
+                    .or_else(|| dram_model(&sample, &knobs, aps, geo.line));
                 let mut m = measured_from(&sample, cv_pred, aps, dram);
                 m.cv_samples = cores_window.len();
                 if cores_pred.is_some() {
@@ -1445,34 +1484,48 @@ mod tests {
 
     #[test]
     fn the_sparse_set_moves_to_the_page_cache_file_when_anon_cannot_spare_it() {
-        assert!(sparse_from_file(103, 16384, 1 << 30));
+        const PAGE: usize = 4096;
+        assert!(sparse_from_file(103, 16384, 1 << 30, PAGE));
         assert!(
-            !sparse_from_file(16384, 16384, 1 << 30),
+            !sparse_from_file(16384, 16384, 1 << 30, PAGE),
             "anon has the pages"
         );
         assert!(
-            !sparse_from_file(103, 16384, 1 << 20),
+            !sparse_from_file(103, 16384, 1 << 20, PAGE),
             "the file is too small"
         );
-        assert!(!sparse_from_file(103, 16384, 0), "no file at all");
+        assert!(!sparse_from_file(103, 16384, 0, PAGE), "no file at all");
+        assert!(
+            !sparse_from_file(103, 16384, 1 << 26, 16384),
+            "64 MiB holds 16384 pages of 4 KiB, not of 16 KiB"
+        );
     }
 
     #[test]
     fn stream_capacities_follow_the_anonymous_target() {
-        assert_eq!(stream_capacities(None, 16384, 16384), (16384, 16384));
-        assert_eq!(stream_capacities(Some(0.0), 16384, 16384), (16384, 16384));
+        const PAGE: usize = 4096;
+        assert_eq!(stream_capacities(None, 16384, 16384, PAGE), (16384, 16384));
         assert_eq!(
-            stream_capacities(Some(42.0e6), 16384, 16384),
+            stream_capacities(Some(0.0), 16384, 16384, PAGE),
+            (16384, 16384)
+        );
+        assert_eq!(
+            stream_capacities(Some(42.0e6), 16384, 16384, 16384),
+            (320, 320),
+            "an eighth of 42 MB in 16 KiB pages"
+        );
+        assert_eq!(
+            stream_capacities(Some(42.0e6), 16384, 16384, PAGE),
             (1281, 1281),
             "an eighth of 42 MB in pages"
         );
         assert_eq!(
-            stream_capacities(Some(1.0e5), 16384, 16384),
+            stream_capacities(Some(1.0e5), 16384, 16384, PAGE),
             (64, 64),
             "never below 64 pages"
         );
         assert_eq!(
-            stream_capacities(Some(8.0e9), 16384, 100),
+            stream_capacities(Some(8.0e9), 16384, 100, PAGE),
             (16384, 100),
             "settings cap too"
         );
@@ -1480,8 +1533,9 @@ mod tests {
 
     #[test]
     fn memory_planning() {
+        const PAGE: usize = 4096;
         let mut t = Targets::new();
-        let p = plan_memory(&t, 10 << 20, 100, 100, None);
+        let p = plan_memory(&t, 10 << 20, 100, 100, None, PAGE);
         assert_eq!(
             p,
             MemoryPlan {
@@ -1492,16 +1546,16 @@ mod tests {
             }
         );
         t.set("anon_bytes", 100.0 * f64::from(1 << 20)).unwrap();
-        let p = plan_memory(&t, 10 << 20, 1024, 1024, None);
+        let p = plan_memory(&t, 10 << 20, 1024, 1024, None, PAGE);
         assert_eq!(p.main_bytes, (100 << 20) - (10 << 20) - 2048 * PAGE as u64);
         t.set("anon_bytes", 1.0).unwrap();
         assert_eq!(
-            plan_memory(&t, 10 << 20, 1, 1, None).main_bytes,
+            plan_memory(&t, 10 << 20, 1, 1, None, PAGE).main_bytes,
             MIN_MAIN_BYTES,
             "floored"
         );
         assert_eq!(
-            plan_memory(&t, 0, 1, 1, Some(5 << 20)).main_bytes,
+            plan_memory(&t, 0, 1, 1, Some(5 << 20), PAGE).main_bytes,
             5 << 20,
             "override wins"
         );
@@ -1509,14 +1563,14 @@ mod tests {
         t.set("shmem_bytes", 2.0e6).unwrap();
         t.set("memory_current_bytes", 5.0e6 + 1.0 + 1_100_000.0)
             .unwrap();
-        let p = plan_memory(&t, 0, 1, 1, None);
+        let p = plan_memory(&t, 0, 1, 1, None, PAGE);
         assert_eq!(
             (p.pagecache_bytes, p.shmem_bytes, p.kernel_files),
             (3_000_000, 2_000_000, 1000)
         );
         t.set("memory_current_bytes", 1.0).unwrap();
         assert_eq!(
-            plan_memory(&t, 0, 1, 1, None).kernel_files,
+            plan_memory(&t, 0, 1, 1, None, PAGE).kernel_files,
             0,
             "no negative kernel memory"
         );
@@ -1641,7 +1695,12 @@ mod tests {
             lines: 4.0,
             ..Knobs::default()
         };
-        let model = dram_model(&sample, &knobs, 1.0e5).unwrap();
+        let model = dram_model(&sample, &knobs, 1.0e5, 64).unwrap();
+        assert_eq!(
+            dram_model(&sample, &knobs, 1.0e5, 128).unwrap(),
+            2.0 * model,
+            "twice the bytes per line"
+        );
         assert_eq!(model, 64.0 * (2.0e6 + 1.0e5 * (2.0 + 2.0)));
         let m = measured_from(&sample, Some(0.2), 1.0e5, Some(model));
         assert_eq!(m.cores, Some(2.0));
@@ -1658,7 +1717,7 @@ mod tests {
             dt: 1.0,
             values: BTreeMap::new(),
         };
-        assert_eq!(dram_model(&empty, &knobs, 1.0), None);
+        assert_eq!(dram_model(&empty, &knobs, 1.0, 64), None);
         let m = measured_from(&empty, None, 0.0, None);
         assert_eq!(m, Measured::default());
     }
