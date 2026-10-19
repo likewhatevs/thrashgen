@@ -1274,7 +1274,12 @@ impl Fitter {
         let (Some(t), Some(v)) = (goal.dram, m.dram) else {
             return;
         };
-        if !(p.aps_next > 0.0 && ratios_within) {
+        // Within tolerance, the absolute floor included, the rule rests:
+        // against the relative band alone a 6.5 MB/s target read at 24
+        // MB/s, inside the 100 MB/s floor, halved the write share on
+        // every pass another target made (sysbench under resctrl, Zen 4,
+        // 2026-10-19).
+        if p.within("dram_bytes_per_sec") || !(p.aps_next > 0.0 && ratios_within) {
             return;
         }
         if v < t * (1.0 - self.tol.ratio) && k.wfrac < 1.0 {
@@ -2084,6 +2089,47 @@ mod tests {
         );
         let next = without.step(&k, &m, &goal);
         assert_eq!((next.kreads, next.ntlines), (0.0, 0.0), "{next:?}");
+    }
+
+    #[test]
+    fn bandwidth_rests_inside_its_absolute_floor() {
+        // A tiny bandwidth target read at four times itself but well
+        // inside the 100 MB/s floor, while the dTLB rate keeps the pass
+        // alive: the write share and the lines stay put.
+        let goal = Goal {
+            ipc: Some(1.5),
+            mpki: Some(0.0001),
+            dram: Some(6.5e6),
+            dtlb_pki: Some(0.002),
+            ..Goal::default()
+        };
+        let k = Knobs {
+            ops: 4900,
+            chains: 1.66,
+            lines: 0.856,
+            wset: 0.25,
+            wfrac: 0.25,
+            sparse_pages: 256,
+            code_pages: 16384,
+            ..Knobs::default()
+        };
+        let m = Measured {
+            ipc: Some(1.5),
+            mpki: Some(0.0002),
+            dram: Some(2.4e7),
+            dtlb_pki: Some(0.07),
+            accesses_per_s: 1.0e5,
+            instructions_per_s: Some(3.0e9),
+            factor: None,
+            ..Measured::default()
+        };
+        let mut f = Fitter::new(4, LIMITS);
+        let st = f.statuses(&m, &goal);
+        assert!(st.iter().any(|s| s.key == "dram_bytes_per_sec" && s.within));
+        assert!(st.iter().any(|s| s.key == "dtlb_pki" && !s.within));
+        let next = f.step(&k, &m, &goal);
+        assert_eq!(next.wfrac, k.wfrac, "{next:?}");
+        assert_eq!(next.ntlines, 0.0);
     }
 
     #[test]
