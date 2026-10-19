@@ -20,7 +20,7 @@ Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 | neighbours: three profiles at once, twelve instances, a neighbour coming and going | `MODE=noisy`, `MODE=crowd` at `33ffb22`, `MODE=disturbed` at `d393c34`, 2026-10-19 | `docs/experiments.md`: with two neighbours TaoBench lands every field and stress-ng everything but its floor, schbench's IPC 6 percent over; a full host takes schbench's IPC to 2.93 from 3.74, a sibling sharing each core, TaoBench's four copies land every field and stress-ng's hold a compromise on a saturated bus; a fit follows a neighbour's arrival and departure within about a second and is back within on every reachable field once it has left, its re-fit bounded by the hold for lack of progress and the renewal of a hold whose targets go much further out |
 | end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `perfmon`, 2026-10-19 at `33ffb22` on a quiet host | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.4 to 0.7 s, TaoBench's re-fits under resctrl and the L3 PMU holding their closest pass after six passes without progress, everything within; fio 10 of 10 in user and kernel mode, 9 of 10 under resctrl (MPKI) and under the L3 PMU (MPKI a third over); stress-ng 9 of 10 but for its dTLB floor, 9 of 11 under resctrl where its 70 GB/s is beyond its counted misses, 8 under the L3 PMU; measured bandwidth within for every profile that can reach it, 4 percent under for TaoBench |
 
-## Verified on an Apple M2 Ultra, as of 2026-10-18
+## Verified on an Apple M2 Ultra, as of 2026-10-19
 
 Asahi Linux 7.1 with 16 KiB pages (`aarch64+16k`), 24 cores in two
 classes, 16 Avalanche P cores and 8 Blizzard E cores, each class with
@@ -44,14 +44,15 @@ What differed from the x86 assumptions, and what was done about it:
 
 | claim | how | result |
 | --- | --- | --- |
-| unit, fixture, CLI and plot tests | `cargo test` | 191 pass |
+| unit, fixture, CLI and plot tests | `cargo test`, 2026-10-19 at `57081ab` | 197 pass |
 | lints | `cargo fmt --check`, clippy with and without the features | clean |
-| counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | 183 unit and 13 CLI tests pass, the fit of IPC 0.8, 8 MPKI, 1 dTLB and 0.05 iTLB events per thousand on real hardware among them |
+| counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | 189 unit and 13 CLI tests pass, the fit of IPC 0.8, 8 MPKI, 1 dTLB and 0.05 iTLB events per thousand on real hardware among them |
+| the generator's per-unit costs with the access path compiled per geometry | `experiments/levers.sh` on this build and on `7e9fcdb`, the build before, twice each, back to back, 2026-10-19, and fixed-knob runs of both | events per unit the same within the run-to-run spread: 1.003 L2 TLB misses a sparse visit, 8.0 counted misses for eight lines in pages of their own with 64 ops between visits in both builds, 1.0 counted miss an access with eight non-temporal lines, none from the lines themselves; a stub call 1.0 to 1.4 demand L1 iTLB misses from one run to the next on either build, at one call in two hundred accesses and at one in twenty alike, where within a run the rate holds to a percent. Instructions per unit fell: a line of a run 26 (1 to 8) and 23 (8 to 64) against 43 and 42, a sparse visit 11.9 against 14.9, a stub call 24 against 41, a non-temporal line 31 against 76, a page-cache read 115 in user mode in both, an op 3.45 against 3.37. The access itself at one op and no lever costs 90 instructions on this build against 60 on the old, and with 64 ops and a stub call on one access in twenty 250, 261 and 280 on the old build, a one-line variant of this one and this one: codegen on this target moves the fixed cost per access by tens of instructions from build to build, which the fitter's measured instructions per access absorb and the per-unit figures above do not include |
 | the code stubs with their instruction-cache maintenance, the `stnp` stores, the sparse walk on 16 KiB pages | the code-pages test, now on both architectures, and fixed-knob runs: 1.2 iTLB events and 1.0 L2 TLB misses per visit, 1.0 counted miss per non-temporal line's access at IPC 1.4 | pass |
 | a fit of IPC 0.8, 8 MPKI, 1 dTLB and 0.05 iTLB events per thousand on two P cores | `run --set ...` for 8 s | every target within by the fifth pass, 1 s |
 | root tests | the lib test binary run as root | per-CPU counters open; the AMD L3 filter test and the resctrl group test fail by design, this host having neither |
-| end-to-end replays | `experiments/all.sh` with `MODE=user` | `docs/experiments.md`: schbench, sysbench, TaoBench and stress-ng within tolerance on every field, converged in 0.3 to 1.3 s; fio 7 of 10 (open item 3, with one thread for its 0.2 cores) |
-| end-to-end replays, the other modes | `MODE=kernel`, `perfmon`, `noisy`, `crowd`, `disturbed`; `resctrl` cannot run here | `docs/experiments.md`: kernel 10, 9, 10, 10 and 7 of 10 for schbench, sysbench, TaoBench, stress-ng and fio; perfmon 10, 9, 9, 10, 6; noisy 8, 10, 10 for schbench, TaoBench, stress-ng; crowd, twelve instances on twenty-four cores, 7 to 8 of 10 each at a fair share of the cores; disturbed within on every field beside the neighbour and after it |
+| end-to-end replays | `experiments/all.sh` with `MODE=user`, 2026-10-19 at `57081ab` | `docs/experiments.md`: stress-ng within tolerance on every field; schbench, sysbench and TaoBench on every ratio, converged in 0.3 to 1.5 s, the memory total of the two small processes a floor over and TaoBench's iTLB rate 5 percent over; fio 9 of 10, its iTLB rate 47 percent over (open item 7) |
+| end-to-end replays, the other modes | `MODE=kernel`, `perfmon`, `noisy`, `crowd`, `disturbed`, 2026-10-19 at `57081ab`; `resctrl` cannot run here | `docs/experiments.md`: kernel 10, 9, 10, 10 and 8 of 10 for schbench, sysbench, TaoBench, stress-ng and fio; perfmon 10, 9, 10, 10, 5, fio's kernel-mode profile out of reach without a page-cache lever (open item 3); noisy 10 of 10 for all three; crowd, twelve instances on twenty-four cores, 8, 6 to 7 and 8 of 10 at a fair share of the cores; disturbed within on every field beside the neighbour and after it |
 
 Not verified anywhere:
 
@@ -182,17 +183,33 @@ Zen 4 host; the M2 Ultra's are between.
    counted misses on this host, and the ops rule, which divides by the
    target, never moved: the first user-mode chain left its replay at
    15 MPKI and an IPC of 0.86 against 2.0. The rule now aims at half
-   the absolute floor; the same guard may be wanted wherever a rule
-   divides by a target that a host can record as zero.
-7. **Stub calls at a low rate.** The instruction-side L2 TLB miss and
+   the absolute floor and stress-ng lands every field in every mode;
+   the same guard may be wanted wherever a rule divides by a target
+   that a host can record as zero.
+7. **Stub calls on this host.** The instruction-side L2 TLB miss and
    walk events count speculative fetches, and at a call on one access
    in two hundred they came in bursts of hundreds per call for
-   seconds at a time; the demand L1 miss event holds at 1.2 per call
-   and is what the table uses. Whether the bursts are the front end
-   fetching a stale predicted target is not known; a call to a hot
-   page on every access did not quiet them.
+   seconds at a time; the demand L1 miss event holds within a run and
+   is what the table uses, but reads 1.0 to 1.4 per call from one run
+   to the next at the same knobs (2026-10-19), so the rate a fit lands
+   is not the rate its hold reads: TaoBench's and fio's iTLB rates in
+   user mode, 5 and 47 percent over. The stream sets' floor of 2 MiB
+   each is 128 pages here against 512 on 4 KiB pages, and 128 stub
+   pages are within the L1 iTLB's reach, so a call brings a hundredth
+   of the events it would past it and fio's replay makes 39 calls an
+   access; a floor in pages rather than bytes would give the lever
+   back. Whether the bursts are the front end fetching a stale
+   predicted target is not known; a call to a hot page on every
+   access did not quiet them.
+8. **The page-cache lever needs an L3 size.** Page-cache reads are a
+   lever only over a file larger than the L3, and sysfs on this host
+   lists no L3, so the reads are never a lever and a profile whose
+   misses are the kernel's copies, fio's with the kernel counted, is
+   out of reach: 8 of 10 in kernel mode and 5 under `CAP_PERFMON`. The
+   system cache is 48 MiB a die; a table of it per chip, or a probe
+   of the miss rate against the file size, would let the lever in.
 
-8. **The L3 PMU counts the whole domain.** Under `CAP_PERFMON` the
+9. **The L3 PMU counts the whole domain.** Under `CAP_PERFMON` the
    recorder's L3 misses come from the L3 PMU filtered to the scope's
    cores, and a cgroup that may run anywhere has every core, so any
    neighbour's misses land in the recording and the replay alike: an
@@ -200,7 +217,7 @@ Zen 4 host; the M2 Ultra's are between.
    sysbench read 5.7 misses per thousand instructions where it reads
    0.05 alone. The mode needs a quiet host or a pinned cgroup; the
    recorder could say which it had.
-9. **Kernel memory that does not come back.** The empty files that
+10. **Kernel memory that does not come back.** The empty files that
    stand in for kernel memory cost more slab than estimated on btrfs,
    and when the closed loop removes them the slab is not reclaimed
    during a quiet hold: sysbench's replay under resctrl ended 9 MiB

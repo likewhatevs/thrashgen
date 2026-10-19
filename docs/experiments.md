@@ -265,15 +265,21 @@ of its departure.
 
 ## Results on an Apple M2 Ultra
 
-Run on 2026-10-18 on the Apple M2 Ultra described in `docs/status.md`,
-16 Avalanche P cores and 8 Blizzard E cores under Asahi Linux 7.1
-with 16 KiB pages, the same harness and settings. The host's PMU
-counts L3 misses on the P cores only and none a prefetcher brought in,
-so a sequential writer records next to none at any bandwidth, as
-stress-ng does here; there is no resctrl, so the `resctrl` mode did
-not run and bandwidth is modelled on every row. The data is under
-`docs/experiments/apple-m2-ultra/<mode>/`, the figures under
-`docs/experiments/apple-m2-ultra/plots/`.
+Run on 2026-10-19 at `57081ab` on the Apple M2 Ultra described in
+`docs/status.md`, 16 Avalanche P cores and 8 Blizzard E cores under
+Asahi Linux 7.1 with 16 KiB pages, the same harness and settings, on
+a host idle but for its monitoring daemon. The host's PMU counts L3
+misses on the P cores only and none a prefetcher brought in, so a
+sequential writer records next to none at any bandwidth, as stress-ng
+does here; there is no resctrl, so the `resctrl` mode did not run and
+bandwidth is modelled on every row; and sysfs lists no L3, so the
+page-cache reads are not a lever and a profile whose misses are the
+kernel's copies, fio's with the kernel counted, is out of reach. The
+data is under `docs/experiments/apple-m2-ultra/<mode>/`, the figures
+under `docs/experiments/apple-m2-ultra/plots/`. A first chain on
+2026-10-18 at `7e9fcdb`, before the access path was compiled per
+geometry and the fitter judged a bursty profile at its long-run
+factor, is in that commit; what moved is said under each table.
 
 ![Fields within tolerance per benchmark and mode on the M2 Ultra](experiments/apple-m2-ultra/plots/within.png)
 
@@ -285,55 +291,94 @@ not run and bandwidth is modelled on every row. The data is under
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
-| sysbench | 10 of 10 | 3 passes, 0.4 s | nothing |
-| taobench | 10 of 10 | 12 passes, 1.3 s | nothing |
+| schbench | 9 of 10 | 2 passes, 0.3 s | memory 26.2 MiB vs 16.4 MiB |
+| sysbench | 9 of 10 | 4 passes, 0.5 s | memory 15.1 MiB vs 5.3 MiB |
+| taobench | 9 of 10 | 14 passes, 1.5 s | iTLB 1.94 vs 1.84 |
 | stress-ng | 10 of 10 | 5 passes, 0.6 s | nothing |
-| fio | 7 of 10 | 24 passes, 3.9 s | cores 0.139 vs 0.204, burstiness 1.58 vs 1.44, iTLB 0.538 vs 0.613 |
+| fio | 9 of 10 | 12 passes, 4.3 s | iTLB 1.18 vs 0.805 |
 
 ![user mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/user/summary.svg)
 
 ![user mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-user.png)
 
+Against the chain of 2026-10-18: fio went from 7 to 9 of 10, its
+cores and burstiness now within, as its recording starts once its
+reads are cached and reads a burstiness of 0.24 where a cold file
+read 1.44, and the fit judges it at its long-run factor. schbench and
+sysbench lost their memory total: the sparse and code sets now take a
+quarter of the memory tolerance each, 2 MiB, which on 16 KiB pages
+with the tool's own baseline puts the replay 10 MiB over a process of
+16 or 5 MiB, past the 8 MiB floor; the components are within. The
+iTLB rates of TaoBench and fio, 5 and 47 percent over, are the stub
+call's: on this host a call's demand L1 iTLB misses read 1.0 to 1.4
+from one run to the next at the same knobs, so the rate a fit lands
+is not the rate its hold reads, and fio's code set of 2 MiB is 128
+pages here, which the L1 iTLB holds, so each call brings a hundredth
+of the events a page past the reach would and the replay makes 39
+calls an access to reach the rate.
+
 ### `kernel`: both recordings count kernel mode
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
-| sysbench | 9 of 10 | 4 passes, 0.5 s | memory 12.4 MiB vs 2.8 MiB |
-| taobench | 10 of 10 | 13 passes, 1.4 s | nothing |
+| schbench | 10 of 10 | 4 passes, 1.7 s | nothing |
+| sysbench | 9 of 10 | 2 passes, 0.3 s | memory 11.9 MiB vs 2.9 MiB |
+| taobench | 10 of 10 | 11 passes, 1.2 s | nothing |
 | stress-ng | 10 of 10 | 6 passes, 0.7 s | nothing |
-| fio | 7 of 10 | held, 36 passes by 5.0 s | burstiness 1.07 vs 1.20, dTLB 0.329 vs 0.360, iTLB 1.15 vs 0.866 |
+| fio | 8 of 10 | 32 passes, still moving at 10 s | IPC 3.04 vs 1.67, MPKI 0.032 vs 0.164 |
 
 ![kernel mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/kernel/summary.svg)
 
 ![kernel mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-kernel.png)
+
+fio's profile here has the kernel's misses from its page-cache
+copies, 0.16 per thousand instructions at an IPC of 1.67, and the
+replay's lever for them, page-cache reads, is not a lever on this
+host, since sysfs lists no L3 to size the file against. The fit
+reaches the generator's ceiling at one op and says so, was still
+moving at 10 s, and the hold ran its closest pass, a compute-bound
+point at an IPC of 3.0; on 2026-10-18 the hold had landed IPC and
+missed the TLB rates instead. The rest is as before: schbench,
+TaoBench and stress-ng within on every field, sysbench's memory total
+over for the same reason as in user mode.
 
 ### `perfmon`: `CAP_PERFMON`
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
 | schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
-| sysbench | 9 of 10 | 3 passes, 0.4 s | memory 15.6 MiB vs 5.9 MiB |
-| taobench | 9 of 10 | 13 passes, 1.4 s | iTLB 3.59 vs 3.40 |
+| sysbench | 9 of 10 | 3 passes, 0.5 s | memory 15.7 MiB vs 2.8 MiB |
+| taobench | 10 of 10 | 13 passes, 1.4 s | nothing |
 | stress-ng | 10 of 10 | 5 passes, 0.6 s | nothing |
-| fio | 6 of 10 | 21 passes, still moving at 10 s | IPC 1.61 vs 1.73, MPKI 0.016 vs 0.115, dTLB 0.387 vs 0.358, iTLB 1.91 vs 0.895 |
+| fio | 5 of 10 | held, 72 passes by 8.4 s | burstiness 0.312 vs 0.335, IPC 1.41 vs 1.66, MPKI 0.0098 vs 0.123, dTLB 0.343 vs 0.387, iTLB 1.65 vs 1.03 |
 
 ![perfmon mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/perfmon/summary.svg)
 
 ![perfmon mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-perfmon.png)
 
+TaoBench is back within on its iTLB rate, 5 percent over on
+2026-10-18, the same run-to-run spread the other way. fio, with the
+kernel counted and no page-cache lever, held its closest pass after
+36 passes, had a target it met go out, spent a renewed budget and
+held again after 72: 5 of 10, where the first chain's fit was still
+moving at 10 s and landed 6.
+
 ### `noisy`: three profiles at once
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench | 8 of 10 | 3 passes, 2.7 s | MPKI 0.084 vs 0.0034, memory 27.6 MiB vs 19.0 MiB |
-| taobench | 10 of 10 | 13 passes, 1.4 s | nothing |
+| schbench | 10 of 10 | 4 passes, 2.4 s | nothing |
+| taobench | 10 of 10 | 14 passes, 1.5 s | nothing |
 | stress-ng | 10 of 10 | 6 passes, 0.7 s | nothing |
 
 ![noisy mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/noisy/summary.svg)
 
 ![noisy mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-noisy.png)
+
+Every field of every profile within, where on 2026-10-18 schbench's
+MPKI read 0.084 against 0.0034 beside its neighbours and its memory
+total was over: the neighbours' lines in the shared system cache are
+not there in every run.
 
 ### `crowd`: four copies of three profiles, twelve instances on twenty-four cores
 
@@ -344,59 +389,72 @@ burstiness of the contention.
 
 | benchmark | within | fit | what missed |
 | --- | --- | --- | --- |
-| schbench-1 | 8 of 10 | 6 passes, still moving at 10 s | cores 2.85 vs 7.98, burstiness 0.177 vs 0.0009 |
-| schbench-2 | 8 of 10 | 6 passes, still moving at 10 s | cores 3.24 vs 7.98, burstiness 0.180 vs 0.0009 |
-| schbench-3 | 8 of 10 | 6 passes, still moving at 10 s | cores 3.00 vs 7.98, burstiness 0.164 vs 0.0009 |
-| schbench-4 | 8 of 10 | 6 passes, still moving at 10 s | cores 3.01 vs 7.98, burstiness 0.189 vs 0.0009 |
-| taobench-1 | 8 of 10 | 16 passes, 3.5 s | cores 1.23 vs 3.27, burstiness 0.200 vs 0.049 |
-| taobench-2 | 7 of 10 | 19 passes, 3.9 s | cores 1.16 vs 3.27, burstiness 0.184 vs 0.049, MPKI 1.44 vs 1.53 |
-| taobench-3 | 8 of 10 | 53 passes, 6.8 s | cores 1.28 vs 3.27, burstiness 0.252 vs 0.049 |
-| taobench-4 | 8 of 10 | 14 passes, 3.6 s | cores 1.25 vs 3.27, burstiness 0.231 vs 0.049 |
-| stress-ng-1 | 8 of 10 | 15 passes, still moving at 10 s | cores 1.51 vs 3.98, burstiness 0.291 vs 0.0002 |
-| stress-ng-2 | 8 of 10 | 16 passes, still moving at 10 s | cores 1.92 vs 3.98, burstiness 0.192 vs 0.0002 |
-| stress-ng-3 | 7 of 10 | 15 passes, still moving at 10 s | cores 1.57 vs 3.98, burstiness 0.296 vs 0.0002, IPC 1.58 vs 1.67 |
-| stress-ng-4 | 8 of 10 | 15 passes, still moving at 10 s | cores 1.87 vs 3.98, burstiness 0.228 vs 0.0002 |
+| schbench-1 | 8 of 10 | 6 passes, still moving at 10 s | cores 2.81 vs 7.98, burstiness 0.168 vs 0.0007 |
+| schbench-2 | 8 of 10 | 6 passes, still moving at 10 s | cores 2.86 vs 7.98, burstiness 0.222 vs 0.0007 |
+| schbench-3 | 8 of 10 | 7 passes, still moving at 10 s | cores 2.69 vs 7.98, burstiness 0.143 vs 0.0007 |
+| schbench-4 | 8 of 10 | 7 passes, still moving at 10 s | cores 2.96 vs 7.98, burstiness 0.151 vs 0.0007 |
+| taobench-1 | 6 of 10 | held, 32 passes by 7.6 s | cores 1.28 vs 3.24, burstiness 0.281 vs 0.045, MPKI 0.942 vs 1.25, iTLB 2.30 vs 1.84 |
+| taobench-2 | 6 of 10 | held, 34 passes by 9.9 s | cores 1.41 vs 3.24, burstiness 0.312 vs 0.045, MPKI 1.10 vs 1.25, iTLB 1.72 vs 1.84 |
+| taobench-3 | 6 of 10 | 21 passes, still moving at 10 s | cores 1.34 vs 3.24, burstiness 0.218 vs 0.045, MPKI 1.12 vs 1.25, iTLB 1.69 vs 1.84 |
+| taobench-4 | 7 of 10 | held, 29 passes by 9.7 s | cores 1.35 vs 3.24, burstiness 0.256 vs 0.045, MPKI 1.11 vs 1.25 |
+| stress-ng-1 | 8 of 10 | held, 15 passes by 4.4 s | cores 1.88 vs 3.98, burstiness 0.271 vs 0.0002 |
+| stress-ng-2 | 8 of 10 | 15 passes, still moving at 10 s | cores 1.92 vs 3.98, burstiness 0.260 vs 0.0002 |
+| stress-ng-3 | 8 of 10 | 15 passes, still moving at 10 s | cores 1.79 vs 3.98, burstiness 0.226 vs 0.0002 |
+| stress-ng-4 | 8 of 10 | 15 passes, still moving at 10 s | cores 1.59 vs 3.98, burstiness 0.259 vs 0.0002 |
 
 ![crowd mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/crowd/summary.svg)
+
+schbench's and stress-ng's copies land what they landed on
+2026-10-18, the ratios at a third to a half of their cores. TaoBench's
+copies went from 7 to 8 of 10 to 6 to 7: three of the four now hold
+after six passes without progress, the rule the Zen 4 host added for
+a fit beside a neighbour, and the pass they hold has MPKI 10 to 25
+percent short and the iTLB rate out, where the first chain's fits
+kept moving to 10 s and landed MPKI on three copies. On a host filled
+two and a half times over what is out is out of reach at any pass,
+and which pass is closest depends on which seconds of the contention
+it saw.
 
 ### `disturbed`: a live fit while stress-ng comes and goes
 
 | profile | alone | beside | after |
 | --- | --- | --- | --- |
-| schbench | 9 of 10: memory 30.5 MiB vs 19.0 MiB | 10 of 10 | 10 of 10 |
-| taobench | 9 of 10: burstiness 0.025 vs 0.049 | 10 of 10 | 10 of 10 |
+| schbench | 9 of 10: memory 26.0 MiB vs 16.4 MiB | 10 of 10 | 10 of 10 |
+| taobench | 9 of 10: burstiness 0.021 vs 0.045 | 10 of 10 | 10 of 10 |
 | stress-ng | 10 of 10 | 10 of 10 | 10 of 10 |
 
 ![disturbed mode on the M2 Ultra: each live fit's IPC, MPKI and dTLB rate over its hundred seconds](experiments/apple-m2-ultra/plots/disturbed.png)
 
+As on 2026-10-18: every profile within on every field beside the
+neighbour and after it, schbench's memory total and TaoBench's
+burstiness a floor out in the phase alone.
+
 What the M2 Ultra adds to the reading below:
 
 - **The converging profiles converge as fast as on Zen 4**, schbench
-  and sysbench in 0.3 to 0.5 s and TaoBench in 1.3 to 1.4 s in every
-  mode, and land every field within in user and kernel mode. stress-ng
-  joins them here: with its sequential writes prefetched and the miss
-  event counting none of them, its profile asks for an IPC of 1.7 to
-  2.0 at zero misses, which is compute, and the fit lands it in 0.6 to
-  0.7 s once the ops rule aimed inside the floor rather than at zero.
-- **fio stays the hard one**, 6 to 7 of 10 in every mode: one thread
-  for its 0.2 cores with a burstiness of 1.4, judged one plateau at a
-  time (`docs/status.md`, open item 3). In user mode the hold ran at
-  0.14 cores against 0.20 and an iTLB rate 12 percent short; with the
-  kernel counted its dTLB and iTLB rates, which here are the demand
-  L1 misses, come from the kernel's copies and the replay's stubs
-  cannot follow them plateau by plateau.
-- **Memory is the tool's own.** A process as small as sysbench, 3 MiB,
-  is under the replay's baseline, 12 to 16 MiB with 16 KiB pages, so
-  the memory total misses by more than the 8 MiB floor in the kernel
-  and perfmon modes; the components are within.
-- **Neighbours cost what they cost.** Beside two other profiles
-  schbench's MPKI reads 0.084 against 0.0034, the neighbours' lines in
-  the shared system cache, where its own fit was within; TaoBench and
-  stress-ng are within on every field. With twelve instances on
+  and sysbench in 0.3 to 0.5 s and TaoBench in 1.2 to 1.5 s in every
+  mode, and land every ratio within in user, kernel and perfmon mode.
+  stress-ng joins them here: with its sequential writes prefetched and
+  the miss event counting none of them, its profile asks for an IPC
+  of 1.7 to 2.0 at zero misses, which is compute, and the fit lands it
+  in 0.6 to 0.7 s, every field within in every mode.
+- **fio in user mode is now 9 of 10**, its cores and burstiness
+  within once its recording starts from the page cache and the fit
+  judges it at its long-run factor; what it misses is the iTLB rate,
+  the stub call's run-to-run spread on this host and a code set the
+  L1 iTLB holds. With the kernel counted it is out of reach: its
+  misses are the kernel's copies and the page-cache lever needs an
+  L3 size sysfs does not give.
+- **Memory is the tool's own.** A process as small as sysbench, 3 to
+  5 MiB, or schbench, 16 MiB, is under the replay's baseline with
+  the 2 MiB stream sets on 16 KiB pages, so the memory total misses by
+  more than the 8 MiB floor; the components are within.
+- **Neighbours cost what they cost.** Beside two other profiles every
+  field of every profile is within. With twelve instances on
   twenty-four cores every copy runs at a third to a half of its busy
-  cores and the ratios mostly hold, 7 to 8 of 10 each. A neighbour
-  arriving and leaving leaves every profile within on every field in
-  the phases beside it and after.
+  cores, and TaoBench's copies hold their closest pass under the
+  contention. A neighbour arriving and leaving leaves every profile
+  within on every field in the phases beside it and after.
 
 ## Reading the results
 
