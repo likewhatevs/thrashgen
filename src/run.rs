@@ -1284,7 +1284,13 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                             "no closer after {STALE_PASSES} passes of re-fitting; what is out is out of reach here{held}"
                         ));
                         fit.hold(&judged);
-                    } else if fitter.passes < budget || fit.ever {
+                    } else if (fitter.passes < budget || fit.ever) && !fit.out_of_passes {
+                        // A fit that has converged before keeps following
+                        // the host, unless it is holding for lack of
+                        // progress: fio's kernel-mode re-fit held its
+                        // closest pass and moved again on the next
+                        // window, since it had converged once, and ended
+                        // at an IPC a third over (Zen 4, 2026-10-19).
                         let mut next = fitter.step(&knobs, &m, &fit_goal);
                         // A lever the IPC and MPKI rules pulled against
                         // each other has just been frozen: the two targets
