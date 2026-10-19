@@ -282,7 +282,14 @@ reported and corrected by the factor target / predicted. Busy cores
 are judged from the third one-second sample, burstiness from the
 twelfth, three factors' worth, since its ratio needs seconds that
 intended different things. With no intended variation the measured
-jitter is the burstiness. IPC moves by the same factor raised to a
+jitter is the burstiness. A second that intended under a tenth of the
+model's mean busy cores carries the process's own overhead and says
+nothing of the knobs' efficiency: fio's kernel-mode fit, begun in a
+plateau intending a few thousandths of a core, read the overhead as a
+23-fold efficiency, cut its duty and spent two budgets of passes
+(Zen 4, 2026-10-19); such seconds count toward the burstiness ratio
+and not the mean, and until a telling second is in the mean is not
+judged. IPC moves by the same factor raised to a
 damping exponent of one half, bounded to a quarter and four times per
 pass. Line run length answers to IPC; the chain count,
 continuous between a quarter and four by mixing the two nearest loops

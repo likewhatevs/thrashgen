@@ -358,7 +358,13 @@ impl Convergence {
 /// take as many seconds as the CV squared over the tolerance squared;
 /// applied to the clipped model's mean and CV they give the values a
 /// long recording would see. With no intended variation the measured
-/// jitter is the burstiness.
+/// jitter is the burstiness. A second that intended under a tenth of
+/// the model's mean carries the process's own overhead and little of
+/// the knobs: fio's kernel-mode fit began in a plateau intending a
+/// few thousandths of a core, read the overhead as a 23-fold
+/// efficiency, cut its duty and spent two budgets of passes (Zen 4,
+/// 2026-10-19); such seconds count for burstiness but not for the
+/// mean, and until a telling second is in the mean is not judged.
 pub fn predicted_cores_cv(
     measured: &[f64],
     intended: &[f64],
@@ -369,21 +375,31 @@ pub fn predicted_cores_cv(
         return (None, None);
     }
     let (model_mean, model_cv) = crate::loadgen::clipped_duty_stats(knobs.duty, knobs.cv);
-    let sum_int: f64 = intended.iter().sum();
-    let efficiency = if sum_int > 0.0 {
-        measured.iter().sum::<f64>() / sum_int
+    let telling = CORES_TELLING_SHARE * threads as f64 * model_mean;
+    let (sum_meas, sum_int) = measured
+        .iter()
+        .zip(intended)
+        .filter(|(_, i)| **i >= telling)
+        .fold((0.0, 0.0), |(m, i), (x, y)| (m + x, i + y));
+    let cores = if sum_int > 0.0 {
+        Some(sum_meas / sum_int * threads as f64 * model_mean)
+    } else if intended.iter().all(|i| *i <= 0.0) {
+        Some(measured.iter().sum::<f64>() / measured.len() as f64)
     } else {
-        1.0
+        None
     };
-    let cores = efficiency * threads as f64 * model_mean;
     let one =
         |xs: &[f64]| pooled_cv(std::slice::from_ref(&xs.to_vec()), xs.len()).map(|(cv, _)| cv);
     let cv = match (one(measured), one(intended)) {
         (Some(m), Some(i)) if i > 1e-9 => Some(model_cv * m / i),
         (m, _) => m,
     };
-    (Some(cores), cv)
+    (cores, cv)
 }
+
+/// The share of the model's mean busy cores a second must have
+/// intended to count toward the efficiency of the mean.
+pub const CORES_TELLING_SHARE: f64 = 0.1;
 
 /// How long the pooled windows must be, in instructions at the run's
 /// mean rate: 0.4 s, and two seconds more per unit of the burstiness
@@ -1071,7 +1087,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     .or_else(|| dram_model(&sample, &knobs, aps, geo.line));
                 let mut m = measured_from(&sample, cv_pred, aps, dram);
                 m.cv_samples = cores_window.len();
-                if cores_pred.is_some() {
+                if !cores_window.is_empty() {
                     m.cores = cores_pred;
                 }
                 // The factor of the second the window's midpoint fell in,
@@ -1504,6 +1520,35 @@ mod tests {
         assert!((c.unwrap() - 6.2 / 6.0 * 4.0 * 0.5).abs() < 1e-9);
         assert!(v.unwrap() > 0.0 && v.unwrap() < 0.1);
         assert_eq!(predicted_cores_cv(&[], &[], &flat, 4), (None, None));
+        // A deep-quiet plateau intends a few thousandths of a core and
+        // reads the process's overhead: no mean until a telling second
+        // is in, and then the telling seconds alone set it.
+        let bursty = Knobs {
+            duty: 0.26,
+            cv: 1.3,
+            ..Knobs::default()
+        };
+        let (model_mean, _) = crate::loadgen::clipped_duty_stats(0.26, 1.3);
+        let (c, v) = predicted_cores_cv(&[0.06, 0.06], &[0.0026, 0.0026], &bursty, 1);
+        assert_eq!(c, None, "{c:?}");
+        assert!(v.is_some(), "burstiness still has its ratio");
+        let (c, _) = predicted_cores_cv(&[0.06, 0.06, 0.27], &[0.0026, 0.0026, 0.26], &bursty, 1);
+        assert!(
+            (c.unwrap() - 0.27 / 0.26 * model_mean).abs() < 1e-9,
+            "{c:?}"
+        );
+        // Nothing intended at all: the measured mean is what there is,
+        // and its jitter the burstiness.
+        let idle = Knobs {
+            duty: 0.0,
+            cv: 0.0,
+            ..Knobs::default()
+        };
+        let (c, v) = predicted_cores_cv(&[0.02, 0.04], &[0.0, 0.0], &idle, 1);
+        assert!(
+            (c.unwrap() - 0.03).abs() < 1e-12 && v.is_some(),
+            "{c:?} {v:?}"
+        );
     }
 
     #[test]
