@@ -96,6 +96,9 @@ pub struct WindowRow {
     /// Instructions per access, when the counters allow.
     #[serde(default)]
     pub instructions_per_access: Option<f64>,
+    /// The duty factor the window's second ran at, clipped at full duty.
+    #[serde(default)]
+    pub factor: Option<f64>,
 }
 
 /// A memory component: requested and finally measured.
@@ -320,6 +323,7 @@ mod tests {
             }],
             windows: vec![WindowRow {
                 accesses_per_s: 0.0,
+                factor: None,
                 instructions_per_access: None,
                 end_s: 30.0,
                 seconds: 30.0,

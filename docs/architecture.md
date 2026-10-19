@@ -119,6 +119,10 @@ sample, each second against what the knobs intended for it.
 One pass is one call of `Fitter::step`, which runs the rules below in
 this order, one method each, over a `Pass` that carries what they
 share; each rule is quiet while its observable is within tolerance.
+Before the pass the pooled window is put at the long-run duty factor
+by `Wakeups`, the per-rate cost of a wakeup the fitter learned from
+two plateaus at the same knobs, so a bursty profile's quiet and busy
+seconds are judged alike; the report keeps the rates as read.
 
 ```mermaid
 flowchart TD

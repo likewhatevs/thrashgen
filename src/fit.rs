@@ -29,6 +29,9 @@ pub struct Measured {
     pub cv_samples: usize,
     /// Instructions per second, for instructions per access.
     pub instructions_per_s: Option<f64>,
+    /// The duty factor the generator intended for the window's second,
+    /// clipped at full duty; a pool's is the mean of its windows'.
+    pub factor: Option<f64>,
 }
 
 impl Measured {
@@ -257,6 +260,123 @@ pub struct LastSet {
     pub ipa: f64,
 }
 
+/// The rates a wakeup costs, one slot each for cycles, misses, dTLB
+/// and iTLB events per instruction.
+const WAKE_RATES: usize = 4;
+const WAKE_CPI: usize = 0;
+const WAKE_MPKI: usize = 1;
+const WAKE_DTLB: usize = 2;
+const WAKE_ITLB: usize = 3;
+/// Pooled windows whose factors' reciprocals differ by less than this
+/// are one plateau and teach nothing.
+const WAKE_SPREAD_MIN: f64 = 1.0;
+
+/// What each wakeup of a bursty duty cycle costs the rates per
+/// instruction: `docs/design.md` section 6. A quiet second's few
+/// instructions carry the refetch of every wakeup, so a rate measured
+/// at factor `f` is `r0 + c / f`, and the long-run value the recorder
+/// saw is the same at the mean factor. `c` is learned from two pooled
+/// windows at the same knobs whose factors differ, and every window
+/// is then judged at the long-run factor.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Wakeups {
+    /// The pooled window the next estimate is taken against: its knobs,
+    /// factor and raw rates.
+    anchor: Option<(Knobs, f64, [Option<f64>; WAKE_RATES])>,
+    /// `c` per rate, over the instructions of a full-duty second.
+    pub cost: [Option<f64>; WAKE_RATES],
+}
+
+impl Wakeups {
+    fn rates(m: &Measured) -> [Option<f64>; WAKE_RATES] {
+        [
+            m.ipc.filter(|i| *i > 0.0).map(|i| 1.0 / i),
+            m.mpki,
+            m.dtlb_pki,
+            m.itlb_pki,
+        ]
+    }
+
+    /// Take a pooled window in: against the anchor at the same knobs,
+    /// once their factors differ enough, each rate's slope over the
+    /// reciprocal factor is the cost, averaged into what is known.
+    pub fn learn(&mut self, knobs: &Knobs, m: &Measured) {
+        let Some(f) = m.factor.filter(|f| *f > 0.0) else {
+            return;
+        };
+        let rates = Self::rates(m);
+        if let Some((k, f0, r0)) = &self.anchor {
+            if k == knobs {
+                let spread = 1.0 / f - 1.0 / f0;
+                if spread.abs() < WAKE_SPREAD_MIN {
+                    return;
+                }
+                for i in 0..WAKE_RATES {
+                    if let (Some(a), Some(b)) = (r0[i], rates[i]) {
+                        let c = (b - a) / spread;
+                        self.cost[i] = Some(self.cost[i].map_or(c, |old| old.midpoint(c)));
+                    }
+                }
+            }
+        }
+        self.anchor = Some((knobs.clone(), f, rates));
+    }
+
+    /// Whether any cost is known.
+    pub fn known(&self) -> bool {
+        self.cost.iter().any(Option::is_some)
+    }
+
+    /// The window's rates at the long-run factor: each known cost
+    /// times the difference of the reciprocals taken off, never below
+    /// zero.
+    pub fn long_run(&self, knobs: &Knobs, m: &Measured) -> Measured {
+        let Some(f) = m.factor.filter(|f| *f > 0.0) else {
+            return m.clone();
+        };
+        let shift = 1.0 / f - 1.0 / mean_factor(knobs);
+        let fix = |v: Option<f64>, c: Option<f64>| match (v, c) {
+            (Some(v), Some(c)) => Some((v - c * shift).max(0.0)),
+            _ => v,
+        };
+        let mut out = m.clone();
+        let cpi = m.ipc.filter(|i| *i > 0.0).map(|i| 1.0 / i);
+        out.ipc = fix(cpi, self.cost[WAKE_CPI])
+            .filter(|c| *c > 0.0)
+            .map(|c| 1.0 / c)
+            .or(m.ipc);
+        out.mpki = fix(m.mpki, self.cost[WAKE_MPKI]);
+        out.dtlb_pki = fix(m.dtlb_pki, self.cost[WAKE_DTLB]);
+        out.itlb_pki = fix(m.itlb_pki, self.cost[WAKE_ITLB]);
+        out
+    }
+
+    /// The costs for the report's notes.
+    pub fn note(&self) -> Option<String> {
+        if !self.known() {
+            return None;
+        }
+        let show = |i: usize| self.cost[i].map_or("-".into(), |c| format!("{c:.3}"));
+        Some(format!(
+            "rates judged at the long-run duty factor: over the reciprocal factor each rises by CPI {}, MPKI {}, dTLB {}, iTLB {} per unit",
+            show(WAKE_CPI),
+            show(WAKE_MPKI),
+            show(WAKE_DTLB),
+            show(WAKE_ITLB)
+        ))
+    }
+}
+
+/// The mean of the clipped per-second factors at these knobs: one when
+/// nothing clips, less once full duty clips the busiest seconds.
+pub fn mean_factor(k: &Knobs) -> f64 {
+    if k.duty > 0.0 && k.cv > 0.0 {
+        crate::loadgen::clipped_duty_stats(k.duty, k.cv).0 / k.duty
+    } else {
+        1.0
+    }
+}
+
 /// The fitter: damped multiplicative updates, one pass per window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Fitter {
@@ -300,6 +420,8 @@ pub struct Fitter {
     /// Reversals of the run length at one op per access, where the IPC
     /// and MPKI rules pull it against each other.
     pub lines_track: Reversals,
+    /// What a wakeup costs the rates, for judging a bursty profile.
+    pub wake: Wakeups,
     /// The same for the sequential share.
     pub seq_track: Reversals,
 }
@@ -416,6 +538,7 @@ impl Fitter {
             kernel_counted: false,
             lines_track: Reversals::default(),
             seq_track: Reversals::default(),
+            wake: Wakeups::default(),
         }
     }
 
@@ -1409,7 +1532,32 @@ mod tests {
             accesses_per_s: aps,
             cv_samples: 300,
             instructions_per_s: Some(instr * aps),
+            factor: None,
         }
+    }
+
+    /// What a wakeup costs each rate on the plant, per unit of the
+    /// reciprocal factor: cycles, misses, dTLB and iTLB events per
+    /// thousand instructions of a full-duty second.
+    const WAKE_PLANT: [f64; WAKE_RATES] = [0.02, 0.015, -0.02, 0.02];
+
+    /// The plant at a duty factor: a quiet second's few instructions
+    /// carry the refetch of every wakeup, so each rate gains its cost
+    /// times the reciprocal factor less one, and the instructions
+    /// scale with the factor.
+    fn plant_at(k: &Knobs, threads: usize, f: f64) -> Measured {
+        let mut m = plant(k, threads);
+        let shift = 1.0 / f - 1.0;
+        m.ipc = m
+            .ipc
+            .map(|i| 1.0 / (1.0 / i + WAKE_PLANT[WAKE_CPI] * shift));
+        m.mpki = m.mpki.map(|v| v + WAKE_PLANT[WAKE_MPKI] * shift);
+        m.dtlb_pki = m.dtlb_pki.map(|v| v + WAKE_PLANT[WAKE_DTLB] * shift);
+        m.itlb_pki = m.itlb_pki.map(|v| v + WAKE_PLANT[WAKE_ITLB] * shift);
+        m.accesses_per_s *= f;
+        m.instructions_per_s = m.instructions_per_s.map(|i| i * f);
+        m.factor = Some(f);
+        m
     }
 
     fn goal_of(m: &Measured) -> Goal {
@@ -1547,6 +1695,131 @@ mod tests {
     }
 
     #[test]
+    fn wakeup_costs_are_learned_across_plateaus_and_taken_off() {
+        let k = Knobs {
+            duty: 0.3,
+            cv: 0.8,
+            ..Knobs::default()
+        };
+        let mut w = Wakeups::default();
+        let busy = Measured {
+            ipc: Some(0.866),
+            mpki: Some(0.03),
+            dtlb_pki: Some(8.4),
+            itlb_pki: Some(0.05),
+            factor: Some(1.0),
+            ..Measured::default()
+        };
+        w.learn(&k, &busy);
+        assert!(!w.known(), "one window teaches nothing");
+        w.learn(
+            &k,
+            &Measured {
+                factor: Some(0.9),
+                ..busy.clone()
+            },
+        );
+        assert!(!w.known(), "one plateau teaches nothing");
+        // A tenth of the duty: nine more wakeups per instruction's worth.
+        let quiet = Measured {
+            ipc: Some(1.0 / (1.0 / 0.866 + 9.0 * 0.004)),
+            mpki: Some(0.03 + 9.0 * 0.015),
+            dtlb_pki: Some(8.4 - 9.0 * 0.02),
+            itlb_pki: Some(0.05 + 9.0 * 0.006),
+            factor: Some(0.1),
+            ..busy.clone()
+        };
+        w.learn(&k, &quiet);
+        let c = w.cost.map(|c| c.unwrap());
+        for (got, want) in c.iter().zip([0.004, 0.015, -0.02, 0.006]) {
+            assert!((got - want).abs() < 1e-9, "{c:?}");
+        }
+        // Judged at the long-run factor, both windows read the same.
+        let fbar = mean_factor(&k);
+        let (a, b) = (w.long_run(&k, &busy), w.long_run(&k, &quiet));
+        for pick in [
+            |m: &Measured| m.mpki,
+            |m: &Measured| m.ipc,
+            |m: &Measured| m.dtlb_pki,
+            |m: &Measured| m.itlb_pki,
+        ] {
+            assert!(
+                (pick(&a).unwrap() - pick(&b).unwrap()).abs() < 1e-9,
+                "{a:?}\n{b:?}"
+            );
+        }
+        assert!((a.mpki.unwrap() - (0.03 + 0.015 * (1.0 / fbar - 1.0))).abs() < 1e-9);
+        // Without a factor a window passes through.
+        let none = Measured {
+            factor: None,
+            ..quiet.clone()
+        };
+        assert_eq!(w.long_run(&k, &none), none);
+        // A later pair averages in; other knobs start afresh and learn
+        // nothing against the old anchor.
+        w.learn(&k, &busy);
+        assert!((w.cost[WAKE_MPKI].unwrap() - 0.015).abs() < 1e-9);
+        w.learn(
+            &Knobs {
+                ops: 7,
+                ..k.clone()
+            },
+            &quiet,
+        );
+        assert!((w.cost[WAKE_MPKI].unwrap() - 0.015).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_bursty_profile_is_judged_at_the_long_run_factor_and_holds() {
+        // fio's shape: a third of the duty with a CV near one, whose
+        // quiet seconds read several times the misses and iTLB events
+        // per instruction of its busy ones.
+        let truth = Knobs {
+            duty: 0.3,
+            cv: 0.8,
+            ops: 400,
+            chains: 1.0,
+            lines: 2.0,
+            tlbvisits: 12.0,
+            sparse_pages: 256,
+            codevisits: 0.5,
+            code_pages: 16384,
+            ..Knobs::default()
+        };
+        // The recorder's long-run rates: the plant at the mean factor.
+        let fbar = mean_factor(&truth);
+        let mut goal = goal_of(&plant_at(&truth, 4, fbar));
+        goal.dram = None;
+        let factors = [1.0, 1.0, 1.0, 0.1, 0.1, 0.1, 0.5, 0.5, 0.5, 2.0, 2.0, 2.0];
+        let mut f = Fitter::new(4, LIMITS);
+        let mut k = f.initial_knobs(&goal, TlbRegime::L2Hit);
+        let mut converged_at = None;
+        let mut moves_after = 0;
+        for (i, fac) in factors.iter().cycle().take(120).enumerate() {
+            let m = plant_at(&k, 4, *fac);
+            f.wake.learn(&k, &m);
+            let judged = f.wake.long_run(&k, &m);
+            if f.wake.known() && Fitter::converged(&f.statuses(&judged, &goal)) {
+                converged_at.get_or_insert(i);
+            }
+            let next = f.step(&k, &judged, &goal);
+            if next != k && converged_at.is_some() {
+                moves_after += 1;
+            }
+            k = next;
+        }
+        let at = converged_at.expect("converged with the costs known");
+        assert!(at < 60, "converged at window {at}");
+        assert_eq!(moves_after, 0, "moved after convergence: {k:#?}");
+        let long = f.statuses(&plant_at(&k, 4, fbar), &goal);
+        assert!(Fitter::converged(&long), "{long:#?}");
+        // A quiet second's raw rates alone are out of tolerance, which
+        // is what the correction is for.
+        let quiet = f.statuses(&plant_at(&k, 4, 0.1), &goal);
+        assert!(!Fitter::converged(&quiet), "{quiet:#?}");
+    }
+
+    #[test]
     fn stream_shapes_are_found_through_the_main_stream_knobs() {
         // Each truth needs one of the stream knobs: serialized misses for
         // a latency-bound target, a sequential walk for a streaming one,
@@ -1648,6 +1921,7 @@ mod tests {
             dtlb_pki: Some(0.28),
             accesses_per_s: 1.0e7,
             instructions_per_s: Some(3.8e9),
+            factor: None,
             ..Measured::default()
         };
         let mut proxy = Fitter::new(4, LIMITS);
@@ -1705,6 +1979,7 @@ mod tests {
             dtlb_pki: Some(0.005),
             accesses_per_s: 1.0e7,
             instructions_per_s: Some(5.0e9),
+            factor: None,
             ..Measured::default()
         };
         let walks = Measured {
@@ -1744,6 +2019,7 @@ mod tests {
             mpki: Some(1.4),
             accesses_per_s: 1.0e4,
             instructions_per_s: Some(2.0e7),
+            factor: None,
             ..Measured::default()
         };
         let mut f = Fitter::new(1, LIMITS);
@@ -1791,6 +2067,7 @@ mod tests {
             dram: Some(1.0e7),
             accesses_per_s: 1.0e5,
             instructions_per_s: Some(1.0e8),
+            factor: None,
             ..Measured::default()
         };
         let mut f = Fitter::new(1, LIMITS);
@@ -1833,6 +2110,7 @@ mod tests {
             dram: Some(1.0e10),
             accesses_per_s: 7.0e6,
             instructions_per_s: Some(450.0 * 7.0e6),
+            factor: None,
             ..Measured::default()
         };
         let mut f = Fitter::new(4, LIMITS);
@@ -1849,6 +2127,7 @@ mod tests {
         g.kernel_counted = true;
         let heavy = Measured {
             instructions_per_s: Some(4.0e5 * 7.0e6),
+            factor: None,
             ..m.clone()
         };
         let next = g.step(&k, &heavy, &goal);
@@ -1875,6 +2154,7 @@ mod tests {
                     mpki: Some(mpki),
                     accesses_per_s: 1.0e6,
                     instructions_per_s: Some(ipa * 1.0e6),
+                    factor: None,
                     ..Measured::default()
                 },
             )
@@ -1915,6 +2195,7 @@ mod tests {
             dtlb_pki: Some(7.92),
             accesses_per_s: 1.0e6,
             instructions_per_s: Some(1900.0 * 1.0e6),
+            factor: None,
             ..Measured::default()
         };
         let mut f = Fitter::new(4, LIMITS);
@@ -1933,6 +2214,7 @@ mod tests {
             dtlb_pki: Some(1.17),
             accesses_per_s: 1.0e6,
             instructions_per_s: Some(1360.0 * 1.0e6),
+            factor: None,
             ..Measured::default()
         };
         let next = f.step(&k0, &m0, &goal);
@@ -1960,6 +2242,7 @@ mod tests {
             ipc: Some(2.89),
             accesses_per_s: 1.0e4,
             instructions_per_s: Some(1.0e9),
+            factor: None,
             ..Measured::default()
         };
         let mut f = Fitter::new(8, LIMITS);
@@ -1993,6 +2276,7 @@ mod tests {
                     mpki: Some(mpki),
                     accesses_per_s: 1.0e6,
                     instructions_per_s: Some(ipa * 1.0e6),
+                    factor: None,
                     ..Measured::default()
                 },
             )
@@ -2054,6 +2338,7 @@ mod tests {
             dtlb_pki: Some(2.0),
             accesses_per_s: 1.0e6,
             instructions_per_s: Some(1.0e8),
+            factor: None,
             ..Measured::default()
         };
         // Pass one at the full set: dTLB excess shrinks it.
@@ -2110,6 +2395,7 @@ mod tests {
             mpki: Some(0.003),
             accesses_per_s: 1.0e4,
             instructions_per_s: Some(1.7e11),
+            factor: None,
             ..Measured::default()
         };
         let next = f.step(&k, &m, &goal);
@@ -2138,6 +2424,7 @@ mod tests {
             mpki: Some(6.4),
             accesses_per_s: 1.0e6,
             instructions_per_s: Some(1.6e10),
+            factor: None,
             ..Measured::default()
         };
         let next = f.step(&k, &m, &goal);
@@ -2155,6 +2442,7 @@ mod tests {
             dtlb_pki: Some(0.3),
             accesses_per_s: 1.0e6,
             instructions_per_s: Some(1.6e10),
+            factor: None,
             ..Measured::default()
         };
         let next = f.step(&Knobs::default(), &m, &goal);
@@ -2187,6 +2475,7 @@ mod tests {
             dtlb_pki: Some(10.0),
             accesses_per_s: 2.0e4,
             instructions_per_s: Some(1.0e9),
+            factor: None,
             ..Measured::default()
         };
         f.last_ipc = Some(2.5);
@@ -2219,6 +2508,7 @@ mod tests {
             dram: Some(1.0e10),
             accesses_per_s: 1.0e7,
             instructions_per_s: Some(2.0e9),
+            factor: None,
             ..Measured::default()
         };
         let mut f = Fitter::new(4, LIMITS);
@@ -2573,7 +2863,7 @@ mod tests {
             let mut f = Fitter::new(4, LIMITS);
             let k = Knobs { duty, cv, ops, chains: 2.0, lines, ntlines: nt, tlbvisits: tv, codevisits: cvis, sparse_pages: 2048, code_pages: 16384, ..Knobs::default() };
             let goal = Goal { cores: Some(2.0), cv: Some(0.3), ipc: Some(1.2), mpki: Some(5.0), dram: Some(4e9), dtlb_pki: Some(2.0), itlb_pki: Some(0.1) };
-            let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps, cv_samples: 300, instructions_per_s: Some(aps * 100.0) };
+            let m = Measured { cores: Some(cores), cv: Some(cv), ipc: Some(ipc), mpki: Some(mpki), dram: Some(dram), dtlb_pki: Some(dtlb), itlb_pki: Some(itlb), accesses_per_s: aps, cv_samples: 300, instructions_per_s: Some(aps * 100.0), factor: None };
             let next = f.step(&k, &m, &goal);
             let b = Buffers::new(GEO, 1 << 20, false, 2048, 16384).unwrap();
             prop_assert!(next.validate(&b).is_ok(), "{next:?}");

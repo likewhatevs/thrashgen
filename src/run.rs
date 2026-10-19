@@ -455,6 +455,7 @@ pub fn pool(windows: &[Measured]) -> Measured {
         itlb_pki: weighted(|w| w.itlb_pki),
         dram: mean(|w| w.dram),
         instructions_per_s: mean(|w| w.instructions_per_s),
+        factor: mean(|w| w.factor),
         accesses_per_s: mean(|w| Some(w.accesses_per_s)).unwrap_or(0.0),
         ..newest
     }
@@ -592,6 +593,7 @@ pub fn measured_from(
         accesses_per_s,
         cv_samples: 0,
         instructions_per_s: instr,
+        factor: None,
     }
 }
 
@@ -1066,7 +1068,21 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                 if cores_pred.is_some() {
                     m.cores = cores_pred;
                 }
+                // The factor of the second the window's midpoint fell in,
+                // clipped the way the workers clip it.
+                m.factor = Some(if knobs.cv > 0.0 && knobs.duty > 0.0 {
+                    let second = (unix_now() - seconds / 2.0).floor() as u64;
+                    crate::loadgen::duty_factor(settings.seed, second, knobs.cv)
+                        .min(1.0 / knobs.duty)
+                } else {
+                    1.0
+                });
                 let m = pool.push(&knobs, m, seconds);
+                // The report keeps what was measured; the fit is judged at
+                // the long-run factor once the wakeup costs are known.
+                let measured_statuses = fitter.statuses(&m, &goal);
+                fitter.wake.learn(&knobs, &m);
+                let m = fitter.wake.long_run(&knobs, &m);
                 let statuses = fitter.statuses(&m, &goal);
                 writeln!(
                     progress,
@@ -1093,7 +1109,8 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
                     knobs: knobs.clone(),
                     accesses_per_s: aps,
                     instructions_per_access: m.instructions_per_access(),
-                    values: statuses
+                    factor: m.factor,
+                    values: measured_statuses
                         .iter()
                         .map(|s| WindowValue {
                             key: s.key.into(),
@@ -1300,6 +1317,7 @@ pub fn run(targets: &Targets, settings: &Settings, progress: &mut dyn Write) -> 
             }
         }
     }
+    notes.extend(fitter.wake.note());
     let report = Report {
         cpu: ident,
         table: table.map(|t| t.table.to_string()),
@@ -1616,6 +1634,7 @@ mod tests {
             dram: Some(2.0e9),
             accesses_per_s: 100.0,
             instructions_per_s: Some(1.0e9),
+            factor: None,
             cores: Some(2.0),
             cv: Some(0.1),
             cv_samples: 40,
@@ -1628,6 +1647,7 @@ mod tests {
             dram: Some(4.0e9),
             accesses_per_s: 300.0,
             instructions_per_s: Some(3.0e9),
+            factor: None,
             cores: Some(9.0),
             cv: Some(0.9),
             cv_samples: 39,

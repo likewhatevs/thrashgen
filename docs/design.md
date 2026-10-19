@@ -429,7 +429,22 @@ IPC as the instructions over the cycles, as a recorder's interval
 would count them, so a single noisy window, a neighbour's burst, a
 page-cache refill or a quiet second of a bursty duty cycle, whose few
 instructions carry the misses of a cold cache and the kernel's
-wakeups, moves nothing on its own. Busy cores and
+wakeups, moves nothing on its own. Those wakeups are a cost per
+second, not per instruction: on fio's replay at fixed knobs (Zen 4,
+2026-10-18) a four-second plateau at full duty read 0.026 misses and
+0.05 iTLB events per thousand instructions and one at a tenth of the
+duty 0.17 and 0.09, IPC 0.87 against 0.84 and the dTLB rate 8.46
+against 8.25, a refetch per wakeup over instructions that scale with
+the second's factor, so a rate measured at factor f is r0 + c/f and
+the long-run value a recorder's intervals average, instructions
+weighting each second, is the same at the mean of the clipped
+factors. The fitter learns c per rate, cycles, misses, dTLB and iTLB
+events per instruction, from two pooled windows at the same knobs
+whose factors' reciprocals differ by one or more, averaging later
+pairs in, and judges every window at the long-run factor, c times the
+difference of the reciprocals taken off; until c is known a window is
+judged as read, so the first fit lands inside the plateau it sees and
+the first plateau change teaches the correction. Busy cores and
 burstiness are judged on a rolling window of forty one-second
 samples, ten factors, from the third and the twelfth sample on, as
 above; until then they are not judged at all, so an early reading of them neither

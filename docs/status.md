@@ -126,9 +126,19 @@ M2 Ultra's follow.
    averaged three times the target over all of them; in an earlier
    run the fit moved again at the first busy plateau, where MPKI and
    the iTLB rate were five to twenty times lower, and settled by 4.4 s
-   with every field of the hold within. A fit that judged a bursty
-   profile over whole plateaus, or corrected the rates by the duty of
-   the second, would not depend on which plateau it saw. Under `CAP_PERFMON` the L3
+   with every field of the hold within. Measured on the replay at
+   fixed knobs with one-second grouping (2026-10-18): the rates follow
+   a constant cost per wakeup over the second's instructions, MPKI
+   0.026 at full duty and 0.17 at a tenth of it, the iTLB rate 0.05
+   and 0.09, IPC 0.87 and 0.84, so a rate at factor f is r0 + c/f and
+   the long-run value is the same at the mean factor. The fitter now
+   learns c per rate from two plateaus at the same knobs and judges
+   every window at the long-run factor (design section 6, with a
+   plant and a step test), so the plateau the first fit lands in no
+   longer decides what the hold averages; the kernel-mode profile's
+   cold-cache misses are the same cost and get the same correction.
+   What is left is physics the hold cannot help: a quiet second of
+   the replay still carries the refetch, as the original's did. Under `CAP_PERFMON` the L3
    PMU counts prefetched lines too, so stress-ng reads 95 MPKI; a miss
    every ten instructions needs the prefetched walk, which lifts IPC,
    and the two targets meet nowhere, so the fit now freezes the lever
