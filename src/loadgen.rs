@@ -44,9 +44,11 @@ pub struct Geometry {
 }
 
 impl Geometry {
-    /// A geometry; the page must be a multiple of the line.
+    /// A geometry: page and line are powers of two, the line at least a
+    /// pair of words and the page larger, so a line's place in a page
+    /// and the bytes of either are shifts and masks on the hot path.
     pub const fn new(page: usize, line: usize) -> Geometry {
-        assert!(page % line == 0 && line >= 8);
+        assert!(page.is_power_of_two() && line.is_power_of_two() && line >= 16 && page > line);
         Geometry {
             page,
             line,
@@ -71,6 +73,16 @@ impl Geometry {
     /// Lines in a page.
     pub const fn page_lines(&self) -> usize {
         self.page / self.line
+    }
+
+    /// The shift that multiplies a page index by its bytes.
+    pub const fn page_shift(&self) -> u32 {
+        self.page.trailing_zeros()
+    }
+
+    /// The shift that multiplies a line index by its bytes.
+    pub const fn line_shift(&self) -> u32 {
+        self.line.trailing_zeros()
     }
 
     /// The most consecutive lines a visit can touch: a page's worth.
@@ -351,10 +363,14 @@ fn sync_instructions(stubs: &[*const u8]) {
 }
 
 impl CodePages {
-    /// Offset of the stub within page `i` of `page` bytes, spread over
-    /// cache sets.
+    /// Offset of the stub within page `i` of `page` bytes: at a line
+    /// start, spread over the cache sets, and clear of the page's end
+    /// by one line. A mask, since a remainder by the page less the
+    /// stub's room was a divide on every call once the page was the
+    /// host's, ten instructions a call on Zen 4 (2026-10-18).
     pub fn offset(i: usize, page: usize) -> usize {
-        (i * 160) % (page - 64)
+        debug_assert!(page.is_power_of_two() && page >= 128);
+        (i * 160) & (page - 64)
     }
 
     /// Write stubs into `pages` fresh pages of `page` bytes and make
@@ -562,14 +578,17 @@ pub struct WorkerStats {
     pub tid: AtomicU64,
 }
 
-/// Non-temporal store of one line of `line` bytes at `p`.
+/// Non-temporal store of one line of `WORDS` 8-byte words at `p`. The
+/// line size is a const so the stores unroll: a 64-byte line stored in
+/// a loop over a runtime size cost 75 instructions against 41 unrolled
+/// (Zen 4, 2026-10-18).
 #[inline(always)]
-fn nt_store_line(p: *mut u8, v: u64, line: usize) {
+fn nt_store_line<const WORDS: usize>(p: *mut u8, v: u64) {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: `p` is 8-byte aligned inside a mapped line; SSE2 is
     // baseline on x86_64.
     unsafe {
-        for k in 0..(line / 8) {
+        for k in 0..WORDS {
             std::arch::x86_64::_mm_stream_si64(p.add(k * 8).cast::<i64>(), v as i64);
         }
     }
@@ -577,7 +596,7 @@ fn nt_store_line(p: *mut u8, v: u64, line: usize) {
     // SAFETY: as above; `stnp` writes a non-temporal pair of 8 bytes at
     // each 16-byte step of the line.
     unsafe {
-        for k in 0..(line / 16) {
+        for k in 0..(WORDS / 2) {
             std::arch::asm!(
                 "stnp {v}, {v}, [{p}]",
                 v = in(reg) v,
@@ -589,7 +608,7 @@ fn nt_store_line(p: *mut u8, v: u64, line: usize) {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     // SAFETY: as above, with plain stores.
     unsafe {
-        for k in 0..(line / 8) {
+        for k in 0..WORDS {
             std::ptr::write_volatile(p.add(k * 8).cast::<u64>(), v);
         }
     }
@@ -741,11 +760,10 @@ fn scale32(x: u32, n: usize) -> usize {
 /// so an access does no division, rounding or float-to-int work.
 #[derive(Debug)]
 struct Pace {
-    /// Page and line sizes and the lines a page holds, carried here so
-    /// an address needs no load from the buffers' geometry.
-    page: usize,
-    line: usize,
-    page_lines: usize,
+    /// The page and line sizes as shifts, for the batch instantiated
+    /// without them as constants (see [`Worker::batch`]).
+    page_shift: u32,
+    line_shift: u32,
     pages: usize,
     slice_start: usize,
     slice_lines: usize,
@@ -760,8 +778,6 @@ struct Pace {
     batch: u32,
     /// Pages the sparse walk advances per visit.
     sparse_stride: usize,
-    /// Each line of a run in a page of its own.
-    run_in_pages: bool,
 }
 
 /// A stride coprime to the page count, near the golden ratio of it, so
@@ -794,9 +810,8 @@ impl Pace {
         let whole = k.lines as usize;
         let geo = w.buffers.geo;
         Pace {
-            page: geo.page,
-            line: geo.line,
-            page_lines: geo.page_lines(),
+            page_shift: geo.page_shift(),
+            line_shift: geo.line_shift(),
             pages,
             slice_start,
             slice_lines: slice_pages * geo.page_lines(),
@@ -809,9 +824,24 @@ impl Pace {
             compute: ComputeSplit::of(k.ops, k.chains),
             batch: if k.ops >= 256 { 1 } else { BATCH },
             sparse_stride: sparse_stride(k.sparse_pages),
-            run_in_pages: geo.run_in_pages,
         }
     }
+}
+
+/// Call `$method` instantiated for the worker's geometry: the ones met
+/// so far and the Arm server page, or on the pace's values otherwise.
+macro_rules! on_geometry {
+    ($self:ident, $method:ident, $($arg:expr),*) => {{
+        let geo = $self.buffers.geo;
+        match (geo.page_shift(), geo.line_shift(), geo.run_in_pages) {
+            (12, 6, false) => $self.$method::<12, 6, false>($($arg),*),
+            (14, 7, true) => $self.$method::<14, 7, true>($($arg),*),
+            (16, 6, false) => $self.$method::<16, 6, false>($($arg),*),
+            (16, 7, false) => $self.$method::<16, 7, false>($($arg),*),
+            (_, _, false) => $self.$method::<0, 0, false>($($arg),*),
+            (_, _, true) => $self.$method::<0, 0, true>($($arg),*),
+        }
+    }};
 }
 
 struct Worker {
@@ -857,11 +887,61 @@ impl Worker {
         (pages, start, slice.min(pages - start))
     }
 
+    /// A batch of accesses with the geometry's shifts as constants, or
+    /// from the pace when `PAGE_SHIFT` and `LINE_SHIFT` are zero, and
+    /// `SCATTER` the geometry's `run_in_pages`. An address made of the
+    /// sizes as values cost two instructions a line and nine a sparse
+    /// visit more than one made of the constants the geometry
+    /// replaced, and of shifts by a count in a register more still
+    /// (Zen 4, 2026-10-18), so the hot path is instantiated per
+    /// geometry and the host's picked once a batch.
+    fn batch<const PAGE_SHIFT: u32, const LINE_SHIFT: u32, const SCATTER: bool>(
+        &self,
+        k: &Knobs,
+        p: &Pace,
+        rng: &mut Draws,
+        state: &mut [u64; 4],
+        c: &mut Carry,
+        mut chase: u64,
+    ) -> u64 {
+        for _ in 0..p.batch {
+            chase = self.access::<PAGE_SHIFT, LINE_SHIFT, SCATTER>(k, p, rng, state, c, chase);
+        }
+        chase
+    }
+
+    /// A batch on this worker's geometry.
+    fn batch_on_host(
+        &self,
+        k: &Knobs,
+        p: &Pace,
+        rng: &mut Draws,
+        state: &mut [u64; 4],
+        c: &mut Carry,
+        chase: u64,
+    ) -> u64 {
+        on_geometry!(self, batch, k, p, rng, state, c, chase)
+    }
+
+    /// One access on this worker's geometry.
+    #[cfg(test)]
+    fn access_on_host(
+        &self,
+        k: &Knobs,
+        p: &Pace,
+        rng: &mut Draws,
+        state: &mut [u64; 4],
+        c: &mut Carry,
+        chase: u64,
+    ) -> u64 {
+        on_geometry!(self, access, k, p, rng, state, c, chase)
+    }
+
     /// One access: the streams, then compute. `chase` is the value the
     /// last main-stream line loaded, passed by value and returned so it
     /// stays in a register and reaches memory only on a dependent visit.
     #[inline(always)]
-    fn access(
+    fn access<const PAGE_SHIFT: u32, const LINE_SHIFT: u32, const SCATTER: bool>(
         &self,
         k: &Knobs,
         p: &Pace,
@@ -871,7 +951,19 @@ impl Worker {
         mut chase: u64,
     ) -> u64 {
         let main = self.buffers.main.as_ptr();
-        let (page_bytes, line_bytes, page_lines) = (p.page, p.line, p.page_lines);
+        let page_shift = if PAGE_SHIFT == 0 {
+            p.page_shift
+        } else {
+            PAGE_SHIFT
+        };
+        let line_shift = if LINE_SHIFT == 0 {
+            p.line_shift
+        } else {
+            LINE_SHIFT
+        };
+        let lines_shift = page_shift - line_shift;
+        let page_lines = 1usize << lines_shift;
+        let lines_mask = page_lines - 1;
         c.lines += p.lines_fract;
         let extra = usize::from(c.lines >= 1.0);
         if extra == 1 {
@@ -885,13 +977,16 @@ impl Worker {
                 // Walk the slice line by line, never across a page within
                 // one visit, wrapping at the slice end.
                 c.seq -= 1.0;
-                if c.cursor % page_lines + lines > page_lines {
-                    c.cursor = (c.cursor / page_lines + 1) * page_lines;
+                if (c.cursor & lines_mask) + lines > page_lines {
+                    c.cursor = ((c.cursor >> lines_shift) + 1) << lines_shift;
                 }
                 if c.cursor >= p.slice_lines {
                     c.cursor = 0;
                 }
-                let at = (p.slice_start + c.cursor / page_lines, c.cursor % page_lines);
+                let at = (
+                    p.slice_start + (c.cursor >> lines_shift),
+                    c.cursor & lines_mask,
+                );
                 c.cursor += lines;
                 at
             } else {
@@ -928,17 +1023,17 @@ impl Worker {
                     // through was folded away. Scattered over one page
                     // instead, the region prefetcher fetched the lot.
                     let d = rng.next();
-                    scale32((d >> 32) as u32, p.pages) * page_bytes
-                        + scale32(d as u32, page_lines) * line_bytes
+                    (scale32((d >> 32) as u32, p.pages) << page_shift)
+                        + (scale32(d as u32, page_lines) << line_shift)
                         + (std::hint::black_box(chase) & std::hint::black_box(0u64)) as usize
-                } else if p.run_in_pages && i > 0 {
+                } else if SCATTER && i > 0 {
                     // A page of its own for each further line, from a
                     // draw of its own, with nothing to wait for.
                     let d = rng.next();
-                    scale32((d >> 32) as u32, p.pages) * page_bytes
-                        + scale32(d as u32, page_lines) * line_bytes
+                    (scale32((d >> 32) as u32, p.pages) << page_shift)
+                        + (scale32(d as u32, page_lines) << line_shift)
                 } else {
-                    page * page_bytes + (line0 + i) * line_bytes
+                    (page << page_shift) + ((line0 + i) << line_shift)
                 };
                 let q = main.wrapping_add(at);
                 // SAFETY: inside the main buffer.
@@ -957,11 +1052,17 @@ impl Worker {
             let draw = rng.next();
             let page = scale32((draw >> 32) as u32, p.pages);
             let line = scale32(draw as u32, page_lines);
-            nt_store_line(
-                main.wrapping_add(page * page_bytes + line * line_bytes),
-                state[1],
-                line_bytes,
-            );
+            let q = main.wrapping_add((page << page_shift) + (line << line_shift));
+            match line_shift {
+                6 => nt_store_line::<8>(q, state[1]),
+                7 => nt_store_line::<16>(q, state[1]),
+                8 => nt_store_line::<32>(q, state[1]),
+                _ => {
+                    for w in 0..(1usize << line_shift) / 16 {
+                        nt_store_line::<2>(q.wrapping_add(w * 16), state[1]);
+                    }
+                }
+            }
             c.nt -= 1.0;
         }
         let sparse = self.buffers.sparse.as_ptr();
@@ -977,7 +1078,7 @@ impl Worker {
                 }
             }
             c.sparse_at = page;
-            let q = sparse.wrapping_add(page * page_bytes + (page % page_lines) * line_bytes);
+            let q = sparse.wrapping_add((page << page_shift) + ((page & lines_mask) << line_shift));
             // SAFETY: inside the sparse buffer.
             state[2] ^= unsafe { std::ptr::read_volatile(q.cast::<u64>()) };
             c.tlb -= 1.0;
@@ -990,6 +1091,7 @@ impl Worker {
         }
         if let Some(cache) = &self.buffers.cache {
             c.kread += k.kreads;
+            let page_bytes = 1usize << page_shift;
             if c.kread >= 1.0 && c.pagebuf.is_empty() {
                 c.pagebuf = vec![0; page_bytes];
             }
@@ -1040,9 +1142,7 @@ impl Worker {
             let busy_until = start + period.mul_f64(duty);
             let mut accesses = 0u64;
             while Instant::now() < busy_until {
-                for _ in 0..pace.batch {
-                    chase = self.access(&k, &pace, &mut rng, &mut state, &mut carry, chase);
-                }
+                chase = self.batch_on_host(&k, &pace, &mut rng, &mut state, &mut carry, chase);
                 accesses += u64::from(pace.batch);
             }
             let busy = start.elapsed();
@@ -1189,6 +1289,7 @@ mod tests {
         assert_eq!(Geometry::new(16384, 128).page_lines(), 128);
         let scattered = GEO.runs_in_pages(true);
         assert!(scattered.run_in_pages && scattered.page == GEO.page);
+        assert_eq!((GEO.page_shift(), GEO.line_shift()), (12, 6));
         let host = Geometry::host(64);
         assert_eq!(host.page, crate::measure::page_size() as usize);
         assert!(host.page_lines() >= 64);
@@ -1529,7 +1630,7 @@ mod tests {
         let mut c = Carry::default();
         let mut chase = 0u64;
         for _ in 0..22 {
-            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+            chase = w.access_on_host(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         // 21 visits of 3 lines fill lines 0..63 of page 128; the 22nd would
         // straddle, so it moved to page 129.
@@ -1541,7 +1642,7 @@ mod tests {
         assert_eq!(c.cursor, PAGE_LINES + 3);
         // The walk wraps at the slice end: 128 pages of 21 visits each.
         for _ in 22..=(128 * 21) {
-            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+            chase = w.access_on_host(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         assert_eq!(c.cursor, 3, "back at the slice start");
         let lines = changed(&before, &b);
@@ -1572,7 +1673,7 @@ mod tests {
         let mut c = Carry::default();
         let mut chase = 0u64;
         for _ in 0..20_000 {
-            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+            chase = w.access_on_host(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         let lines = changed(&before, &b);
         assert!(lines.len() > 10_000, "{}", lines.len());
@@ -1611,7 +1712,7 @@ mod tests {
         let mut c = Carry::default();
         let mut chase = 0u64;
         for _ in 0..200 {
-            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+            chase = w.access_on_host(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         let lines = changed(&before, &b);
         let pages: std::collections::BTreeSet<usize> =
@@ -1632,6 +1733,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "is_power_of_two")]
+    fn a_line_that_is_no_power_of_two_is_refused() {
+        let _ = Geometry::new(4096, 96);
+    }
+
+    #[test]
     fn runs_in_pages_put_each_line_in_a_page_of_its_own() {
         let b = Arc::new(Buffers::new(GEO.runs_in_pages(true), 4 << 20, false, 64, 16).unwrap());
         let knobs = Knobs {
@@ -1643,13 +1750,13 @@ mod tests {
         let w = bench_worker(&b, 0, 1, &knobs);
         let before = line_words(&b);
         let pace = Pace::new(&knobs, &w);
-        assert!(pace.run_in_pages);
+        assert!(b.geo.run_in_pages);
         let mut rng = Draws::seeded(5);
         let mut state = [1u64, 2, 3, 4];
         let mut c = Carry::default();
         let mut chase = 0u64;
         for _ in 0..200 {
-            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+            chase = w.access_on_host(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         let lines = changed(&before, &b);
         let pages: std::collections::BTreeSet<usize> =
@@ -1689,7 +1796,7 @@ mod tests {
         let mut c = Carry::default();
         let mut chase = 0u64;
         for _ in 0..40 {
-            chase = w.access(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
+            chase = w.access_on_host(&knobs, &pace, &mut rng, &mut state, &mut c, chase);
         }
         assert_eq!(
             changed(&before, &b).len(),

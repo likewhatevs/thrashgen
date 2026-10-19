@@ -203,7 +203,12 @@ first had missed on cost an L2 hit and no further fetch (M2 Ultra,
 2026-10-18). A run is at most a page of lines, 64 on x86 and 128 on
 Apple, and on Apple its lines are in pages of their own, as the
 `lines` row says; a page-cache read moves a page; the report's notes
-say which geometry a run used.
+say which geometry a run used. The access path is compiled once per
+geometry with the page and line sizes as constants and the host's
+picked once a batch: an address made of the sizes as values cost two
+instructions a line and nine a sparse visit more, and one of shifts by
+a count in a register more still (Zen 4, 2026-10-18); a geometry
+without an instantiation of its own runs on the values.
 
 ### 5.1 Known limits
 
