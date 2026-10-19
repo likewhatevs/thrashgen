@@ -23,6 +23,8 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 mode=${MODE:-user}
 record=${RECORD_SECS:-120} replay=${FIT_SECS:-10}
+# BENCH=name runs that benchmark alone, to redo one after a fix.
+want() { [ -z "${BENCH:-}" ] || [ "$BENCH" = "$1" ]; }
 export OUT_DIR=$root/experiments/out/$mode
 mkdir -p "$OUT_DIR"
 cargo build --release -q --manifest-path "$root/Cargo.toml"
@@ -82,13 +84,19 @@ esac
 
 fio_dir=${SCRATCH_DIR:-/var/tmp}/thrashgen-fio
 mkdir -p "$fio_dir"
-"$root/experiments/run.sh" schbench  "$record" "$replay" -- schbench -m 2 -t 4 -r "$record" -F 4096 -n 20
-"$root/experiments/run.sh" stress-ng "$record" "$replay" -- stress-ng --vm 4 --vm-bytes 1G --vm-keep --vm-method write64 -t "$record"
-"$root/experiments/run.sh" sysbench  "$record" "$replay" -- sysbench cpu --threads=4 --time="$record" run
-"$root/experiments/run.sh" fio       "$record" "$replay" -- fio --name=pagecache --directory="$fio_dir" --rw=randread --bs=4k --size=1G --numjobs=2 --ioengine=psync --direct=0 --time_based --runtime="$record" --group_reporting
+want schbench && "$root/experiments/run.sh" schbench  "$record" "$replay" -- schbench -m 2 -t 4 -r "$record" -F 4096 -n 20
+want stress-ng && "$root/experiments/run.sh" stress-ng "$record" "$replay" -- stress-ng --vm 4 --vm-bytes 1G --vm-keep --vm-method write64 -t "$record"
+want sysbench && "$root/experiments/run.sh" sysbench  "$record" "$replay" -- sysbench cpu --threads=4 --time="$record" run
+# fio lays its files out before it reads them, and a cold file's first
+# reads come from the disk at a fraction of a core: on 2026-10-18 one
+# recording read a per-second CV of 5.3 where the steady state reads
+# about one, so the recording starts once the reads run from the page
+# cache.
+want fio && BENCH_WARMUP_SECS=${FIO_WARMUP_SECS:-30} \
+  "$root/experiments/run.sh" fio       "$record" "$replay" -- fio --name=pagecache --directory="$fio_dir" --rw=randread --bs=4k --size=1G --numjobs=2 --ioengine=psync --direct=0 --time_based --runtime="$((record + ${FIO_WARMUP_SECS:-30}))" --group_reporting
 rm -rf "$fio_dir"
 # TaoBench's cache starts empty and fills at its slow-path rate, about three
 # minutes for 2 GiB; record it once the hit rate has settled.
-BENCH_WARMUP_SECS=${TAOBENCH_WARMUP_SECS:-180} \
+want taobench && BENCH_WARMUP_SECS=${TAOBENCH_WARMUP_SECS:-180} \
   "$root/experiments/run.sh" taobench "$record" "$replay" -- "$root/experiments/taobench.sh" "$((record + ${TAOBENCH_WARMUP_SECS:-180}))"
 cargo run --release -q --manifest-path "$root/Cargo.toml" --example experiment_plot -- "$OUT_DIR"
