@@ -205,6 +205,9 @@ pub fn absolute_tolerance(key: &str) -> f64 {
 }
 /// Tolerances a target's error counts for at most in a window's distance.
 const DISTANCE_CAP: f64 = 10.0;
+/// The duty the thread count leaves room under where burstiness needs
+/// the factors unclipped.
+const DUTY_HEADROOM: f64 = 0.95;
 const NTLINES_MAX: f64 = 512.0;
 const VISITS_RANGE: (f64, f64) = (1.0e-4, 64.0);
 /// Smallest working set, in pages, so a shrunken set still spans
@@ -554,13 +557,22 @@ impl Fitter {
     /// `sqrt((n - m) / m)`, all or nothing, so a CV needs
     /// `m (1 + cv^2)` threads: fio at 0.27 cores and a CV of 3.8 needs
     /// five, where `m (1 + cv)` gave two and the fit cut duty to no
-    /// effect. At least one, at most `max`.
+    /// effect. Where the burstiness target is past its floor the duty
+    /// must stay below full for the factors to show at all, so a
+    /// twentieth more: a profile recorded at 2.99 cores got three
+    /// threads at full duty and its burstiness fell to the jitter
+    /// (Zen 4, 2026-10-19). At least one, at most `max`.
     pub fn threads_for(t: &Targets, max: usize) -> usize {
         let wanted = match (t.get("cpu_limit_cores"), t.get("cpu_usage_cores")) {
             (Some(limit), _) => limit,
             (None, Some(cores)) => {
                 let cv = t.get("cpu_usage_cv_1s").unwrap_or(0.0).max(0.0);
-                cores * (1.0 + cv * cv)
+                let room = if cv > absolute_tolerance("cpu_usage_cv_1s") {
+                    1.0 / DUTY_HEADROOM
+                } else {
+                    1.0
+                };
+                cores * (1.0 + cv * cv) * room
             }
             (None, None) => 1.0,
         };
@@ -2917,8 +2929,8 @@ mod tests {
         t.set("cpu_usage_cv_1s", 0.5).unwrap();
         assert_eq!(
             Fitter::threads_for(&t, 64),
-            3,
-            "headroom for bursts: 2.3 * (1 + 0.25)"
+            4,
+            "headroom for bursts: 2.3 * (1 + 0.25) / 0.95"
         );
         t.set("cpu_usage_cv_1s", 1.5).unwrap();
         assert_eq!(
@@ -2932,7 +2944,28 @@ mod tests {
         assert_eq!(
             Fitter::threads_for(&bursty, 64),
             5,
-            "fio: 0.27 * (1 + 3.8^2)"
+            "fio: 0.27 * (1 + 3.8^2) / 0.95"
+        );
+        // Just under a whole number of cores with a little burstiness:
+        // the duty needs room under full, so one thread more.
+        let mut edge = Targets::new();
+        edge.set("cpu_usage_cores", 2.99).unwrap();
+        assert_eq!(
+            Fitter::threads_for(&edge, 64),
+            3,
+            "no burstiness: full duty is fine"
+        );
+        edge.set("cpu_usage_cv_1s", 0.035).unwrap();
+        assert_eq!(
+            Fitter::threads_for(&edge, 64),
+            4,
+            "TaoBench: 2.99 * 1.0012 / 0.95"
+        );
+        edge.set("cpu_usage_cv_1s", 0.01).unwrap();
+        assert_eq!(
+            Fitter::threads_for(&edge, 64),
+            3,
+            "within the floor: no room needed"
         );
         t.set("cpu_limit_cores", 8.0).unwrap();
         assert_eq!(Fitter::threads_for(&t, 64), 8);

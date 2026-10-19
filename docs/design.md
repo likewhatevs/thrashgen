@@ -325,7 +325,11 @@ of one plus the CV squared, so the clipped per-second factor keeps its
 mean: per-second busy cores between zero and the thread count with a
 given mean have a CV of at most the all-or-nothing series', and fio
 at 0.27 cores with a CV of 3.8 needs five threads, where one plus the
-CV gave two and the fit cut duty to no effect.
+CV gave two and the fit cut duty to no effect; where the burstiness
+target is past its floor a twentieth more, so the duty stays below
+full and the factors show at all: TaoBench recorded at 2.99 cores got
+three threads at full duty and its burstiness fell to the jitter
+(Zen 4, 2026-10-19).
 
 The IPC ladder gives the shares back first: the sequential walk when
 IPC is high, dependent visits when it is short; a share under a tenth
