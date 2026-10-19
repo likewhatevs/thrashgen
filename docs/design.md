@@ -291,7 +291,10 @@ since over two ops out of fifteen the window noise in instructions
 per access gave a slope of two where the large move before had
 measured fifteen, and ops swung fourfold every pass; ops is set
 to the work that gives the MPKI target at the run length the IPC rule
-just chose. The per-access rates are then set against the
+just chose; a target of no misses at all, which a sequential writer
+records where the miss event counts no prefetched line, is aimed at
+as half the absolute floor, inside the band, since no finite compute
+reaches zero. The per-access rates are then set against the
 instructions per access the next pass will have, so a change in ops
 never drags them off target: stub calls by their measured events per
 visit with the error damped, since they are the only source of iTLB

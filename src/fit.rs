@@ -1023,20 +1023,25 @@ impl Fitter {
     /// per access the target needs are known, and the work that gives
     /// them. Within the absolute floor the target is met and what
     /// remains is mostly noise; chasing it swung ops between one and
-    /// tens of thousands.
+    /// tens of thousands. A target of no misses at all, which a
+    /// sequential writer records where the miss event counts no
+    /// prefetched line, is aimed at as half the floor, inside the band,
+    /// since no finite compute reaches zero and a rule that divided by
+    /// the target would never move.
     fn ops_rule(p: &Pass, k: &mut Knobs) {
         let (knobs, m, goal, d) = (p.knobs, p.m, p.goal, p.d);
         let mut work = p.work;
         let quiet = p.mpki_within() || p.mpki_handled;
+        let aim = |t: f64| t.max(0.5 * absolute_tolerance("l3_mpki"));
         match (goal.mpki, m.mpki, p.ipa) {
-            (Some(t), Some(v), Some(ipa)) if t > 0.0 && v > 0.0 && !quiet => {
+            (Some(t), Some(v), Some(ipa)) if v > 0.0 && !quiet => {
                 let misses_per_access = v / 1000.0
                     * ipa
                     * (k.lines / knobs.lines.max(LINES_MIN)).powf(p.lines_elasticity);
-                let want_ipa = misses_per_access * 1000.0 / t;
+                let want_ipa = misses_per_access * 1000.0 / aim(t);
                 work += d * (want_ipa - ipa) / p.slope;
             }
-            (Some(t), Some(v), None) if !quiet => work *= factor(v, t, d),
+            (Some(t), Some(v), None) if !quiet => work *= factor(v, aim(t), d),
             _ => {}
         }
         let work = work.clamp(p.work_now / OPS_STEP_MAX, p.work_now * OPS_STEP_MAX);
@@ -1508,6 +1513,37 @@ mod tests {
             assert!(f.passes <= 30, "{name}: {} passes", f.passes);
             assert_eq!(statuses.len(), 7);
         }
+    }
+
+    #[test]
+    fn a_target_of_no_misses_is_met_by_dilution() {
+        // A sequential writer under a miss event that counts no
+        // prefetched line: busy cores, a high IPC and exactly zero
+        // misses per thousand instructions, as stress-ng recorded on an
+        // M2 Ultra. The absolute floor makes anything under 0.05 a
+        // match; the ops rule must aim inside it rather than at zero.
+        let truth = Knobs {
+            duty: 1.0,
+            cv: 0.0,
+            ops: 2000,
+            chains: 4.0,
+            lines: LINES_MIN,
+            tlbvisits: 0.01,
+            sparse_pages: 16384,
+            codevisits: 0.0,
+            code_pages: 16384,
+            ..Knobs::default()
+        };
+        let mut goal = goal_of(&plant(&truth, 4));
+        goal.mpki = Some(0.0);
+        goal.dram = None;
+        goal.itlb_pki = None;
+        let (f, k, statuses) = converge(&goal, 4, TlbRegime::Walk, 40);
+        assert!(Fitter::converged(&statuses), "{statuses:#?}\nknobs {k:#?}");
+        let mpki = statuses.iter().find(|s| s.key == "l3_mpki").unwrap();
+        assert!(mpki.measured.unwrap() < 0.05, "{mpki:?}");
+        assert!(k.ops > 64, "compute grew from the default: {k:?}");
+        assert!(f.passes <= 30, "{} passes", f.passes);
     }
 
     #[test]
