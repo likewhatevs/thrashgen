@@ -19,21 +19,55 @@ Linux 7.2, THP `always`, `perf_event_paranoid` 2) unless noted.
 | neighbours: three profiles at once, twelve instances, a neighbour coming and going | `MODE=noisy`, `MODE=crowd`, `MODE=disturbed` | `docs/experiments.md`: with neighbours every profile keeps every field it can reach; a full host takes schbench's IPC to 2.85 from 3.71, a sibling sharing each core, and ten to twenty percent of stress-ng's ratios on a saturated bus; a fit follows a neighbour's arrival and departure within about a second and is back within on every reachable field once it has left |
 | end-to-end replays, five modes | `experiments/all.sh` with `MODE=user`, `kernel`, `resctrl`, `noisy`, `perfmon` | `docs/experiments.md`: schbench, sysbench and TaoBench within tolerance on every field in every mode, converged in 0.3 to 0.9 s, with neighbours and under the L3 PMU too; stress-ng 9 of 10 but for its dTLB floor, with neighbours too, 8 under the L3 PMU; fio 9 of 10 in user mode, 8 under resctrl, 6 to 7 where the profile carries kernel-mode misses; bandwidth within its floor for the compute-bound profiles and 5 percent over for TaoBench |
 
+## Verified on an Apple M2 Ultra, as of 2026-10-18
+
+Asahi Linux 7.1 with 16 KiB pages (`aarch64+16k`), 24 cores in two
+classes, 16 Avalanche P cores and 8 Blizzard E cores, each class with
+a PMU of its own (`apple_avalanche_pmu`, `apple_blizzard_pmu`), THP
+`madvise` with 32 MiB hugepages, `perf_event_paranoid` 2, no resctrl
+and no L3 in sysfs: the L2 is 16 MiB per P cluster and 4 MiB per E
+cluster, the system cache behind them is not listed, and sysfs gives
+no cache line size where `CTR_EL0` says 64 bytes and the L2 moves 128.
+
+What differed from the x86 assumptions, and what was done about it:
+
+| assumption | this host | change |
+| --- | --- | --- |
+| one core PMU at `PERF_TYPE_RAW` | two, one per class of core; a task event opened without naming a PMU lands on whichever accepts it first and counts only there | the plan opens the core set on every class's PMU under one name, hardware events with the PMU type in the config's high half, and `perf::fold_by_name` sums a name's readings and scales the sum by the time on no PMU at all |
+| an L3 miss event in the kernel's tables | none listed; a sweep of every event number found `0x23` on the P cores counting one per 128-byte line a demand access fetched from memory and nothing prefetched; the E cores have no such event | the `applem2` table, with the event per class; the plan's note says the E cores add instructions but no misses |
+| TLB walks for the TLB rates | `L2_TLB_MISS_DATA` counts one per missing access where the walk event counts 1.5 on the E cores; the instruction-side L2 miss and walk events count speculative fetches, in bursts of hundreds per stub call at a low call rate | dTLB from the L2 miss, iTLB from `L1I_TLB_MISS_DEMAND`, steady at 1.2 per call |
+| 4 KiB pages, 64-byte lines, 64 lines a run, a page-cache read of 4 KiB | 16 KiB pages, 128-byte lines | the streams and the fitter take a `Geometry` from the host and the table |
+| a run's lines each miss | a visit's second and further lines in a page, consecutive, strided or scattered, are fetched by the region prefetcher and not counted: 1.0 counted per visit of 2 to 128 lines | on a demand-only host each line of a run lands in a page of its own, independent: 2 lines count 2.0, 8 count 8.0 with compute between visits |
+| CPUs alike, numbered from the fastest | the E cores are numbered first | pinning takes the highest `cpu_capacity` first |
+| `/proc/cpuinfo` names the CPU | no model name on Arm | the device tree's `model` names the machine and its chip |
+
+| claim | how | result |
+| --- | --- | --- |
+| unit, fixture, CLI and plot tests | `cargo test` | 191 pass |
+| lints | `cargo fmt --check`, clippy with and without the features | clean |
+| counters on the tool's own threads and a fit of counter targets | `cargo test --release --features hw-tests`, unprivileged | 183 unit and 13 CLI tests pass, the fit of IPC 0.8, 8 MPKI, 1 dTLB and 0.05 iTLB events per thousand on real hardware among them |
+| the code stubs with their instruction-cache maintenance, the `stnp` stores, the sparse walk on 16 KiB pages | the code-pages test, now on both architectures, and fixed-knob runs: 1.2 iTLB events and 1.0 L2 TLB misses per visit, 1.0 counted miss per non-temporal line's access at IPC 1.4 | pass |
+| a fit of IPC 0.8, 8 MPKI, 1 dTLB and 0.05 iTLB events per thousand on two P cores | `run --set ...` for 8 s | every target within by the fifth pass, 1 s |
+| root tests | the lib test binary run as root | per-CPU counters open; the AMD L3 filter test and the resctrl group test fail by design, this host having neither |
+| end-to-end replays | `experiments/all.sh` with `MODE=user` | `docs/experiments.md`: schbench, sysbench, TaoBench and stress-ng within tolerance on every field, converged in 0.3 to 1.3 s; fio 7 of 10 (open item 3, with one thread for its 0.2 cores) |
+| end-to-end replays, the other modes | `MODE=kernel`, `perfmon`, `noisy`, `crowd`, `disturbed`; `resctrl` cannot run here | `docs/experiments.md`: kernel 10, 9, 10, 10 and 7 of 10 for schbench, sysbench, TaoBench, stress-ng and fio; perfmon 10, 9, 9, 10, 6; noisy 8, 10, 10 for schbench, TaoBench, stress-ng; crowd, twelve instances on twenty-four cores, 7 to 8 of 10 each at a fair share of the cores; disturbed within on every field beside the neighbour and after it |
+
 Not verified anywhere:
 
-- the Intel and Arm event tables come from the kernel's `pmu-events`
-  at v7.1 and are checked only against fixtures, never on that
-  hardware;
-- the AArch64 generator paths, the stubs with their instruction-cache
-  maintenance and the `stnp` non-temporal stores, compile for that
-  target and have never run on it; the streams assume 4 KiB pages and
-  64-byte lines, and the sparse set is sized for a 4 KiB page;
+- the Intel and Arm Ltd. event tables come from the kernel's
+  `pmu-events` at v7.1 and are checked only against fixtures, never
+  on that hardware; Apple's M1 cores share the driver's event list
+  with the M2's but not the sweep, so they get no table;
+- the Zen 4 results above predate the host geometry and the per-class
+  counters; the x86 paths are unchanged in intent and pass the fixture
+  tests, but have not been rerun there since;
 - the replay of a container across hosts: every replay here ran on
   the host that recorded it.
 
 ## Open items
 
-In rough order of value.
+In rough order of value. The first four are from the Zen 4 host; the
+M2 Ultra's follow.
 
 1. **Bandwidth measurement and levers.** Under resctrl the bandwidth
    rule has three levers, the write share, non-temporal lines and
@@ -111,6 +145,27 @@ In rough order of value.
    comparison itself is against a profile recorded alone, which is
    the question asked, and a profile recorded beside the same
    neighbour would be the other question.
+
+5. **Misses on the E cores.** Apple's E-core PMU has no event that
+   counts fetches from memory, so a profile's misses per instruction
+   on an M2 are those of its P-core time over the instructions of
+   both, and a replay that lands the same ratio has made the same
+   compromise. A recorder could carry the share of instructions
+   retired on cores without the event, so a reader knows how much of
+   the denominator the numerator does not cover.
+6. **A zero target.** stress-ng's sequential writes record exactly no
+   counted misses on this host, and the ops rule, which divides by the
+   target, never moved: the first user-mode chain left its replay at
+   15 MPKI and an IPC of 0.86 against 2.0. The rule now aims at half
+   the absolute floor; the same guard may be wanted wherever a rule
+   divides by a target that a host can record as zero.
+7. **Stub calls at a low rate.** The instruction-side L2 TLB miss and
+   walk events count speculative fetches, and at a call on one access
+   in two hundred they came in bursts of hundreds per call for
+   seconds at a time; the demand L1 miss event holds at 1.2 per call
+   and is what the table uses. Whether the bursts are the front end
+   fetching a stale predicted target is not known; a call to a hot
+   page on every access did not quiet them.
 
 Closed since 2026-10-16: the fast fit closed the pass-budget item and
 fio's TLB rate; busy cores and burstiness are judged from the third

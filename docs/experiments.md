@@ -56,9 +56,11 @@ restore them on exit. Each `<name>` directory holds:
 
 `experiments/out/<mode>/summary.svg` puts every experiment's ratios on
 one chart. `experiments/publish.sh` copies the small files of every
-mode into `docs/experiments/<mode>/`, and `experiments/plot.py` draws
-the figures under `docs/experiments/plots/` from them with seaborn,
-inlined below. How to read them:
+mode into `docs/experiments/<mode>/`, or, with `PUBLISH_DIR`, under
+another host's directory, `docs/experiments/<cpu-model>/<mode>/`, so
+one host's results do not overwrite another's; `experiments/plot.py`
+draws the figures under `<root>/plots/` from whichever root it is
+given with seaborn, inlined below. How to read them:
 
 - **fields within** (`within.png`): per benchmark, one bar per mode
   with the fields within tolerance over the fields the recorder
@@ -257,6 +259,141 @@ of its departure.
 | taobench | 10 of 10 | 8 of 10: cores 2.93 vs 3.09, IPC 0.66 vs 0.70 | 10 of 10 | 31 passes from 0.9 s after; 43 passes from 0.8 s after |
 
 ![disturbed mode: each live fit's IPC, MPKI and dTLB rate over its hundred seconds, the neighbour's span shaded](experiments/plots/disturbed.png)
+
+## Results on an Apple M2 Ultra
+
+Run on 2026-10-18 on the Apple M2 Ultra described in `docs/status.md`,
+16 Avalanche P cores and 8 Blizzard E cores under Asahi Linux 7.1
+with 16 KiB pages, the same harness and settings. The host's PMU
+counts L3 misses on the P cores only and none a prefetcher brought in,
+so a sequential writer records next to none at any bandwidth, as
+stress-ng does here; there is no resctrl, so the `resctrl` mode did
+not run and bandwidth is modelled on every row. The data is under
+`docs/experiments/apple-m2-ultra/<mode>/`, the figures under
+`docs/experiments/apple-m2-ultra/plots/`.
+
+![Fields within tolerance per benchmark and mode on the M2 Ultra](experiments/apple-m2-ultra/plots/within.png)
+
+![Replay error by field, benchmark and mode on the M2 Ultra](experiments/apple-m2-ultra/plots/errors.png)
+
+![Seconds to the last knob move per benchmark and mode on the M2 Ultra](experiments/apple-m2-ultra/plots/convergence.png)
+
+### `user`
+
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
+| sysbench | 10 of 10 | 3 passes, 0.4 s | nothing |
+| taobench | 10 of 10 | 12 passes, 1.3 s | nothing |
+| stress-ng | 10 of 10 | 5 passes, 0.6 s | nothing |
+| fio | 7 of 10 | 24 passes, 3.9 s | cores 0.139 vs 0.204, burstiness 1.58 vs 1.44, iTLB 0.538 vs 0.613 |
+
+![user mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/user/summary.svg)
+
+![user mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-user.png)
+
+### `kernel`: both recordings count kernel mode
+
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
+| sysbench | 9 of 10 | 4 passes, 0.5 s | memory 12.4 MiB vs 2.8 MiB |
+| taobench | 10 of 10 | 13 passes, 1.4 s | nothing |
+| stress-ng | 10 of 10 | 6 passes, 0.7 s | nothing |
+| fio | 7 of 10 | held, 36 passes by 5.0 s | burstiness 1.07 vs 1.20, dTLB 0.329 vs 0.360, iTLB 1.15 vs 0.866 |
+
+![kernel mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/kernel/summary.svg)
+
+![kernel mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-kernel.png)
+
+### `perfmon`: `CAP_PERFMON`
+
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 10 of 10 | 2 passes, 0.3 s | nothing |
+| sysbench | 9 of 10 | 3 passes, 0.4 s | memory 15.6 MiB vs 5.9 MiB |
+| taobench | 9 of 10 | 13 passes, 1.4 s | iTLB 3.59 vs 3.40 |
+| stress-ng | 10 of 10 | 5 passes, 0.6 s | nothing |
+| fio | 6 of 10 | 21 passes, still moving at 10 s | IPC 1.61 vs 1.73, MPKI 0.016 vs 0.115, dTLB 0.387 vs 0.358, iTLB 1.91 vs 0.895 |
+
+![perfmon mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/perfmon/summary.svg)
+
+![perfmon mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-perfmon.png)
+
+### `noisy`: three profiles at once
+
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench | 8 of 10 | 3 passes, 2.7 s | MPKI 0.084 vs 0.0034, memory 27.6 MiB vs 19.0 MiB |
+| taobench | 10 of 10 | 13 passes, 1.4 s | nothing |
+| stress-ng | 10 of 10 | 6 passes, 0.7 s | nothing |
+
+![noisy mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/noisy/summary.svg)
+
+![noisy mode on the M2 Ultra: the fits' first seconds against their targets](experiments/apple-m2-ultra/plots/trajectories-noisy.png)
+
+### `crowd`: four copies of three profiles, twelve instances on twenty-four cores
+
+The twelve instances ask for 61 busy cores of this host's 24, where
+the Zen 4 host has 64, so the mode here fills the host two and a half
+times over and every copy gets its fair share of the cores and the
+burstiness of the contention.
+
+| benchmark | within | fit | what missed |
+| --- | --- | --- | --- |
+| schbench-1 | 8 of 10 | 6 passes, still moving at 10 s | cores 2.85 vs 7.98, burstiness 0.177 vs 0.0009 |
+| schbench-2 | 8 of 10 | 6 passes, still moving at 10 s | cores 3.24 vs 7.98, burstiness 0.180 vs 0.0009 |
+| schbench-3 | 8 of 10 | 6 passes, still moving at 10 s | cores 3.00 vs 7.98, burstiness 0.164 vs 0.0009 |
+| schbench-4 | 8 of 10 | 6 passes, still moving at 10 s | cores 3.01 vs 7.98, burstiness 0.189 vs 0.0009 |
+| taobench-1 | 8 of 10 | 16 passes, 3.5 s | cores 1.23 vs 3.27, burstiness 0.200 vs 0.049 |
+| taobench-2 | 7 of 10 | 19 passes, 3.9 s | cores 1.16 vs 3.27, burstiness 0.184 vs 0.049, MPKI 1.44 vs 1.53 |
+| taobench-3 | 8 of 10 | 53 passes, 6.8 s | cores 1.28 vs 3.27, burstiness 0.252 vs 0.049 |
+| taobench-4 | 8 of 10 | 14 passes, 3.6 s | cores 1.25 vs 3.27, burstiness 0.231 vs 0.049 |
+| stress-ng-1 | 8 of 10 | 15 passes, still moving at 10 s | cores 1.51 vs 3.98, burstiness 0.291 vs 0.0002 |
+| stress-ng-2 | 8 of 10 | 16 passes, still moving at 10 s | cores 1.92 vs 3.98, burstiness 0.192 vs 0.0002 |
+| stress-ng-3 | 7 of 10 | 15 passes, still moving at 10 s | cores 1.57 vs 3.98, burstiness 0.296 vs 0.0002, IPC 1.58 vs 1.67 |
+| stress-ng-4 | 8 of 10 | 15 passes, still moving at 10 s | cores 1.87 vs 3.98, burstiness 0.228 vs 0.0002 |
+
+![crowd mode on the M2 Ultra: replay over original per observable](experiments/apple-m2-ultra/crowd/summary.svg)
+
+### `disturbed`: a live fit while stress-ng comes and goes
+
+| profile | alone | beside | after |
+| --- | --- | --- | --- |
+| schbench | 9 of 10: memory 30.5 MiB vs 19.0 MiB | 10 of 10 | 10 of 10 |
+| taobench | 9 of 10: burstiness 0.025 vs 0.049 | 10 of 10 | 10 of 10 |
+| stress-ng | 10 of 10 | 10 of 10 | 10 of 10 |
+
+![disturbed mode on the M2 Ultra: each live fit's IPC, MPKI and dTLB rate over its hundred seconds](experiments/apple-m2-ultra/plots/disturbed.png)
+
+What the M2 Ultra adds to the reading below:
+
+- **The converging profiles converge as fast as on Zen 4**, schbench
+  and sysbench in 0.3 to 0.5 s and TaoBench in 1.3 to 1.4 s in every
+  mode, and land every field within in user and kernel mode. stress-ng
+  joins them here: with its sequential writes prefetched and the miss
+  event counting none of them, its profile asks for an IPC of 1.7 to
+  2.0 at zero misses, which is compute, and the fit lands it in 0.6 to
+  0.7 s once the ops rule aimed inside the floor rather than at zero.
+- **fio stays the hard one**, 6 to 7 of 10 in every mode: one thread
+  for its 0.2 cores with a burstiness of 1.4, judged one plateau at a
+  time (`docs/status.md`, open item 3). In user mode the hold ran at
+  0.14 cores against 0.20 and an iTLB rate 12 percent short; with the
+  kernel counted its dTLB and iTLB rates, which here are the demand
+  L1 misses, come from the kernel's copies and the replay's stubs
+  cannot follow them plateau by plateau.
+- **Memory is the tool's own.** A process as small as sysbench, 3 MiB,
+  is under the replay's baseline, 12 to 16 MiB with 16 KiB pages, so
+  the memory total misses by more than the 8 MiB floor in the kernel
+  and perfmon modes; the components are within.
+- **Neighbours cost what they cost.** Beside two other profiles
+  schbench's MPKI reads 0.084 against 0.0034, the neighbours' lines in
+  the shared system cache, where its own fit was within; TaoBench and
+  stress-ng are within on every field. With twelve instances on
+  twenty-four cores every copy runs at a third to a half of its busy
+  cores and the ratios mostly hold, 7 to 8 of 10 each. A neighbour
+  arriving and leaving leaves every profile within on every field in
+  the phases beside it and after.
 
 ## Reading the results
 

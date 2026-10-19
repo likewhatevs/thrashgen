@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Copy the small, reviewable outputs of experiments/out into docs/experiments
 # so the results travel with the repository, one directory per mode.
-# Recordings stay out.
+# Recordings stay out. PUBLISH_DIR puts another host's results beside
+# the reference host's, as docs/experiments/<cpu-model>/<mode>/.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$root/experiments/out
-dest=$root/docs/experiments
+dest=${PUBLISH_DIR:-$root/docs/experiments}
 mkdir -p "$dest"
 for mode_dir in "$out"/*/; do
   mode=$(basename "$mode_dir")

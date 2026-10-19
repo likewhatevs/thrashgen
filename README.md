@@ -36,9 +36,12 @@ starts from the cached fit.
   every field the hardware allows within tolerance, in every privilege
   mode, with neighbours, and on a full host. The figure is from the
   [experiments](docs/experiments.md).
-- Linux on x86-64, with event tables for AMD Zen 3 to 5, Intel
-  Skylake-SP through Granite Rapids and Sierra Forest, and Arm
-  Neoverse. The AArch64 paths compile and have not yet run.
+- Linux on x86-64 and AArch64, with event tables for AMD Zen 3 to 5,
+  Intel Skylake-SP through Granite Rapids and Sierra Forest, Arm
+  Neoverse and Apple's M2. The experiments have run on the Zen 4 host
+  and on an Apple M2 Ultra under Asahi Linux, where the P cores count
+  L3 misses and the E cores cannot, and the results of both are in
+  the experiments.
 
 ![Fields within tolerance per benchmark and privilege mode on the reference host](docs/experiments/plots/within.png)
 
